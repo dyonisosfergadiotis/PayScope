@@ -5,6 +5,7 @@ struct CalendarTabView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \DayEntry.date) private var entries: [DayEntry]
     @Query(sort: \NetWageMonthConfig.monthStart) private var netConfigs: [NetWageMonthConfig]
+    @Query(sort: \HolidayCalendarDay.date) private var importedHolidays: [HolidayCalendarDay]
     @Bindable var settings: Settings
 
     @State private var displayedMonth = Date()
@@ -13,8 +14,10 @@ struct CalendarTabView: View {
     @State private var netConfigSheetMonth = Date().startOfMonthLocal()
     @State private var deleteCandidateDate: Date?
     @State private var longPressTriggeredDate: Date?
+    @State private var holidayImportKeys: Set<String> = []
 
     private let service = CalculationService()
+    private let holidayImporter = HolidayImportService()
 
     var body: some View {
         NavigationStack {
@@ -51,6 +54,9 @@ struct CalendarTabView: View {
                     .accessibilityLabel("Statistik öffnen")
                 }
             }
+            .task(id: holidayImportTaskKey) {
+                await importHolidaysIfNeededForDisplayedMonth()
+            }
             .safeAreaInset(edge: .bottom) {
                 HStack {
                     Button {
@@ -64,7 +70,7 @@ struct CalendarTabView: View {
                     Spacer()
 
                     Button {
-                        createNewEntryForTodayAndOpen()
+                        addAutomaticSegmentForToday()
                     } label: {
                         bottomActionButton(systemImage: "plus")
                     }
@@ -97,16 +103,16 @@ struct CalendarTabView: View {
                 }
             }
             .confirmationDialog(
-                "Tag löschen?",
+                "Segmente löschen?",
                 isPresented: Binding(
                     get: { deleteCandidateDate != nil },
                     set: { if !$0 { deleteCandidateDate = nil } }
                 ),
                 titleVisibility: .visible
             ) {
-                Button("Löschen", role: .destructive) {
+                Button("Bestätigen", role: .destructive) {
                     if let deleteCandidateDate {
-                        deleteEntry(for: deleteCandidateDate)
+                        deleteSegments(for: deleteCandidateDate)
                     }
                     deleteCandidateDate = nil
                 }
@@ -114,7 +120,7 @@ struct CalendarTabView: View {
                     deleteCandidateDate = nil
                 }
             } message: {
-                Text("Der ausgewählte Tageseintrag wird dauerhaft entfernt.")
+                Text("Alle Segmente dieses Tages werden gelöscht.")
             }
         }
     }
@@ -129,11 +135,11 @@ struct CalendarTabView: View {
 
             HStack(spacing: 12) {
                 calendarControlButton(systemImage: "chevron.left") {
-                    displayedMonth = Calendar.current.date(byAdding: .month, value: -1, to: displayedMonth) ?? displayedMonth
+                    shiftDisplayedMonth(by: -1)
                 }
                 Spacer()
                 calendarControlButton(systemImage: "chevron.right") {
-                    displayedMonth = Calendar.current.date(byAdding: .month, value: 1, to: displayedMonth) ?? displayedMonth
+                    shiftDisplayedMonth(by: 1)
                 }
             }
         }
@@ -302,9 +308,10 @@ struct CalendarTabView: View {
                 ForEach(dates, id: \.self) { date in
                     if Calendar.current.isDate(date, equalTo: displayedMonth, toGranularity: .month) {
                         dayCell(for: date, height: cellHeight)
+                    } else if date > displayedMonthBounds.1 {
+                        adjacentMonthCell(for: date, height: cellHeight, isNextMonth: true)
                     } else {
-                        Color.clear
-                            .frame(height: cellHeight)
+                        adjacentMonthCell(for: date, height: cellHeight, isNextMonth: false)
                     }
                 }
             }
@@ -313,15 +320,30 @@ struct CalendarTabView: View {
     }
 
     private var calendarSurface: some View {
-        calendarGrid
+        ZStack {
+            calendarGrid
+                .id(displayedMonth.startOfMonthLocal())
+                .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.985)), removal: .opacity))
+        }
             .padding(.top, 2)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 24)
+                    .onEnded { gesture in
+                        handleMonthSwipe(gesture)
+                    }
+            )
     }
 
     private func dayCell(for date: Date, height: CGFloat) -> some View {
         let dayDate = date.startOfDayLocal()
         let entry = entries.first(where: { $0.date.isSameLocalDay(as: dayDate) })
-        let result = entry.map { service.dayComputation(for: $0, allEntries: entries, settings: settings) }
+        let visibleEntry = entry.flatMap { $0.segments.isEmpty ? nil : $0 }
+        let result = visibleEntry.map { service.dayComputation(for: $0, allEntries: entries, settings: settings) }
         let isToday = Calendar.current.isDateInToday(dayDate)
+        let isWeekend = Calendar.current.isDateInWeekend(dayDate)
+        let isHoliday = holidayDates.contains(dayDate)
+        let isMutedDay = isWeekend || isHoliday
         let numberTopPadding = max(8, (height * 0.38) - 24)
 
         return Button {
@@ -334,12 +356,13 @@ struct CalendarTabView: View {
             VStack(spacing: 0) {
                 Text("\(Calendar.current.component(.day, from: dayDate))")
                     .font(.system(size: 26, weight: .semibold, design: .rounded))
+                    .foregroundStyle(isMutedDay ? .secondary : .primary)
                     .padding(.top, numberTopPadding)
 
                 Spacer(minLength: 2)
 
-                if let entry {
-                    cellMetric(for: entry, result: result)
+                if let visibleEntry {
+                    cellMetric(for: visibleEntry, result: result)
                 }
 
                 if let result {
@@ -362,11 +385,15 @@ struct CalendarTabView: View {
             .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                    .fill(
+                        isMutedDay
+                        ? AnyShapeStyle(Color.gray.opacity(0.2))
+                        : AnyShapeStyle(.ultraThinMaterial)
+                    )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(entry == nil ? .clear : settings.themeAccent.color.opacity(0.07))
+                    .fill(visibleEntry == nil ? .clear : settings.themeAccent.color.opacity(0.07))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -379,10 +406,33 @@ struct CalendarTabView: View {
         .buttonStyle(.plain)
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onLongPressGesture(minimumDuration: 0.6) {
-            guard entry != nil else { return }
+            guard visibleEntry != nil else { return }
             longPressTriggeredDate = dayDate
             deleteCandidateDate = dayDate
         }
+    }
+
+    private func adjacentMonthCell(for date: Date, height: CGFloat, isNextMonth: Bool) -> some View {
+        let dayDate = date.startOfDayLocal()
+        let fillOpacity: Double = isNextMonth ? 0.38 : 0.24
+        let textOpacity: Double = isNextMonth ? 0.34 : 0.5
+
+        return VStack(spacing: 0) {
+            Text("\(Calendar.current.component(.day, from: dayDate))")
+                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                .foregroundStyle(.secondary.opacity(textOpacity))
+                .padding(.top, max(8, (height * 0.38) - 24))
+            Spacer(minLength: 8)
+        }
+        .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.gray.opacity(fillOpacity))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.gray.opacity(isNextMonth ? 0.22 : 0.14), lineWidth: 1)
+        )
     }
 
     private func germanMonthYear(_ date: Date) -> String {
@@ -464,19 +514,121 @@ struct CalendarTabView: View {
         return dates
     }
 
-    private func createNewEntryForTodayAndOpen() {
+    private func addAutomaticSegmentForToday() {
         let today = Date().startOfDayLocal()
-        if entries.first(where: { $0.date.isSameLocalDay(as: today) }) == nil {
-            modelContext.insert(DayEntry(date: today, type: .work))
-            modelContext.persistIfPossible()
-        }
-        activeSheet = .day(today)
+        let day = entries.first(where: { $0.date.isSameLocalDay(as: today) }) ?? {
+            let newDay = DayEntry(date: today, type: .work)
+            modelContext.insert(newDay)
+            return newDay
+        }()
+
+        let start = automaticSegmentStart(for: day, on: today)
+        let dayEnd = today.addingTimeInterval(24 * 3600)
+        let end = min(dayEnd, start.addingTimeInterval(3600))
+        guard end > start else { return }
+
+        day.segments.append(TimeSegment(start: start, end: end, breakSeconds: 0))
+        modelContext.persistIfPossible()
     }
 
-    private func deleteEntry(for date: Date) {
+    private func automaticSegmentStart(for day: DayEntry, on dayStart: Date) -> Date {
+        let roundedNow = roundedNowDate(on: dayStart)
+        if let lastEnd = day.segments.map(\.end).max() {
+            return max(lastEnd, roundedNow)
+        }
+        return roundedNow
+    }
+
+    private func roundedNowDate(on dayStart: Date) -> Date {
+        let calendar = Calendar.current
+        let now = Date()
+        let components = calendar.dateComponents([.hour, .minute], from: now)
+        let hour = components.hour ?? 0
+        let minute = components.minute ?? 0
+        let roundedMinuteOfDay = min(24 * 60, ((hour * 60 + minute + 14) / 15) * 15)
+        return dateAtMinute(roundedMinuteOfDay, on: dayStart)
+    }
+
+    private func dateAtMinute(_ minute: Int, on dayStart: Date) -> Date {
+        if minute >= 24 * 60 {
+            return dayStart.addingTimeInterval(24 * 3600)
+        }
+        let h = max(0, minute / 60)
+        let m = max(0, minute % 60)
+        return Calendar.current.date(bySettingHour: h, minute: m, second: 0, of: dayStart) ?? dayStart
+    }
+
+    private func deleteSegments(for date: Date) {
         guard let existing = entries.first(where: { $0.date.isSameLocalDay(as: date.startOfDayLocal()) }) else { return }
-        modelContext.delete(existing)
+        existing.segments.removeAll()
         modelContext.persistIfPossible()
+    }
+
+    private var holidayImportTaskKey: String {
+        let year = Calendar.current.component(.year, from: displayedMonth)
+        let country = normalizedHolidayCountryCode ?? "NONE"
+        let subdivision = normalizedHolidaySubdivisionCode ?? "ALL"
+        return "\(year)-\(country)-\(subdivision)"
+    }
+
+    private var normalizedHolidayCountryCode: String? {
+        normalizeCode(settings.holidayCountryCode)
+    }
+
+    private var normalizedHolidaySubdivisionCode: String? {
+        normalizeCode(settings.holidaySubdivisionCode)
+    }
+
+    private var holidayDates: Set<Date> {
+        let country = normalizedHolidayCountryCode
+        let subdivision = normalizedHolidaySubdivisionCode
+        return Set(
+            importedHolidays
+                .filter {
+                    normalizeCode($0.countryCode) == country &&
+                    normalizeCode($0.subdivisionCode) == subdivision
+                }
+                .map { $0.date.startOfDayLocal() }
+        )
+    }
+
+    @MainActor
+    private func importHolidaysIfNeededForDisplayedMonth() async {
+        let year = Calendar.current.component(.year, from: displayedMonth)
+        guard let countryCode = normalizedHolidayCountryCode else { return }
+        let subdivisionCode = normalizedHolidaySubdivisionCode
+
+        let importKey = holidayImportTaskKey
+        if holidayImportKeys.contains(importKey) {
+            return
+        }
+        let hasHolidaysForYear = importedHolidays.contains {
+            $0.sourceYear == year &&
+            normalizeCode($0.countryCode) == countryCode &&
+            normalizeCode($0.subdivisionCode) == subdivisionCode
+        }
+        if hasHolidaysForYear {
+            holidayImportKeys.insert(importKey)
+            return
+        }
+
+        do {
+            _ = try await holidayImporter.importHolidays(
+                year: year,
+                countryCode: countryCode,
+                subdivisionCode: subdivisionCode,
+                modelContext: modelContext
+            )
+            holidayImportKeys.insert(importKey)
+        } catch {
+            // Non-blocking: calendar still works without imported holidays.
+        }
+    }
+
+    private func normalizeCode(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return normalized.isEmpty ? nil : normalized
     }
 
     private func calendarControlButton(systemImage: String, action: @escaping () -> Void) -> some View {
@@ -491,6 +643,26 @@ struct CalendarTabView: View {
                 )
         }
         .buttonStyle(.plain)
+    }
+
+    private func handleMonthSwipe(_ gesture: DragGesture.Value) {
+        let horizontal = gesture.translation.width
+        let vertical = gesture.translation.height
+        guard abs(horizontal) > abs(vertical), abs(horizontal) >= 48 else {
+            return
+        }
+
+        if horizontal < 0 {
+            shiftDisplayedMonth(by: 1)
+        } else {
+            shiftDisplayedMonth(by: -1)
+        }
+    }
+
+    private func shiftDisplayedMonth(by delta: Int) {
+        withAnimation(.easeInOut(duration: 0.22)) {
+            displayedMonth = Calendar.current.date(byAdding: .month, value: delta, to: displayedMonth) ?? displayedMonth
+        }
     }
 
     private func bottomActionButton(systemImage: String) -> some View {

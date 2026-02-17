@@ -23,10 +23,32 @@ final class CalculationServiceTests: XCTestCase {
         XCTAssertEqual(try? result.get(), 6 * 3600)
     }
 
+    func testLegalBreakToleranceCorrectionDoesNotApplyToManualType() {
+        let entry = DayEntry(date: Date(), type: .manual, manualWorkedSeconds: 6 * 3600 + 10 * 60)
+        let result = CalculationService().workedSeconds(for: entry)
+        XCTAssertEqual(try? result.get(), 6 * 3600 + 10 * 60)
+    }
+
     func testLegalBreakToleranceCorrectionAtNineHoursWindow() {
         let entry = DayEntry(date: Date(), type: .work, manualWorkedSeconds: 9 * 3600 + 12 * 60)
         let result = CalculationService().workedSeconds(for: entry)
         XCTAssertEqual(try? result.get(), 9 * 3600)
+    }
+
+    func testLegalBreakToleranceCorrectionAtSixHoursEdgeFifteenMinutes() {
+        let entry = DayEntry(date: Date(), type: .work, manualWorkedSeconds: 6 * 3600 + 15 * 60)
+        let result = CalculationService().workedSeconds(for: entry)
+        XCTAssertEqual(try? result.get(), 6 * 3600)
+    }
+
+    func testNoMandatoryBreakAppliedAtSixHoursFifteenMinutesWithoutExplicitBreak() {
+        let start = dateFrom(year: 2026, month: 2, day: 17)
+        let end = start.addingTimeInterval(6 * 3600 + 15 * 60)
+        let segment = TimeSegment(start: start, end: end, breakSeconds: 0)
+        let entry = DayEntry(date: start, type: .work, segments: [segment])
+
+        let result = CalculationService().workedSeconds(for: entry)
+        XCTAssertEqual(try? result.get(), 6 * 3600)
     }
 
     func testNoToleranceCorrectionOutsideWindow() {
@@ -83,23 +105,23 @@ final class CalculationServiceTests: XCTestCase {
         }
     }
 
-    func testLookbackInsufficientHistoryStrictError() {
+    func testLookbackInsufficientHistoryReturnsZeroWarning() {
         let settings = Settings(hasCompletedOnboarding: true, strictHistoryRequired: true)
         let target = DayEntry(date: date(daysBack: 0), type: .sick)
         let result = CalculationService().creditedResult(for: target, allEntries: [target], settings: settings)
-        if case .error = result {
-            XCTAssertTrue(true)
+        if case let .warning(valueSeconds, _, _) = result {
+            XCTAssertEqual(valueSeconds, 0)
         } else {
-            XCTFail("Expected error")
+            XCTFail("Expected warning with zero value")
         }
     }
 
-    func testMissingEntriesOnlyZeroWhenEnabled() {
+    func testMissingEntriesAlwaysCountAsZero() {
         let target = DayEntry(date: date(daysBack: 0), type: .vacation)
 
         let strictOffZeroOff = Settings(strictHistoryRequired: false, countMissingAsZero: false)
         let r1 = CalculationService().creditedResult(for: target, allEntries: [target], settings: strictOffZeroOff)
-        if case .error = r1 {} else { XCTFail("Expected error") }
+        if case .warning = r1 {} else { XCTFail("Expected warning") }
 
         let strictOffZeroOn = Settings(strictHistoryRequired: false, countMissingAsZero: true)
         let r2 = CalculationService().creditedResult(for: target, allEntries: [target], settings: strictOffZeroOn)
@@ -136,6 +158,31 @@ final class CalculationServiceTests: XCTestCase {
 
         let distributed = Settings(holidayCreditingMode: .weeklyTargetDistributed, weeklyTargetSeconds: 180000, scheduledWorkdaysCount: 5)
         XCTAssertEqual(service.holidayCreditedSeconds(settings: distributed), 36000)
+    }
+
+    func testHolidayUsesThirteenWeekRuleInStrictMode() {
+        let settings = Settings(strictHistoryRequired: true)
+        let holiday = DayEntry(date: date(daysBack: 0), type: .holiday)
+        let result = CalculationService().dayComputation(for: holiday, allEntries: [holiday], settings: settings)
+
+        if case let .warning(valueSeconds, _, _) = result {
+            XCTAssertEqual(valueSeconds, 0)
+        } else {
+            XCTFail("Expected warning because missing history is counted as zero.")
+        }
+    }
+
+    func testMissingWeeksAreIncludedAsZeroInAverage() {
+        let settings = Settings(strictHistoryRequired: true)
+        let target = DayEntry(date: date(daysBack: 0), type: .vacation)
+        let oneReference = DayEntry(date: date(daysBack: 7), type: .work, manualWorkedSeconds: 13000)
+        let result = CalculationService().creditedResult(for: target, allEntries: [target, oneReference], settings: settings)
+
+        if case let .ok(valueSeconds, _) = result {
+            XCTAssertEqual(valueSeconds, 1020)
+        } else {
+            XCTFail("Expected ok with averaged value including missing weeks as zero.")
+        }
     }
 
     private func date(daysBack: Int) -> Date {

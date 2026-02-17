@@ -55,7 +55,7 @@ struct CalculationService {
 
     func validateSegments(_ segments: [TimeSegment]) -> [SegmentValidationError] {
         segments.compactMap { segment in
-            if segment.end <= segment.start {
+            if segment.end < segment.start {
                 return SegmentValidationError(message: "End time must be after start time.")
             }
             if segment.breakSeconds < 0 {
@@ -74,7 +74,10 @@ struct CalculationService {
             if manual < 0 {
                 return .failure(WorkedSecondsError(message: "Manual worked seconds cannot be negative."))
             }
-            return .success(applyLegalBreakToleranceCorrection(to: manual))
+            if day.type == .work {
+                return .success(applyLegalBreakToleranceCorrection(to: manual))
+            }
+            return .success(manual)
         }
 
         let errors = validateSegments(day.segments)
@@ -94,11 +97,14 @@ struct CalculationService {
         let missingBreakComplement = max(0, requiredBreak - explicitBreakSeconds)
         let afterMinimumBreakCorrection = max(0, netWorkedSeconds - missingBreakComplement)
 
-        return .success(applyLegalBreakToleranceCorrection(to: afterMinimumBreakCorrection))
+        if day.type == .work {
+            return .success(applyLegalBreakToleranceCorrection(to: afterMinimumBreakCorrection))
+        }
+        return .success(afterMinimumBreakCorrection)
     }
 
     // Legal break tolerance correction:
-    // Minutes 1...15 after 6h and 9h are not counted as work time.
+    // Minutes 1...15 after 6h and 9h are not counted as work time, including :15.
     private func applyLegalBreakToleranceCorrection(to workedSeconds: Int) -> Int {
         let sixHours = 6 * 3600
         let nineHours = 9 * 3600
@@ -106,11 +112,11 @@ struct CalculationService {
 
         var correction = 0
 
-        if workedSeconds > sixHours && workedSeconds < sixHours + tolerance {
+        if workedSeconds > sixHours && workedSeconds <= sixHours + tolerance {
             correction += workedSeconds - sixHours
         }
 
-        if workedSeconds > nineHours && workedSeconds < nineHours + tolerance {
+        if workedSeconds > nineHours && workedSeconds <= nineHours + tolerance {
             correction += workedSeconds - nineHours
         }
 
@@ -120,8 +126,9 @@ struct CalculationService {
     private func legalMinimumBreakSeconds(forWorkedSeconds workedSeconds: Int) -> Int {
         let sixHours = 6 * 3600
         let nineHours = 9 * 3600
-        if workedSeconds > nineHours { return 45 * 60 }
-        if workedSeconds > sixHours { return 30 * 60 }
+        let tolerance = 15 * 60
+        if workedSeconds > nineHours + tolerance { return 45 * 60 }
+        if workedSeconds > sixHours + tolerance { return 30 * 60 }
         return 0
     }
 
@@ -146,7 +153,7 @@ struct CalculationService {
 
     func dayComputation(for day: DayEntry, allEntries: [DayEntry], settings: Settings) -> ComputationResult {
         switch day.type {
-        case .work:
+        case .work, .manual:
             switch workedSeconds(for: day) {
             case let .success(seconds):
                 return .ok(valueSeconds: seconds, valueCents: payCents(for: seconds, settings: settings))
@@ -178,19 +185,15 @@ struct CalculationService {
 
     func creditedResult(for day: DayEntry, allEntries: [DayEntry], settings: Settings) -> ComputationResult {
         let normalizedDate = day.date.startOfDayLocal(calendar: calendar)
-        let lookback = max(1, settings.vacationLookbackCount)
+        let lookback = 13
         let entriesByDate = Dictionary(uniqueKeysWithValues: allEntries.map { ($0.date.startOfDayLocal(calendar: calendar), $0) })
 
         var values: [Int] = []
-        var missing: [Date] = []
 
         for index in 1...lookback {
             let reference = normalizedDate.addingDays(index * -7, calendar: calendar).startOfDayLocal(calendar: calendar)
             guard let refEntry = entriesByDate[reference] else {
-                missing.append(reference)
-                if settings.countMissingAsZero {
-                    values.append(0)
-                }
+                values.append(0)
                 continue
             }
 
@@ -207,20 +210,9 @@ struct CalculationService {
             }
         }
 
-        if settings.strictHistoryRequired && !missing.isEmpty {
-            return .error(message: "Insufficient 13-week history for strict mode.", missingDates: missing)
-        }
-
-        if !settings.strictHistoryRequired && !settings.countMissingAsZero && !missing.isEmpty {
-            return .error(message: "Missing reference entries. Enable 'count missing as zero' or create entries.", missingDates: missing)
-        }
-
-        if values.count < lookback {
-            return .error(message: "Not enough reference values available.", missingDates: missing)
-        }
-
         let total = values.reduce(0, +)
-        let average = Int((Double(total) / Double(lookback)).rounded())
+        let rawAverageSeconds = Double(total) / Double(lookback)
+        let average = Int(ceil(rawAverageSeconds / 60.0) * 60.0)
         let pay = payCents(for: average, settings: settings)
 
         if values.allSatisfy({ $0 == 0 }) {

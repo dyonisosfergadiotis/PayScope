@@ -12,8 +12,11 @@ struct SettingsTabView: View {
     @State private var exportYear = Calendar.current.component(.year, from: Date())
     @State private var csvPayload = ""
     @State private var showShare = false
+    @State private var holidayImportInfo = ""
+    @State private var isImportingHolidays = false
 
     private let exporter = CSVExporter()
+    private let holidayImporter = HolidayImportService()
 
     var body: some View {
         NavigationStack {
@@ -92,6 +95,34 @@ struct SettingsTabView: View {
                         ForEach(CalendarCellDisplayMode.allCases) { mode in
                             Text(mode.label).tag(mode)
                         }
+                    }
+                }
+
+                Section("Feiertage (API)") {
+                    TextField("Land (ISO, z. B. DE)", text: holidayCountryBinding)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                    TextField("Bundesland (optional, z. B. BY)", text: holidaySubdivisionBinding)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+
+                    Button {
+                        Task {
+                            await importHolidaysForCurrentYear()
+                        }
+                    } label: {
+                        if isImportingHolidays {
+                            ProgressView()
+                        } else {
+                            Text("Feiertage für aktuelles Jahr importieren")
+                        }
+                    }
+                    .disabled(isImportingHolidays)
+
+                    if !holidayImportInfo.isEmpty {
+                        Text(holidayImportInfo)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -235,6 +266,48 @@ struct SettingsTabView: View {
         )
     }
 
+    private var holidayCountryBinding: Binding<String> {
+        Binding(
+            get: { settings.holidayCountryCode ?? "DE" },
+            set: { newValue in
+                settings.holidayCountryCode = normalizeHolidayCode(newValue)
+                modelContext.persistIfPossible()
+            }
+        )
+    }
+
+    private var holidaySubdivisionBinding: Binding<String> {
+        Binding(
+            get: { settings.holidaySubdivisionCode ?? "" },
+            set: { newValue in
+                settings.holidaySubdivisionCode = normalizeHolidayCode(newValue).nilIfEmpty
+                modelContext.persistIfPossible()
+            }
+        )
+    }
+
+    private func importHolidaysForCurrentYear() async {
+        isImportingHolidays = true
+        defer { isImportingHolidays = false }
+
+        let year = Calendar.current.component(.year, from: Date())
+        do {
+            let count = try await holidayImporter.importHolidays(
+                year: year,
+                countryCode: settings.holidayCountryCode,
+                subdivisionCode: settings.holidaySubdivisionCode,
+                modelContext: modelContext
+            )
+            holidayImportInfo = "\(count) Feiertage für \(year) importiert."
+        } catch {
+            holidayImportInfo = "Feiertage konnten nicht importiert werden."
+        }
+    }
+
+    private func normalizeHolidayCode(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
     @ViewBuilder
     private func minuteWindowControl(
         title: String,
@@ -270,5 +343,11 @@ struct SettingsTabView: View {
         let h = minute / 60
         let m = minute % 60
         return String(format: "%02d:%02d", h, m)
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

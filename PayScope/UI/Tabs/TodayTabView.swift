@@ -27,11 +27,11 @@ struct TodayTabView: View {
                 }
                 .padding()
             }
-            .navigationTitle("Heute")
-            .sheet(isPresented: $showEditor) {
-                DayEditorView(date: Date().startOfDayLocal(), settings: settings)
-                    .presentationDetents([.fraction(0.65), .large])
-            }
+                .navigationTitle("Heute")
+                .sheet(isPresented: $showEditor) {
+                    DayEditorView(date: Date().startOfDayLocal(), settings: settings)
+                        .presentationDetents([.fraction(0.65), .large])
+                }
         }
         .wageWiseBackground(accent: settings.themeAccent.color)
     }
@@ -106,10 +106,7 @@ struct TodayTabView: View {
             Text("Erstelle dein erstes Segment oder setze den Tagestyp.")
                 .foregroundStyle(.secondary)
             Button("Heutigen Eintrag erstellen") {
-                let day = DayEntry(date: Date(), type: .work)
-                modelContext.insert(day)
-                modelContext.persistIfPossible()
-                showEditor = true
+                addAutomaticSegmentForToday()
             }
             .buttonStyle(.wageWisePrimary(accent: settings.themeAccent.color))
         }
@@ -120,11 +117,7 @@ struct TodayTabView: View {
     private var quickActions: some View {
         VStack(spacing: 10) {
             Button {
-                if todayEntry == nil {
-                    modelContext.insert(DayEntry(date: Date(), type: .work))
-                    modelContext.persistIfPossible()
-                }
-                showEditor = true
+                addAutomaticSegmentForToday()
             } label: {
                 Label("Segment hinzufügen", systemImage: "plus")
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -143,6 +136,50 @@ struct TodayTabView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .wageWiseCard(accent: settings.themeAccent.color)
+    }
+
+    private func addAutomaticSegmentForToday() {
+        let today = Date().startOfDayLocal()
+        let day = todayEntry ?? {
+            let newDay = DayEntry(date: today, type: .work)
+            modelContext.insert(newDay)
+            return newDay
+        }()
+
+        let start = automaticSegmentStart(for: day, on: today)
+        let dayEnd = today.addingTimeInterval(24 * 3600)
+        let end = min(dayEnd, start.addingTimeInterval(3600))
+        guard end > start else { return }
+
+        day.segments.append(TimeSegment(start: start, end: end, breakSeconds: 0))
+        modelContext.persistIfPossible()
+    }
+
+    private func automaticSegmentStart(for day: DayEntry, on dayStart: Date) -> Date {
+        let roundedNow = roundedNowDate(on: dayStart)
+        if let lastEnd = day.segments.map(\.end).max() {
+            return max(lastEnd, roundedNow)
+        }
+        return roundedNow
+    }
+
+    private func roundedNowDate(on dayStart: Date) -> Date {
+        let calendar = Calendar.current
+        let now = Date()
+        let components = calendar.dateComponents([.hour, .minute], from: now)
+        let hour = components.hour ?? 0
+        let minute = components.minute ?? 0
+        let roundedMinuteOfDay = min(24 * 60, ((hour * 60 + minute + 14) / 15) * 15)
+        return dateAtMinute(roundedMinuteOfDay, on: dayStart)
+    }
+
+    private func dateAtMinute(_ minute: Int, on dayStart: Date) -> Date {
+        if minute >= 24 * 60 {
+            return dayStart.addingTimeInterval(24 * 3600)
+        }
+        let h = max(0, minute / 60)
+        let m = max(0, minute % 60)
+        return Calendar.current.date(bySettingHour: h, minute: m, second: 0, of: dayStart) ?? dayStart
     }
 
     private var weekMonthCards: some View {

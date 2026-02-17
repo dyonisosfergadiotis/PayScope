@@ -4,6 +4,7 @@ import SwiftUI
 
 enum DayType: String, Codable, CaseIterable, Identifiable {
     case work
+    case manual
     case vacation
     case holiday
     case sick
@@ -13,6 +14,7 @@ enum DayType: String, Codable, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .work: return "Work"
+        case .manual: return "Manuell"
         case .vacation: return "Vacation"
         case .holiday: return "Holiday"
         case .sick: return "Sick"
@@ -22,8 +24,9 @@ enum DayType: String, Codable, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .work: return "briefcase.fill"
+        case .manual: return "sparkles"
         case .vacation: return "sun.max.fill"
-        case .holiday: return "sparkles"
+        case .holiday: return "flag.fill"
         case .sick: return "cross.case.fill"
         }
     }
@@ -31,6 +34,7 @@ enum DayType: String, Codable, CaseIterable, Identifiable {
     var tint: Color {
         switch self {
         case .work: return .blue
+        case .manual: return .purple
         case .vacation: return .mint
         case .holiday: return .orange
         case .sick: return .red
@@ -187,6 +191,8 @@ final class Settings {
     var calendarCellDisplayMode: CalendarCellDisplayMode?
     var timelineMinMinute: Int?
     var timelineMaxMinute: Int?
+    var holidayCountryCode: String?
+    var holidaySubdivisionCode: String?
     var netWageTaxPercent: Double?
     var netPensionPercent: Double?
     var netBonusesCSV: String?
@@ -207,6 +213,8 @@ final class Settings {
         calendarCellDisplayMode: CalendarCellDisplayMode? = .dot,
         timelineMinMinute: Int? = 6 * 60,
         timelineMaxMinute: Int? = 22 * 60,
+        holidayCountryCode: String? = "DE",
+        holidaySubdivisionCode: String? = nil,
         netWageTaxPercent: Double? = nil,
         netPensionPercent: Double? = nil,
         netBonusesCSV: String? = nil
@@ -226,9 +234,50 @@ final class Settings {
         self.calendarCellDisplayMode = calendarCellDisplayMode
         self.timelineMinMinute = timelineMinMinute
         self.timelineMaxMinute = timelineMaxMinute
+        self.holidayCountryCode = holidayCountryCode
+        self.holidaySubdivisionCode = holidaySubdivisionCode
         self.netWageTaxPercent = netWageTaxPercent
         self.netPensionPercent = netPensionPercent
         self.netBonusesCSV = netBonusesCSV
+    }
+}
+
+@Model
+final class HolidayCalendarDay {
+    @Attribute(.unique) var key: String
+    var date: Date
+    var localName: String
+    var countryCode: String
+    var subdivisionCode: String?
+    var sourceYear: Int
+
+    init(
+        date: Date,
+        localName: String,
+        countryCode: String,
+        subdivisionCode: String?,
+        sourceYear: Int
+    ) {
+        let normalizedDate = date.startOfDayLocal()
+        let normalizedCountry = countryCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let normalizedSubdivision = subdivisionCode?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+
+        self.date = normalizedDate
+        self.localName = localName
+        self.countryCode = normalizedCountry
+        self.subdivisionCode = normalizedSubdivision
+        self.sourceYear = sourceYear
+        self.key = HolidayCalendarDay.makeKey(
+            date: normalizedDate,
+            countryCode: normalizedCountry,
+            subdivisionCode: normalizedSubdivision
+        )
+    }
+
+    static func makeKey(date: Date, countryCode: String, subdivisionCode: String?) -> String {
+        let dayKey = String(Int(date.startOfDayLocal().timeIntervalSinceReferenceDate))
+        let subdivisionPart = subdivisionCode?.uppercased() ?? "ALL"
+        return "\(countryCode.uppercased())-\(subdivisionPart)-\(dayKey)"
     }
 }
 

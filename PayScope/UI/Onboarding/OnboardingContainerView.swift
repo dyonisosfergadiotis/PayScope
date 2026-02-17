@@ -8,7 +8,7 @@ struct OnboardingContainerView: View {
     var body: some View {
         ZStack {
             if showSplash {
-                OnboardingSplashView()
+                OnboardingSplashView(accent: settings.themeAccent.color)
                     .transition(.opacity.combined(with: .scale))
             } else {
                 OnboardingFlowView(settings: settings)
@@ -24,15 +24,17 @@ struct OnboardingContainerView: View {
 }
 
 private struct OnboardingSplashView: View {
+    let accent: Color
+
     var body: some View {
         ZStack {
-            LinearGradient(colors: [.blue.opacity(0.4), .mint.opacity(0.25), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(colors: [accent.opacity(0.4), accent.opacity(0.2), .clear], startPoint: .topLeading, endPoint: .bottomTrailing)
                 .ignoresSafeArea()
 
             VStack(spacing: 16) {
                 Circle()
                     .fill(
-                        LinearGradient(colors: [.blue, .mint], startPoint: .topLeading, endPoint: .bottomTrailing)
+                        LinearGradient(colors: [accent, accent.opacity(0.75)], startPoint: .topLeading, endPoint: .bottomTrailing)
                     )
                     .frame(width: 120, height: 120)
                     .overlay(Image(systemName: "clock.badge.checkmark.fill").font(.system(size: 48)).foregroundStyle(.white))
@@ -57,17 +59,22 @@ private struct OnboardingFlowView: View {
     @State private var hourlyRate = ""
     @State private var monthlySalary = ""
     @State private var weeklyHours = ""
+    @State private var holidayCountryCode = "DE"
+    @State private var holidaySubdivisionCode = ""
+    @State private var timelineMinMinute = 6 * 60
+    @State private var timelineMaxMinute = 22 * 60
 
-    private let pageCount = 5
+    private let pageCount = 6
 
     var body: some View {
         VStack(spacing: 12) {
             TabView(selection: $page) {
-                welcomePage.tag(0)
+                overviewPage.tag(0)
                 paySetupPage.tag(1)
                 workweekPage.tag(2)
-                rulePage.tag(3)
-                themePage.tag(4)
+                holidayRegionPage.tag(3)
+                rulesPage.tag(4)
+                captureAndThemePage.tag(5)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
 
@@ -105,21 +112,41 @@ private struct OnboardingFlowView: View {
             hourlyRate = settings.hourlyRateCents.map { String(format: "%.2f", Double($0) / 100) } ?? ""
             monthlySalary = settings.monthlySalaryCents.map { String(format: "%.2f", Double($0) / 100) } ?? ""
             weeklyHours = settings.weeklyTargetSeconds.map { String(format: "%.1f", Double($0) / 3600) } ?? ""
+            holidayCountryCode = settings.holidayCountryCode ?? "DE"
+            holidaySubdivisionCode = settings.holidaySubdivisionCode ?? ""
+            timelineMinMinute = settings.timelineMinMinute ?? 6 * 60
+            timelineMaxMinute = settings.timelineMaxMinute ?? 22 * 60
         }
     }
 
-    private var welcomePage: some View {
-        OnboardingPageShell(title: "Willkommen bei WageWise", subtitle: "Verstehe Stunden, Lohn und Gutschriften ohne Schätzwerte.") {
+    private var overviewPage: some View {
+        OnboardingPageShell(
+            title: "Schnelles Setup",
+            subtitle: "Wir richten die wichtigsten Einstellungen direkt jetzt ein.",
+            step: page + 1,
+            total: pageCount,
+            icon: "slider.horizontal.3",
+            accent: settings.themeAccent.color
+        ) {
             VStack(alignment: .leading, spacing: 12) {
-                bullet("Tägliche Erfassung mit klaren Typen für Arbeit, Urlaub und Krank")
-                bullet("Strenge 13-Wochen-Regel für verlässliche Gutschriften")
-                bullet("Wochen- und Monatssummen mit Warnungen und Fehlern")
+                bullet("Bezahlungsmodell und Betrag")
+                bullet("Arbeitswoche und Sollstunden")
+                bullet("Land/Bundesland für Feiertage")
+                bullet("Regeln für 13-Wochen-Berechnung")
+                bullet("Timeline und Kalenderdarstellung")
             }
         }
     }
 
     private var paySetupPage: some View {
-        OnboardingPageShell(title: "Bezahlung", subtitle: "Wähle dein Lohnmodell und gib einen gültigen Betrag ein.") {
+        OnboardingPageShell(
+            title: "Bezahlung",
+            subtitle: "Diese Angaben sind für die Lohnberechnung erforderlich.",
+            step: page + 1,
+            total: pageCount,
+            icon: "eurosign.circle",
+            accent: settings.themeAccent.color
+        ) {
             VStack(alignment: .leading, spacing: 14) {
                 Picker("Lohnmodus", selection: $settings.payMode) {
                     ForEach(PayMode.allCases) { mode in
@@ -152,7 +179,14 @@ private struct OnboardingFlowView: View {
     }
 
     private var workweekPage: some View {
-        OnboardingPageShell(title: "Arbeitswoche", subtitle: "Lege Wochenstart und Sollzeiten fest.") {
+        OnboardingPageShell(
+            title: "Arbeitswoche",
+            subtitle: "Basis für Sollzeit und Feiertagsgutschrift.",
+            step: page + 1,
+            total: pageCount,
+            icon: "calendar",
+            accent: settings.themeAccent.color
+        ) {
             VStack(alignment: .leading, spacing: 14) {
                 Picker("Wochenstart", selection: $settings.weekStart) {
                     ForEach(WeekStart.allCases) { start in
@@ -184,29 +218,102 @@ private struct OnboardingFlowView: View {
         }
     }
 
-    private var rulePage: some View {
-        OnboardingPageShell(title: "13-Wochen-Regel", subtitle: "Urlaub und Krankheit nutzen die Historie gleicher Wochentage.") {
+    private var holidayRegionPage: some View {
+        OnboardingPageShell(
+            title: "Feiertage & Region",
+            subtitle: "Land und Bundesland steuern den Feiertagsimport im Kalender.",
+            step: page + 1,
+            total: pageCount,
+            icon: "globe.europe.africa",
+            accent: settings.themeAccent.color
+        ) {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Für jeden Urlaubs- oder Krankheitstag prüft WageWise die letzten 13 gleichen Wochentage. Im strengen Modus führen fehlende Daten zu einem Fehler, ohne Schätzung.")
+                TextField("Land (ISO, z. B. DE)", text: $holidayCountryCode)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+
+                TextField("Bundesland (optional, z. B. BY)", text: $holidaySubdivisionCode)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+
+                Text("Feiertage werden über die API geladen und im Kalender grau markiert.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                if !isHolidayCountryCodeValid {
+                    Text("Bitte einen gültigen ISO-Ländercode mit 2 Buchstaben angeben.")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+    }
+
+    private var rulesPage: some View {
+        OnboardingPageShell(
+            title: "13-Wochen-Regeln",
+            subtitle: "Steuert, wie Urlaub/Krank ohne Schätzungen berechnet wird.",
+            step: page + 1,
+            total: pageCount,
+            icon: "checkmark.shield",
+            accent: settings.themeAccent.color
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Für jeden Urlaubs- oder Krankheitstag werden die letzten 13 gleichen Wochentage geprüft.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
                 Toggle("Fehlende Referenzen als 0 zählen", isOn: $settings.countMissingAsZero)
-                Text("Wenn deaktiviert, bleiben fehlende Einträge offen, bis du sie erstellst.")
+                Text("Aus: fehlende Einträge bleiben offen, bis Daten vorhanden sind.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
                 Toggle("Strenge Historie erforderlich", isOn: $settings.strictHistoryRequired)
-                Text("Wenn aktiviert, erzeugt jeder fehlende Rückblick-Tag einen Fehler.")
+                Text("Ein: fehlende Rückblick-Tage erzeugen einen Fehler.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
     }
 
-    private var themePage: some View {
-        OnboardingPageShell(title: "Design", subtitle: "Wähle deine Akzentfarbe.") {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 80))], spacing: 12) {
+    private var captureAndThemePage: some View {
+        OnboardingPageShell(
+            title: "Erfassung & Ansicht",
+            subtitle: "Lege Timeline-Fenster und Kalenderdarstellung fest.",
+            step: page + 1,
+            total: pageCount,
+            icon: "paintpalette",
+            accent: settings.themeAccent.color
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                minuteWindowControl(
+                    title: "Frühester Start",
+                    value: $timelineMinMinute,
+                    step: 15,
+                    lower: 0,
+                    upper: max(0, timelineMaxMinute - 60)
+                )
+                minuteWindowControl(
+                    title: "Spätestes Ende",
+                    value: $timelineMaxMinute,
+                    step: 15,
+                    lower: min(24 * 60, timelineMinMinute + 60),
+                    upper: 24 * 60
+                )
+
+                Picker("Zellanzeige im Kalender", selection: calendarDisplayModeBinding) {
+                    ForEach(CalendarCellDisplayMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text("Akzentfarbe")
+                    .font(.subheadline.weight(.semibold))
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 80))], spacing: 12) {
                 ForEach(ThemeAccent.allCases) { accent in
                     Button {
                         settings.themeAccent = accent
@@ -228,6 +335,7 @@ private struct OnboardingFlowView: View {
                     .buttonStyle(.plain)
                 }
             }
+        }
         }
     }
 
@@ -252,6 +360,8 @@ private struct OnboardingFlowView: View {
         case 2:
             if weeklyHours.isEmpty { return true }
             return parseHoursToSeconds(weeklyHours) != nil
+        case 3:
+            return isHolidayCountryCodeValid
         default:
             return true
         }
@@ -267,6 +377,10 @@ private struct OnboardingFlowView: View {
             settings.hourlyRateCents = nil
         }
         settings.weeklyTargetSeconds = parseHoursToSeconds(weeklyHours)
+        settings.holidayCountryCode = normalizedHolidayCountryCode
+        settings.holidaySubdivisionCode = normalizedHolidaySubdivisionCode
+        settings.timelineMinMinute = timelineMinMinute
+        settings.timelineMaxMinute = timelineMaxMinute
     }
 
     private func parseMoneyToCents(_ text: String) -> Int? {
@@ -280,22 +394,93 @@ private struct OnboardingFlowView: View {
         guard let hours = Double(normalized), hours >= 0 else { return nil }
         return Int((hours * 3600).rounded())
     }
+
+    private var isHolidayCountryCodeValid: Bool {
+        normalizedHolidayCountryCode.count == 2
+    }
+
+    private var normalizedHolidayCountryCode: String {
+        holidayCountryCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
+    private var normalizedHolidaySubdivisionCode: String? {
+        let value = holidaySubdivisionCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return value.isEmpty ? nil : value
+    }
+
+    private var calendarDisplayModeBinding: Binding<CalendarCellDisplayMode> {
+        Binding(
+            get: { settings.calendarCellDisplayMode ?? .dot },
+            set: { settings.calendarCellDisplayMode = $0 }
+        )
+    }
+
+    @ViewBuilder
+    private func minuteWindowControl(
+        title: String,
+        value: Binding<Int>,
+        step: Int,
+        lower: Int,
+        upper: Int
+    ) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Button {
+                value.wrappedValue = max(lower, value.wrappedValue - step)
+            } label: {
+                Image(systemName: "minus.circle")
+            }
+            .buttonStyle(.plain)
+
+            Text(formatMinute(value.wrappedValue))
+                .font(.subheadline.bold())
+                .frame(minWidth: 58)
+
+            Button {
+                value.wrappedValue = min(upper, value.wrappedValue + step)
+            } label: {
+                Image(systemName: "plus.circle")
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func formatMinute(_ minute: Int) -> String {
+        let h = minute / 60
+        let m = minute % 60
+        return String(format: "%02d:%02d", h, m)
+    }
 }
 
 private struct OnboardingPageShell<Content: View>: View {
     let title: String
     let subtitle: String
+    let step: Int
+    let total: Int
+    let icon: String
+    let accent: Color
     @ViewBuilder var content: Content
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(
-                        LinearGradient(colors: [.blue.opacity(0.35), .mint.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    )
-                    .frame(height: 120)
-                    .overlay(Image(systemName: "sparkles").font(.system(size: 36)).foregroundStyle(.white))
+                HStack(spacing: 10) {
+                    Image(systemName: icon)
+                        .font(.headline)
+                        .foregroundStyle(accent)
+                        .frame(width: 30, height: 30)
+                        .background(
+                            Circle()
+                                .fill(accent.opacity(0.15))
+                        )
+
+                    Text("Schritt \(step) von \(total)")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+                }
 
                 Text(title)
                     .font(.system(.title, design: .rounded).bold())
@@ -304,6 +489,15 @@ private struct OnboardingPageShell<Content: View>: View {
                     .foregroundStyle(.secondary)
 
                 content
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(.ultraThinMaterial)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(accent.opacity(0.2), lineWidth: 1)
+                    )
             }
             .padding(24)
         }

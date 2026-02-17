@@ -17,6 +17,8 @@ struct DayEditorView: View {
     @State private var isPauseCustom = false
     @State private var isApplyingLoad = false
     @State private var selectedDate = Date().startOfDayLocal()
+    @State private var isManualEntry = false
+    @State private var manualWorkedSeconds: Int = 0
 
     private let service = CalculationService()
 
@@ -134,7 +136,7 @@ struct DayEditorView: View {
         
         ToolbarItem(placement: .bottomBar) {
             HStack {
-                toolbarMetricPill(value: WageWiseFormatters.hhmmString(seconds: totalBreakMinutes * 60), title: "Pause")
+                toolbarMetricPill(value: WageWiseFormatters.hhmmString(seconds: (isManualEntry ? 0 : (selectedType == .work ? totalBreakMinutes * 60 : 0))), title: "Pause")
             }
             .frame(maxWidth: .infinity)
         }
@@ -170,133 +172,160 @@ struct DayEditorView: View {
     private var segmentsPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Segmente")
-                    .font(.headline.weight(.semibold))
-                Spacer()
-                Button {
-                    addDefaultSegment()
-                } label: {
-                    Label("Neu", systemImage: "plus.circle.fill")
-                        .font(.footnote.weight(.semibold))
+                Toggle(isOn: $isManualEntry) {
+                    Text("Manuell erfassen")
+                        .font(.headline.weight(.semibold))
                 }
-                .buttonStyle(.plain)
             }
 
-            Text("Timeline ist die Übersicht, Details pro Segment darunter.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-
-            if editSegments.isEmpty {
-                VStack(spacing: 10) {
-                    Image(systemName: "waveform.path.ecg.rectangle")
-                        .font(.title2)
-                        .foregroundStyle(settings.themeAccent.color)
-                    Text("Noch keine Segmente")
+            if isManualEntry {
+                // Manual duration editor HH:MM
+                HStack(spacing: 12) {
+                    Text("Dauer")
                         .font(.subheadline.weight(.semibold))
-                    Text("Starte mit einem Segment und forme dann Start und Ende.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
+                    Spacer()
+                    // Simple steppers for hours and minutes
+                    ManualDurationEditor(seconds: $manualWorkedSeconds, accent: settings.themeAccent.color)
+                }
+                Text("Bei manueller Erfassung wird keine Pause abgezogen.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
 
+            if !isManualEntry {
+                HStack {
+                    Text("Segmente")
+                        .font(.headline.weight(.semibold))
+                    Spacer()
                     Button {
                         addDefaultSegment()
                     } label: {
-                        Label("Segment hinzufügen", systemImage: "plus")
-                            .frame(maxWidth: .infinity)
+                        Label("Neu", systemImage: "plus.circle.fill")
+                            .font(.footnote.weight(.semibold))
                     }
-                    .buttonStyle(.wageWisePrimary(accent: settings.themeAccent.color))
+                    .buttonStyle(.plain)
                 }
-                .padding(14)
-                .frame(maxWidth: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.thinMaterial)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 5]))
-                        .foregroundStyle(settings.themeAccent.color.opacity(0.35))
-                )
-            }
 
-            ForEach($editSegments, id: \.id) { $segment in
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 8) {
-                        Text("Start")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                Text("Timeline ist die Übersicht, Details pro Segment darunter.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
 
-                        DatePicker(
-                            "",
-                            selection: timeBinding(segment: $segment, isStart: true),
-                            displayedComponents: .hourAndMinute
-                        )
-                        .labelsHidden()
-                        .datePickerStyle(.compact)
-                        .fixedSize()
-
-                        Text(segment.durationLabel)
-                            .font(.caption.weight(.bold))
+                if editSegments.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "waveform.path.ecg.rectangle")
+                            .font(.title2)
                             .foregroundStyle(settings.themeAccent.color)
+                        Text("Noch keine Segmente")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Starte mit einem Segment und forme dann Start und Ende.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+
+                        Button {
+                            addDefaultSegment()
+                        } label: {
+                            Label("Segment hinzufügen", systemImage: "plus")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.wageWisePrimary(accent: settings.themeAccent.color))
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(.thinMaterial)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 5]))
+                            .foregroundStyle(settings.themeAccent.color.opacity(0.35))
+                    )
+                }
+
+                ForEach($editSegments, id: \.id) { $segment in
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Text("Start")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            DatePicker(
+                                "",
+                                selection: timeBinding(segment: $segment, isStart: true),
+                                displayedComponents: .hourAndMinute
+                            )
+                            .labelsHidden()
+                            .datePickerStyle(.compact)
                             .fixedSize()
 
-                        Text("Ende")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            Text(segment.durationLabel)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(settings.themeAccent.color)
+                                .fixedSize()
 
-                        DatePicker(
-                            "",
-                            selection: timeBinding(segment: $segment, isStart: false),
-                            displayedComponents: .hourAndMinute
-                        )
-                        .labelsHidden()
-                        .datePickerStyle(.compact)
-                        .fixedSize()
+                            Text("Ende")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            DatePicker(
+                                "",
+                                selection: timeBinding(segment: $segment, isStart: false),
+                                displayedComponents: .hourAndMinute
+                            )
+                            .labelsHidden()
+                            .datePickerStyle(.compact)
+                            .fixedSize()
+
+                            Button {
+                                removeSegment(segment.id)
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.red)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Segment löschen")
+                        }
+                        .padding(.horizontal, 2)
+
+                        if let error = segment.validationMessage {
+                            Text(error)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                        }
                     }
-                    .padding(.horizontal, 2)
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(.ultraThinMaterial)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(settings.themeAccent.color.opacity(0.24), lineWidth: 1)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .transition(.asymmetric(insertion: .scale(scale: 0.96).combined(with: .opacity), removal: .opacity))
+                }
 
-                    if let error = segment.validationMessage {
-                        Text(error)
+                if !isCreditedType {
+                    PauseInlineEditor(
+                        breakMinutes: $totalBreakMinutes,
+                        isPauseCustom: $isPauseCustom,
+                        suggestedBreakMinutes: automaticBreakMinutes(forDurationMinutes: totalGrossSeconds / 60),
+                        accent: settings.themeAccent.color
+                    )
+
+                    if let breakValidationMessage {
+                        Text(breakValidationMessage)
                             .font(.footnote)
                             .foregroundStyle(.red)
                     }
-                }
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(settings.themeAccent.color.opacity(0.24), lineWidth: 1)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                    Button(role: .destructive) {
-                        editSegments.removeAll { $0.id == segment.id }
-                    } label: {
-                        Label("Löschen", systemImage: "trash")
-                    }
-                }
-            }
-
-            if !isCreditedType {
-                PauseInlineEditor(
-                    breakMinutes: $totalBreakMinutes,
-                    isPauseCustom: $isPauseCustom,
-                    suggestedBreakMinutes: automaticBreakMinutes(forDurationMinutes: totalGrossSeconds / 60),
-                    accent: settings.themeAccent.color
-                )
-
-                if let breakValidationMessage {
-                    Text(breakValidationMessage)
+                } else {
+                    Text("Für diesen Typ wird keine Pause berücksichtigt.")
                         .font(.footnote)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(.secondary)
                 }
-            } else {
-                Text("Für diesen Typ wird keine Pause berücksichtigt.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
         }
         .neoPanel(accent: settings.themeAccent.color)
@@ -340,7 +369,14 @@ struct DayEditorView: View {
     }
 
     private var totalNetSeconds: Int {
-        max(0, totalGrossSeconds - (totalBreakMinutes * 60))
+        if isManualEntry {
+            return max(0, manualWorkedSeconds)
+        }
+        if selectedType == .work {
+            return max(0, totalGrossSeconds - (totalBreakMinutes * 60))
+        } else {
+            return totalGrossSeconds
+        }
     }
 
     private var totalGrossSeconds: Int {
@@ -348,12 +384,18 @@ struct DayEditorView: View {
     }
 
     private var isCreditedType: Bool {
-        selectedType == .vacation || selectedType == .holiday || selectedType == .sick
+        // All non-work types are credited and should not deduct breaks
+        return selectedType != .work
     }
 
     private var previewComputation: ComputationResult {
         let preview = DayEntry(date: selectedDate.startOfDayLocal(), type: selectedType, notes: notes)
-        let clampedBreakSeconds = isCreditedType ? 0 : max(0, min(totalBreakMinutes * 60, totalGrossSeconds))
+        if isManualEntry {
+            preview.manualWorkedSeconds = max(0, manualWorkedSeconds)
+            preview.segments = []
+            return service.dayComputation(for: preview, allEntries: allEntries, settings: settings)
+        }
+        let clampedBreakSeconds = (selectedType == .work) ? max(0, min(totalBreakMinutes * 60, totalGrossSeconds)) : 0
         var didAssignBreak = false
 
         preview.segments = editSegments.compactMap { segment in
@@ -411,14 +453,27 @@ struct DayEditorView: View {
     private func addDefaultSegment() {
         let start = max(timelineBounds.lowerBound, 9 * 60)
         let end = max(start + 60, min(timelineBounds.upperBound, 17 * 60))
-        editSegments.append(EditableSegment(startMinute: start, endMinute: end))
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
+            editSegments.append(EditableSegment(startMinute: start, endMinute: end))
+        }
+    }
+
+    private func removeSegment(_ id: UUID) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            editSegments.removeAll { $0.id == id }
+        }
     }
 
     private var isSaveValid: Bool {
-        editSegments.allSatisfy { $0.validationMessage == nil } && breakValidationMessage == nil
+        if isManualEntry {
+            return manualWorkedSeconds > 0
+        }
+        return editSegments.allSatisfy { $0.validationMessage == nil } && breakValidationMessage == nil
     }
 
     private var breakValidationMessage: String? {
+        // Only validate breaks for work days
+        guard selectedType == .work else { return nil }
         if totalBreakMinutes < 0 {
             return "Pause darf nicht negativ sein."
         }
@@ -443,16 +498,24 @@ struct DayEditorView: View {
             selectedType = existing.type
             notes = existing.notes
             showNotesEditor = !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            editSegments = existing.segments.map {
-                let rawStart = minuteOfDay(from: $0.start)
-                let rawEnd = minuteOfDay(from: $0.end)
-                let clampedStart = max(timelineBounds.lowerBound, min(timelineBounds.upperBound - 1, rawStart))
-                let clampedEnd = min(timelineBounds.upperBound, max(clampedStart + 1, rawEnd))
-                return EditableSegment(startMinute: clampedStart, endMinute: clampedEnd)
+            isManualEntry = existing.manualWorkedSeconds != nil
+            manualWorkedSeconds = max(0, existing.manualWorkedSeconds ?? 0)
+            if isManualEntry {
+                editSegments = []
+                totalBreakMinutes = 0
+                isPauseCustom = false
+            } else {
+                editSegments = existing.segments.map {
+                    let rawStart = minuteOfDay(from: $0.start)
+                    let rawEnd = minuteOfDay(from: $0.end)
+                    let clampedStart = max(timelineBounds.lowerBound, min(timelineBounds.upperBound - 1, rawStart))
+                    let clampedEnd = min(timelineBounds.upperBound, max(clampedStart, rawEnd))
+                    return EditableSegment(startMinute: clampedStart, endMinute: clampedEnd)
+                }
+                totalBreakMinutes = max(0, existing.segments.reduce(0) { $0 + max(0, $1.breakSeconds) } / 60)
+                isPauseCustom = totalBreakMinutes != automaticBreakMinutes(forDurationMinutes: totalGrossSeconds / 60)
+                applyAutoCreditedSegmentIfNeeded(force: false)
             }
-            totalBreakMinutes = max(0, existing.segments.reduce(0) { $0 + max(0, $1.breakSeconds) } / 60)
-            isPauseCustom = totalBreakMinutes != automaticBreakMinutes(forDurationMinutes: totalGrossSeconds / 60)
-            applyAutoCreditedSegmentIfNeeded(force: false)
         } else {
             selectedType = .work
             notes = ""
@@ -460,11 +523,13 @@ struct DayEditorView: View {
             editSegments = []
             totalBreakMinutes = 0
             isPauseCustom = false
+            isManualEntry = false
+            manualWorkedSeconds = 0
         }
     }
 
     private func applyAutoCreditedSegmentIfNeeded(force: Bool = true) {
-        guard selectedType == .vacation || selectedType == .holiday || selectedType == .sick else { return }
+        guard isCreditedType else { return }
         guard force || editSegments.isEmpty else { return }
 
         let probe = DayEntry(date: selectedDate.startOfDayLocal(), type: selectedType)
@@ -482,7 +547,7 @@ struct DayEditorView: View {
         let endMinute = min(24 * 60, startMinute + roundedMinutes)
         totalBreakMinutes = 0
         isPauseCustom = false
-        editSegments = endMinute > startMinute ? [EditableSegment(startMinute: startMinute, endMinute: endMinute)] : []
+        editSegments = [EditableSegment(startMinute: startMinute, endMinute: endMinute)]
     }
 
     private func save() {
@@ -496,17 +561,20 @@ struct DayEditorView: View {
         target.date = dayDate
         target.type = selectedType
         target.notes = notes
-        target.manualWorkedSeconds = nil
+
         target.segments.removeAll()
-
-        let clampedBreakSeconds = max(0, min(totalBreakMinutes * 60, totalGrossSeconds))
-        var didAssignBreak = false
-
-        for segment in editSegments {
-            guard let start = dateAtMinute(segment.startMinute), let end = dateAtMinute(segment.endMinute) else { continue }
-            let breakSeconds = didAssignBreak ? 0 : clampedBreakSeconds
-            target.segments.append(TimeSegment(start: start, end: end, breakSeconds: breakSeconds))
-            didAssignBreak = true
+        if isManualEntry {
+            target.manualWorkedSeconds = max(0, manualWorkedSeconds)
+        } else {
+            target.manualWorkedSeconds = nil
+            let clampedBreakSeconds = (selectedType == .work) ? max(0, min(totalBreakMinutes * 60, totalGrossSeconds)) : 0
+            var didAssignBreak = false
+            for segment in editSegments {
+                guard let start = dateAtMinute(segment.startMinute), let end = dateAtMinute(segment.endMinute) else { continue }
+                let breakSeconds = didAssignBreak ? 0 : clampedBreakSeconds
+                target.segments.append(TimeSegment(start: start, end: end, breakSeconds: breakSeconds))
+                didAssignBreak = true
+            }
         }
 
         // Recompute following auto-managed credited days (vacation/holiday/sick) when history changed.
@@ -553,7 +621,6 @@ struct DayEditorView: View {
         let startMinute = timelineBounds.lowerBound
         let roundedMinutes = max(0, Int((Double(seconds) / 60.0).rounded()))
         let endMinute = min(24 * 60, startMinute + roundedMinutes)
-        guard endMinute > startMinute else { return }
         guard
             let start = dateAtMinute(startMinute, on: day.date),
             let end = dateAtMinute(endMinute, on: day.date)
@@ -562,8 +629,8 @@ struct DayEditorView: View {
     }
 
     private func automaticBreakMinutes(forDurationMinutes minutes: Int) -> Int {
-        if minutes > 9 * 60 { return 45 }
-        if minutes > 6 * 60 { return 30 }
+        if minutes > (9 * 60) + 15 { return 45 }
+        if minutes > (6 * 60) + 15 { return 30 }
         return 0
     }
 
@@ -681,7 +748,7 @@ private struct EditableSegment: Identifiable {
     var endMinute: Int
 
     var validationMessage: String? {
-        if endMinute <= startMinute {
+        if endMinute < startMinute {
             return "Ende muss nach Start liegen."
         }
         return nil
@@ -703,8 +770,15 @@ private struct MultiSegmentTimelinePreview: View {
     let accent: Color
     let bounds: ClosedRange<Int>
 
-    private var tickMinutes: [Int] {
-        let step = 120
+    private var labelTickMinutes: [Int] {
+        makeTicks(step: 120)
+    }
+
+    private var hourTickMinutes: [Int] {
+        makeTicks(step: 60)
+    }
+
+    private func makeTicks(step: Int) -> [Int] {
         var ticks: [Int] = [bounds.lowerBound]
         var current = ((bounds.lowerBound + step - 1) / step) * step
         while current < bounds.upperBound {
@@ -720,7 +794,7 @@ private struct MultiSegmentTimelinePreview: View {
     }
 
     private var useMinutePrecision: Bool {
-        bounds.lowerBound % 60 != 0 || bounds.upperBound % 60 != 0 || tickMinutes.contains { $0 % 60 != 0 }
+        bounds.lowerBound % 60 != 0 || bounds.upperBound % 60 != 0 || labelTickMinutes.contains { $0 % 60 != 0 }
     }
 
     var body: some View {
@@ -751,16 +825,18 @@ private struct MultiSegmentTimelinePreview: View {
                         .allowsHitTesting(false)
                 }
 
-                ForEach(Array(tickMinutes.enumerated()), id: \.offset) { _, tick in
-                    Rectangle()
-                        .fill(.white.opacity(0.5))
-                        .frame(width: 1, height: 20)
-                        .offset(x: x(for: tick, width: width))
-                        .allowsHitTesting(false)
+                ForEach(Array(hourTickMinutes.enumerated()), id: \.offset) { _, tick in
+                    Path { path in
+                        let xPosition = x(for: tick, width: width)
+                        path.move(to: CGPoint(x: xPosition, y: 0))
+                        path.addLine(to: CGPoint(x: xPosition, y: 20))
+                    }
+                    .stroke(.white.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
+                    .allowsHitTesting(false)
                 }
             }
         }
-        .frame(height: 32)
+        .frame(height: 24)
 
         GeometryReader { geo in
             let width = max(CGFloat(1), geo.size.width)
@@ -772,11 +848,11 @@ private struct MultiSegmentTimelinePreview: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .frame(width: labelWidth, alignment: .center)
-                        .position(x: labelCenterX(for: tick, width: width), y: 7)
+                        .position(x: labelCenterX(for: tick, width: width), y: 6)
                 }
             }
         }
-        .frame(height: 14)
+        .frame(height: 12)
     }
 
     private var labelWidth: CGFloat {
@@ -784,18 +860,18 @@ private struct MultiSegmentTimelinePreview: View {
     }
 
     private func visibleTicks(for width: CGFloat) -> [Int] {
-        guard tickMinutes.count > 2 else { return tickMinutes }
+        guard labelTickMinutes.count > 2 else { return labelTickMinutes }
 
         let minSpacing = labelWidth + 4
         var visible: [Int] = []
-        let first = tickMinutes.first ?? bounds.lowerBound
-        let last = tickMinutes.last ?? bounds.upperBound
+        let first = labelTickMinutes.first ?? bounds.lowerBound
+        let last = labelTickMinutes.last ?? bounds.upperBound
 
         visible.append(first)
         var lastX = x(for: first, width: width)
         let lastTickX = x(for: last, width: width)
 
-        for tick in tickMinutes.dropFirst().dropLast() {
+        for tick in labelTickMinutes.dropFirst().dropLast() {
             let currentX = x(for: tick, width: width)
             if currentX - lastX >= minSpacing && lastTickX - currentX >= (labelWidth / 2) {
                 visible.append(tick)
@@ -858,23 +934,10 @@ private struct PauseInlineEditor: View {
 
             if isEditing {
                 HStack(spacing: 10) {
-                    Button {
-                        breakMinutes = max(0, breakMinutes - 5)
-                        isPauseCustom = true
-                    } label: {
-                        Label("-5", systemImage: "minus.circle")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.wageWiseSecondary(accent: accent))
-
-                    Button {
-                        breakMinutes = min(180, breakMinutes + 5)
-                        isPauseCustom = true
-                    } label: {
-                        Label("+5", systemImage: "plus.circle")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.wageWisePrimary(accent: accent))
+                    pauseStepButton(label: "-5", delta: -5)
+                    pauseStepButton(label: "-1", delta: -1)
+                    pauseStepButton(label: "+1", delta: 1)
+                    pauseStepButton(label: "+5", delta: 5)
                 }
 
                 Button {
@@ -890,4 +953,63 @@ private struct PauseInlineEditor: View {
             }
         }
     }
+
+    @ViewBuilder
+    private func pauseStepButton(label: String, delta: Int) -> some View {
+        Button {
+            breakMinutes = max(0, min(180, breakMinutes + delta))
+            isPauseCustom = true
+        } label: {
+            Text(label)
+                .font(.caption.weight(.bold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .foregroundStyle(delta > 0 ? .white : accent)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(delta > 0 ? accent.opacity(0.9) : accent.opacity(0.1))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(accent.opacity(delta > 0 ? 0.2 : 0.3), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
 }
+
+private struct ManualDurationEditor: View {
+    @Binding var seconds: Int
+    let accent: Color
+    @State private var hours: Int = 0
+    @State private var minutes: Int = 0
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Stepper(value: $hours, in: 0...24, step: 1) {
+                Text("\(hours) h")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .onChange(of: hours) { _, _ in sync() }
+            Stepper(value: $minutes, in: 0...59, step: 1) {
+                Text("\(minutes) m")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .onChange(of: minutes) { _, _ in sync() }
+        }
+        .onAppear { split() }
+        .onChange(of: seconds) { _, _ in split() }
+    }
+
+    private func sync() {
+        seconds = max(0, hours * 3600 + minutes * 60)
+    }
+
+    private func split() {
+        let s = max(0, seconds)
+        hours = s / 3600
+        minutes = (s % 3600) / 60
+    }
+}
+

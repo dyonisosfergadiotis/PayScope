@@ -8,7 +8,8 @@ struct WageWiseApp: App {
             DayEntry.self,
             TimeSegment.self,
             Settings.self,
-            NetWageMonthConfig.self
+            NetWageMonthConfig.self,
+            HolidayCalendarDay.self
         ])
 
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
