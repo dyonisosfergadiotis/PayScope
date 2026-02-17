@@ -1,88 +1,95 @@
-# WageWise
+# PayScope
 
-**WageWise – Arbeitszeit- und Lohntracker für iOS**  
-Verwalte deine täglichen Arbeitszeiten, Pausen und Löhne einfach und übersichtlich.
+Die professionelle Arbeitszeit- und Lohnübersicht für iOS – erfasse Arbeitstage präzise, verwalte Pausen intelligent und behalte deine Vergütung in Echtzeit im Blick.
 
----
-
-## Badges
-
-- iOS Version: 17+
-- Swift: 6.0+
-- SwiftUI: 6.0+
-- SwiftData: aktuell
-- Xcode Version: 26+
-
----
+- iOS: 17+
+- Swift: 5.9+
+- SwiftUI: ✓
+- SwiftData: ✓
+- Xcode: 26+
 
 ## Inhaltsverzeichnis
+- [Überblick](#überblick)
+- [Funktionen](#funktionen)
+- [Screens & UX](#screens--ux)
+- [Schnellstart](#schnellstart)
+- [Architektur](#architektur)
+- [Datenmodell](#datenmodell)
+- [Geschäftsregeln](#geschäftsregeln)
+- [Konfiguration](#konfiguration)
+- [Bauen & Ausführen](#bauen--ausführen)
+- [Testen](#testen)
+- [Lokalisierung & Barrierefreiheit](#lokalisierung--barrierefreiheit)
+- [Persistenz](#persistenz)
+- [Projektstruktur](#projektstruktur)
+- [Erweiterbarkeit & Roadmap](#erweiterbarkeit--roadmap)
+- [Bekannte Einschränkungen](#bekannte-einschränkungen)
+- [Datenschutz](#datenschutz)
+- [Lizenz](#lizenz)
+- [Danksagungen](#danksagungen)
+- [Support & Beiträge](#support--beiträge)
 
-- [Übersicht](#übersicht)  
-- [Features](#features)  
-- [Screens und Nutzererlebnis](#screens-und-nutzererlebnis)  
-- [Architektur](#architektur)  
-- [Datenmodell](#datenmodell)  
-- [Business-Regeln](#business-regeln)  
-- [Konfiguration](#konfiguration)  
-- [Build und Ausführung](#build-und-ausführung)  
-- [Testing](#testing)  
-- [Internationalisierung & Barrierefreiheit](#internationalisierung--barrierefreiheit)  
-- [Persistenz Hinweise](#persistenz-hinweise)  
-- [Erweiterbarkeit & Roadmap](#erweiterbarkeit--roadmap)  
-- [Datenschutz](#datenschutz)  
-- [Lizenz](#lizenz)  
-- [Danksagungen](#danksagungen)  
+## Überblick
+PayScope ist eine moderne iOS-App zur Erfassung von Arbeitszeiten und zur Berechnung deiner Vergütung. Der Tageseditor unterstützt mehrteilige Arbeitssegmente, eine automatische sowie manuelle Pausenverwaltung, manuelle Gesamtdauererfassung und „angerechnete“ Tagestypen wie Urlaub, Feiertag oder Krank. Eine Timeline-Vorschau visualisiert den Tag, während Live-Metriken (Dauer, Brutto, Pause) jederzeit sichtbar sind. Änderungen an einem Tag können automatisch nachfolgende, automatisch verwaltete angerechnete Tage aktualisieren.
 
----
+Wesentliche Bausteine in der UI sind der Segment-Editor, der Pausen-Inline-Editor, der Notizbereich und die untere Toolbar mit Kennzahlen. Die Berechnung der Vergütung erfolgt über eine zentrale `CalculationService`-Komponente.
 
-## Übersicht
+## Funktionen
+- Tageseditor mit Timeline-Vorschau und Segmentbearbeitung (Start/Ende je Segment)
+- Automatische und benutzerdefinierte Pausenverwaltung mit Validierung
+- Manueller Erfassungsmodus (Dauer HH:MM) ohne Pausenabzug
+- Tagestypen mit Icon/Tint und automatischer Anrechnung für Nicht-Arbeitstage (z. B. Urlaub, Feiertag, Krank)
+- Live-Metriken in der unteren Toolbar: Dauer, Bruttovergütung, Pause
+- Notizen-Editor mit Material-Optik
+- Automatische Neuberechnung nachfolgender, automatisch verwalteter angerechneter Einträge bei Änderungen
+- Konfigurierbare Timeline-Grenzen über `Settings` (Min-/Max-Minuten)
 
-WageWise ist eine intuitive iOS-App zur präzisen Erfassung und Nachverfolgung von Arbeitszeiten und Löhnen. Der Kern liegt im `DayEditorView`, der einen mehrsegmentigen Tageseditor zur Verfügung stellt. Nutzer können manuelle Eingaben tätigen oder automatische Pausenverwaltung nutzen. Tagesarten wie Urlaub, Feiertag oder Krank können mit entsprechender Gutschrift ausgewählt werden. Eine übersichtliche Timeline mit Ticks zeigt alle Segmente, Notizen sind mit Inline-Material-Design eingebunden. Die App berechnet in Echtzeit Nettoarbeitsdauer und Bruttolohn.
+## Screens & UX
+- Obere Timeline: `MultiSegmentTimelinePreview` zeigt Segmente und Stundenmarken.
+- Segmente-Panel: Hinzufügen/Entfernen von Segmenten, Start-/Endzeit über kompakte `DatePicker` je Segment, Dauerhinweis und Validierung.
+- Pausen-Inline-Editor: Schnelle Anpassung in 1- oder 5-Minuten-Schritten und „Auto“-Vorschlag.
+- Notizen: Ein-/ausblendbarer Editor für Textnotizen zum Tag.
+- Toolbar-Metriken: Anzeige von Netto-Dauer, Bruttobetrag und Pausen (je nach Modus/Tagestyp).
+- Zugänglichkeit: Wichtige Aktionen sind mit Accessibility-Labels versehen (z. B. „Schließen“, „Speichern“, „Tagestyp“).
 
----
-
-## Features
-
-- **Tageditor mit Timeline-Vorschau:** Visualisiert mehrere Zeitsegmente mit Start- und Endzeit-Pickern pro Segment.  
-- **Automatische und individuelle Pausenverwaltung:** Pausen werden validiert und automatisch eingesetzt, können aber auch manuell angepasst werden.  
-- **Manueller Modus:** Eingabe der Arbeitszeit über Stunden- und Minuten-Stepper ohne Pausenabzug.  
-- **Tagesarten:** Unterschiedliche Typen (Arbeit, Urlaub, Feiertag, Krank) mit Tönung und Symbolen. Nicht-Arbeitstage werden automatisch mit einer Gutschrift versehen.  
-- **Live-Metriken:** Dauer, Bruttolohn und Pausenzeit werden in der unteren Toolbar dynamisch angezeigt.  
-- **Notiz-Editor:** Inline-Styling im Material-Design, um Tage mit zusätzlichen Informationen zu versehen.  
-- **Automatische Nachberechnung:** Nach Änderungen werden folgende automatisch verwaltete Tage neu berechnet.  
-- **Konfigurierbare Timeline-Grenzen:** Minimal- und Maximalzeiten sind über die Einstellungen anpassbar.  
-
----
-
-## Screens und Nutzererlebnis
-
-Die App bietet eine klare Struktur: Oben befindet sich die Timeline mit Ticks und Segmenten, darunter das Segmentpanel mit Start- und Endzeit-Pickern. Pausen werden direkt inline angepasst. Das Notizenfeld bietet Material-Style Eingabe. Die Toolbar am unteren Rand zeigt Live-Daten zu Dauer, Bruttolohn und Pausen. Alle Elemente sind mit Accessibility-Labels versehen, DatePicker nutzen in kompaktem Stil die native iOS-Bedienbarkeit.
-
----
+## Schnellstart
+1. Projekt in Xcode öffnen und ein Ziel (Simulator oder Gerät) wählen.
+2. App starten. Wähle ein Datum über den kompakten `DatePicker` in der Navigation.
+3. Tagestyp wählen (z. B. Arbeit, Urlaub, Feiertag, Krank).
+4. Arbeitssegmente anlegen und Zeiten anpassen – oder in den manuellen Modus wechseln, um eine Gesamtdauer zu erfassen.
+5. Bei Arbeitstagen Pausen automatisch vorschlagen lassen oder manuell anpassen.
+6. Live-Metriken prüfen und „Speichern“ tippen.
 
 ## Architektur
+- UI: SwiftUI (`NavigationStack`, Toolbars, Material-Styles, kompakte `DatePicker`).
+- Persistenz: SwiftData via `@Query` und `@Environment(\.modelContext)`.
+- Zustand: `@State` für View-Zustand und `@Bindable` für `Settings`.
+- Domäne: `DayEntry`, `TimeSegment`, `DayType`.
+- Service: `CalculationService` für Geschäftslogik (`dayComputation`, `creditedResult`).
+- Formatierung: `WageWiseFormatters` für Datum, Zeit und Währung.
 
-WageWise basiert auf modernen Apple-Technologien:  
-
-- **SwiftUI**: Fortschrittliche UI mit `NavigationStack` und `Toolbar` für Navigation und Aktionselemente.  
-- **SwiftData**: Persistenz mit `@Model` für Datenobjekte, `@Query` für Abfragen und `@Environment(\.modelContext)` für Kontextverwaltung.  
-- **Zustandsverwaltung**: `@State` für View-States, `@Bindable` für `Settings`.  
-- **Berechnungslogik**: `CalculationService` kapselt Business-Logik, z.B. `dayComputation` und `creditedResult`.  
-- **Domain-Modelle**: `DayEntry` und `TimeSegment` als zentrale Datenstrukturen sowie `DayType` Enum für Tagesarten.  
-- **Formatierung**: Einheitliches Formatieren über `WageWiseFormatters`.  
-
-### Beispiel: High-Level Speicher-Flow
-
+Beispiel: Speichern eines Arbeitstags mit Segmenten und Pausen
 ```swift
-var segments = dayEntry.segments
-// Beispielhafte Berechnung der Pausenzeit für Segmente
-let breakSeconds = CalculationService.computeBreakSeconds(for: segments) 
-// Erstellen eines neuen Segments mit berechneter Pause
-let newSegments = segments.map { segment in
-    TimeSegment(start: segment.start, end: segment.end, breakSeconds: breakSeconds)
+// Clamping der Pausen auf die Bruttodauer
+let clampedBreakSeconds = (selectedType == .work) ? max(0, min(totalBreakMinutes * 60, totalGrossSeconds)) : 0
+var didAssignBreak = false
+
+// Segmente neu aufbauen und die Pause nur einmal vergeben
+target.segments.removeAll()
+for segment in editSegments {
+    guard let start = dateAtMinute(segment.startMinute),
+          let end = dateAtMinute(segment.endMinute) else { continue }
+    let breakSeconds = didAssignBreak ? 0 : clampedBreakSeconds
+    target.segments.append(TimeSegment(start: start, end: end, breakSeconds: breakSeconds))
+    didAssignBreak = true
 }
 
-// Aktualisieren der Entry-Segmente
-dayEntry.segments = newSegments
-// Persistieren des Kontexts
+// Manueller Modus speichert stattdessen die Gesamtdauer und keine Segmente
+if isManualEntry {
+    target.manualWorkedSeconds = max(0, manualWorkedSeconds)
+    target.segments = []
+} else {
+    target.manualWorkedSeconds = nil
+}
+
 modelContext.persistIfPossible()

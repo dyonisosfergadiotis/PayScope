@@ -6,8 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		E5ABAA252F44B5AF00031FB6 /* README 2.md in Resources */ = {isa = PBXBuildFile; fileRef = E5ABAA242F44B5AF00031FB6 /* README 2.md */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		E5ABA9C22F44731100031FB6 /* PayScope.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PayScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E5ABAA242F44B5AF00031FB6 /* README 2.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "README 2.md"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -34,6 +39,7 @@
 			children = (
 				E5ABA9C42F44731100031FB6 /* PayScope */,
 				E5ABA9C32F44731100031FB6 /* Products */,
+				E5ABAA242F44B5AF00031FB6 /* README 2.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -109,6 +115,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E5ABAA252F44B5AF00031FB6 /* README 2.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
