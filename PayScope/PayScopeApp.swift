@@ -1,17 +1,29 @@
-//
-//  PayScopeApp.swift
-//  PayScope
-//
-//  Created by Dyonisos Fergadiotis on 17.02.26.
-//
-
 import SwiftUI
+import SwiftData
 
 @main
-struct PayScopeApp: App {
+struct WageWiseApp: App {
+    var sharedModelContainer: ModelContainer = {
+        let schema = Schema([
+            DayEntry.self,
+            TimeSegment.self,
+            Settings.self,
+            NetWageMonthConfig.self
+        ])
+
+        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+
+        do {
+            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+        } catch {
+            fatalError("Could not create ModelContainer: \(error)")
+        }
+    }()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
         }
+        .modelContainer(sharedModelContainer)
     }
 }
