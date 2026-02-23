@@ -13,11 +13,11 @@ enum DayType: String, Codable, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .work: return "Work"
+        case .work: return "Arbeit"
         case .manual: return "Manuell"
-        case .vacation: return "Vacation"
-        case .holiday: return "Holiday"
-        case .sick: return "Sick"
+        case .vacation: return "Urlaub"
+        case .holiday: return "Feiertag"
+        case .sick: return "Krank"
         }
     }
 
@@ -154,19 +154,22 @@ final class DayEntry {
     var notes: String
     @Relationship(deleteRule: .cascade, inverse: \TimeSegment.dayEntry) var segments: [TimeSegment]
     var manualWorkedSeconds: Int?
+    var creditedOverrideSeconds: Int?
 
     init(
         date: Date,
         type: DayType = .work,
         notes: String = "",
         segments: [TimeSegment] = [],
-        manualWorkedSeconds: Int? = nil
+        manualWorkedSeconds: Int? = nil,
+        creditedOverrideSeconds: Int? = nil
     ) {
         self.date = date.startOfDayLocal()
         self.type = type
         self.notes = notes
         self.segments = segments
         self.manualWorkedSeconds = manualWorkedSeconds
+        self.creditedOverrideSeconds = creditedOverrideSeconds
     }
 
     var isEmptyTrackedDay: Bool {
@@ -195,6 +198,7 @@ final class Settings {
     var holidaySubdivisionCode: String?
     var netWageTaxPercent: Double?
     var netPensionPercent: Double?
+    var netMonthlyAllowanceEuro: Double?
     var netBonusesCSV: String?
 
     init(
@@ -217,6 +221,7 @@ final class Settings {
         holidaySubdivisionCode: String? = nil,
         netWageTaxPercent: Double? = nil,
         netPensionPercent: Double? = nil,
+        netMonthlyAllowanceEuro: Double? = nil,
         netBonusesCSV: String? = nil
     ) {
         self.hasCompletedOnboarding = hasCompletedOnboarding
@@ -238,6 +243,7 @@ final class Settings {
         self.holidaySubdivisionCode = holidaySubdivisionCode
         self.netWageTaxPercent = netWageTaxPercent
         self.netPensionPercent = netPensionPercent
+        self.netMonthlyAllowanceEuro = netMonthlyAllowanceEuro
         self.netBonusesCSV = netBonusesCSV
     }
 }
@@ -286,17 +292,20 @@ final class NetWageMonthConfig {
     @Attribute(.unique) var monthStart: Date
     var wageTaxPercent: Double?
     var pensionPercent: Double?
+    var monthlyAllowanceEuro: Double?
     var bonusesCSV: String
 
     init(
         monthStart: Date,
         wageTaxPercent: Double? = nil,
         pensionPercent: Double? = nil,
+        monthlyAllowanceEuro: Double? = nil,
         bonusesCSV: String = ""
     ) {
         self.monthStart = monthStart.startOfMonthLocal()
         self.wageTaxPercent = wageTaxPercent
         self.pensionPercent = pensionPercent
+        self.monthlyAllowanceEuro = monthlyAllowanceEuro
         self.bonusesCSV = bonusesCSV
     }
 }

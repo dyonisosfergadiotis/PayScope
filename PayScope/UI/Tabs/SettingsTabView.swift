@@ -207,7 +207,7 @@ struct SettingsTabView: View {
                 modelContext.persistIfPossible()
             }
         }
-        .wageWiseSheetSurface(accent: settings.themeAccent.color)
+        .payScopeSheetSurface(accent: settings.themeAccent.color)
     }
 
     private func parseMoneyToCents(_ text: String) -> Int? {

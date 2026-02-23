@@ -53,17 +53,19 @@ struct CalculationService {
         self.calendar = calendar
     }
 
-    func validateSegments(_ segments: [TimeSegment]) -> [SegmentValidationError] {
+    func validateSegments(_ segments: [TimeSegment], dayType: DayType) -> [SegmentValidationError] {
         segments.compactMap { segment in
             if segment.end < segment.start {
                 return SegmentValidationError(message: "End time must be after start time.")
             }
-            if segment.breakSeconds < 0 {
-                return SegmentValidationError(message: "Break cannot be negative.")
-            }
-            let duration = Int(segment.end.timeIntervalSince(segment.start))
-            if segment.breakSeconds > duration {
-                return SegmentValidationError(message: "Break exceeds segment duration.")
+            if dayType == .work {
+                if segment.breakSeconds < 0 {
+                    return SegmentValidationError(message: "Break cannot be negative.")
+                }
+                let duration = Int(segment.end.timeIntervalSince(segment.start))
+                if segment.breakSeconds > duration {
+                    return SegmentValidationError(message: "Break exceeds segment duration.")
+                }
             }
             return nil
         }
@@ -80,7 +82,7 @@ struct CalculationService {
             return .success(manual)
         }
 
-        let errors = validateSegments(day.segments)
+        let errors = validateSegments(day.segments, dayType: day.type)
         if !errors.isEmpty {
             return .failure(WorkedSecondsError(message: errors.map(\.message).joined(separator: " ")))
         }
@@ -88,6 +90,11 @@ struct CalculationService {
         let presenceSeconds = day.segments.reduce(0) { partial, segment in
             partial + max(0, Int(segment.end.timeIntervalSince(segment.start)))
         }
+
+        if day.type != .work {
+            return .success(presenceSeconds)
+        }
+
         let explicitBreakSeconds = day.segments.reduce(0) { partial, segment in
             partial + max(0, segment.breakSeconds)
         }
@@ -151,6 +158,25 @@ struct CalculationService {
         }
     }
 
+    func monthlyNetEuro(
+        grossEuro: Double,
+        bonusesEuro: Double,
+        wageTaxPercent: Double?,
+        pensionPercent: Double?,
+        monthlyAllowanceEuro: Double?
+    ) -> Double {
+        let grossMonthly = max(0, grossEuro + bonusesEuro)
+        let wageTaxRate = max(0, (wageTaxPercent ?? 0) / 100.0)
+        let pensionRate = max(0, (pensionPercent ?? 0) / 100.0)
+        let allowance = max(0, monthlyAllowanceEuro ?? 0)
+
+        let taxableBase = max(0, grossMonthly - allowance)
+        let wageTax = taxableBase * wageTaxRate
+        let pension = grossMonthly * pensionRate
+
+        return grossMonthly - wageTax - pension
+    }
+
     func dayComputation(for day: DayEntry, allEntries: [DayEntry], settings: Settings) -> ComputationResult {
         switch day.type {
         case .work, .manual:
@@ -161,13 +187,9 @@ struct CalculationService {
                 return .error(message: message.message, missingDates: [])
             }
         case .vacation, .holiday, .sick:
-            if day.manualWorkedSeconds != nil || !day.segments.isEmpty {
-                switch workedSeconds(for: day) {
-                case let .success(seconds):
-                    return .ok(valueSeconds: seconds, valueCents: payCents(for: seconds, settings: settings))
-                case let .failure(message):
-                    return .error(message: message.message, missingDates: [])
-                }
+            if let overrideSeconds = day.creditedOverrideSeconds {
+                let clamped = max(0, overrideSeconds)
+                return .ok(valueSeconds: clamped, valueCents: payCents(for: clamped, settings: settings))
             }
             return creditedResult(for: day, allEntries: allEntries, settings: settings)
         }

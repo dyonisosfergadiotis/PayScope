@@ -7,18 +7,64 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		E5ABAA252F44B5AF00031FB6 /* README 2.md in Resources */ = {isa = PBXBuildFile; fileRef = E5ABAA242F44B5AF00031FB6 /* README 2.md */; };
+		E5ABAA5D2F458AC000031FB6 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5ABAA5C2F458AC000031FB6 /* WidgetKit.framework */; };
+		E5ABAA5F2F458AC000031FB6 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5ABAA5E2F458AC000031FB6 /* SwiftUI.framework */; };
+		E5ABAA702F458AC100031FB6 /* PayScope WidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = E5ABAA5A2F458AC000031FB6 /* PayScope WidgetsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		E5ABAA6E2F458AC100031FB6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E5ABA9BA2F44731100031FB6 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E5ABAA592F458AC000031FB6;
+			remoteInfo = "PayScope WidgetsExtension";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		E5ABAA752F458AC100031FB6 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				E5ABAA702F458AC100031FB6 /* PayScope WidgetsExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		E5ABA9C22F44731100031FB6 /* PayScope.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PayScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		E5ABAA242F44B5AF00031FB6 /* README 2.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "README 2.md"; sourceTree = "<group>"; };
+		E5ABAA5A2F458AC000031FB6 /* PayScope WidgetsExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "PayScope WidgetsExtension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E5ABAA5C2F458AC000031FB6 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		E5ABAA5E2F458AC000031FB6 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		E5ABAA712F458AC100031FB6 /* Exceptions for "PayScope Widgets" folder in "PayScope WidgetsExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = E5ABAA592F458AC000031FB6 /* PayScope WidgetsExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E5ABA9C42F44731100031FB6 /* PayScope */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = PayScope;
+			sourceTree = "<group>";
+		};
+		E5ABAA602F458AC000031FB6 /* PayScope Widgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				E5ABAA712F458AC100031FB6 /* Exceptions for "PayScope Widgets" folder in "PayScope WidgetsExtension" target */,
+			);
+			path = "PayScope Widgets";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -31,6 +77,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E5ABAA572F458AC000031FB6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E5ABAA5F2F458AC000031FB6 /* SwiftUI.framework in Frameworks */,
+				E5ABAA5D2F458AC000031FB6 /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -38,8 +93,9 @@
 			isa = PBXGroup;
 			children = (
 				E5ABA9C42F44731100031FB6 /* PayScope */,
+				E5ABAA602F458AC000031FB6 /* PayScope Widgets */,
+				E5ABAA5B2F458AC000031FB6 /* Frameworks */,
 				E5ABA9C32F44731100031FB6 /* Products */,
-				E5ABAA242F44B5AF00031FB6 /* README 2.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -47,8 +103,18 @@
 			isa = PBXGroup;
 			children = (
 				E5ABA9C22F44731100031FB6 /* PayScope.app */,
+				E5ABAA5A2F458AC000031FB6 /* PayScope WidgetsExtension.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		E5ABAA5B2F458AC000031FB6 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				E5ABAA5C2F458AC000031FB6 /* WidgetKit.framework */,
+				E5ABAA5E2F458AC000031FB6 /* SwiftUI.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -61,10 +127,12 @@
 				E5ABA9BE2F44731100031FB6 /* Sources */,
 				E5ABA9BF2F44731100031FB6 /* Frameworks */,
 				E5ABA9C02F44731100031FB6 /* Resources */,
+				E5ABAA752F458AC100031FB6 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				E5ABAA6F2F458AC100031FB6 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				E5ABA9C42F44731100031FB6 /* PayScope */,
@@ -75,6 +143,28 @@
 			productName = PayScope;
 			productReference = E5ABA9C22F44731100031FB6 /* PayScope.app */;
 			productType = "com.apple.product-type.application";
+		};
+		E5ABAA592F458AC000031FB6 /* PayScope WidgetsExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E5ABAA722F458AC100031FB6 /* Build configuration list for PBXNativeTarget "PayScope WidgetsExtension" */;
+			buildPhases = (
+				E5ABAA562F458AC000031FB6 /* Sources */,
+				E5ABAA572F458AC000031FB6 /* Frameworks */,
+				E5ABAA582F458AC000031FB6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				E5ABAA602F458AC000031FB6 /* PayScope Widgets */,
+			);
+			name = "PayScope WidgetsExtension";
+			packageProductDependencies = (
+			);
+			productName = "PayScope WidgetsExtension";
+			productReference = E5ABAA5A2F458AC000031FB6 /* PayScope WidgetsExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -87,6 +177,9 @@
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					E5ABA9C12F44731100031FB6 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					E5ABAA592F458AC000031FB6 = {
 						CreatedOnToolsVersion = 26.2;
 					};
 				};
@@ -106,6 +199,7 @@
 			projectRoot = "";
 			targets = (
 				E5ABA9C12F44731100031FB6 /* PayScope */,
+				E5ABAA592F458AC000031FB6 /* PayScope WidgetsExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -115,7 +209,13 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E5ABAA252F44B5AF00031FB6 /* README 2.md in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E5ABAA582F458AC000031FB6 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -129,7 +229,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E5ABAA562F458AC000031FB6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		E5ABAA6F2F458AC100031FB6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E5ABAA592F458AC000031FB6 /* PayScope WidgetsExtension */;
+			targetProxy = E5ABAA6E2F458AC100031FB6 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		E5ABA9CB2F44731200031FB6 /* Debug */ = {
@@ -263,12 +378,14 @@
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = WageWise;
+				INFOPLIST_KEY_CFBundleDisplayName = PayScope;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -296,12 +413,14 @@
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = WageWise;
+				INFOPLIST_KEY_CFBundleDisplayName = PayScope;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -312,6 +431,66 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		E5ABAA732F458AC100031FB6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8W4U9DBYVS;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "PayScope Widgets/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "PayScope Widgets";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 Dyonisos Fergadiotis";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "DyonisosFergadiotis.PayScope.PayScope-Widgets";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E5ABAA742F458AC100031FB6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8W4U9DBYVS;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "PayScope Widgets/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "PayScope Widgets";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 Dyonisos Fergadiotis";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "DyonisosFergadiotis.PayScope.PayScope-Widgets";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
@@ -336,6 +515,15 @@
 			buildConfigurations = (
 				E5ABA9CE2F44731200031FB6 /* Debug */,
 				E5ABA9CF2F44731200031FB6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E5ABAA722F458AC100031FB6 /* Build configuration list for PBXNativeTarget "PayScope WidgetsExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E5ABAA732F458AC100031FB6 /* Debug */,
+				E5ABAA742F458AC100031FB6 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

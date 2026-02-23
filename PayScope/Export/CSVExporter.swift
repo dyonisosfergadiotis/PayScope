@@ -50,7 +50,7 @@ struct CSVExporter {
             }
 
             let row = [
-                WageWiseFormatters.isoDay.string(from: entry.date),
+                PayScopeFormatters.isoDay.string(from: entry.date),
                 entry.type.rawValue,
                 String(format: "%.2f", Double(workedSeconds) / 3600),
                 String(format: "%.2f", Double(workedPay) / 100),

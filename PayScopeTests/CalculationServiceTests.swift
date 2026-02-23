@@ -185,6 +185,30 @@ final class CalculationServiceTests: XCTestCase {
         }
     }
 
+    func testMonthlyNetUsesAllowanceForWageTaxBase() {
+        let service = CalculationService()
+        let net = service.monthlyNetEuro(
+            grossEuro: 3000,
+            bonusesEuro: 0,
+            wageTaxPercent: 20,
+            pensionPercent: 10,
+            monthlyAllowanceEuro: 1000
+        )
+        XCTAssertEqual(net, 2300, accuracy: 0.001)
+    }
+
+    func testMonthlyNetHasZeroWageTaxWhenGrossBelowAllowance() {
+        let service = CalculationService()
+        let net = service.monthlyNetEuro(
+            grossEuro: 900,
+            bonusesEuro: 0,
+            wageTaxPercent: 20,
+            pensionPercent: 10,
+            monthlyAllowanceEuro: 1000
+        )
+        XCTAssertEqual(net, 810, accuracy: 0.001)
+    }
+
     private func date(daysBack: Int) -> Date {
         Calendar.current.startOfDay(for: Date().addingTimeInterval(Double(daysBack * -86400)))
     }

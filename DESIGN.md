@@ -1,4 +1,4 @@
-# WageWise Design System
+# PayScope Design System
 
 ## Visual Direction
 - Editorial productivity UI with atmospheric background and structured surfaces.

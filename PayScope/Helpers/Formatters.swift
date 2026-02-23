@@ -1,6 +1,6 @@
 import Foundation
 
-enum WageWiseFormatters {
+enum PayScopeFormatters {
     static let time: DateFormatter = {
         let formatter = DateFormatter()
         formatter.timeStyle = .short

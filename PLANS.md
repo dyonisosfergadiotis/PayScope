@@ -1,7 +1,7 @@
-# WageWise 1.x Plan
+# PayScope 1.x Plan
 
 ## Product Decisions
-- App name in UI is `WageWise`.
+- App name in UI is `PayScope`.
 - Core persistence uses SwiftData models: `DayEntry`, `TimeSegment`, `Settings`.
 - Date identity for days is normalized to locale start-of-day and stored uniquely.
 - Vacation and sick credit uses strict 13-week weekday lookback with no fallback value invention.

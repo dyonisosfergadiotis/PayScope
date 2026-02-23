@@ -66,7 +66,7 @@ Wesentliche Bausteine in der UI sind der Segment-Editor, der Pausen-Inline-Edito
 - Zustand: `@State` für View-Zustand und `@Bindable` für `Settings`.
 - Domäne: `DayEntry`, `TimeSegment`, `DayType`.
 - Service: `CalculationService` für Geschäftslogik (`dayComputation`, `creditedResult`).
-- Formatierung: `WageWiseFormatters` für Datum, Zeit und Währung.
+- Formatierung: `PayScopeFormatters` für Datum, Zeit und Währung.
 
 Beispiel: Speichern eines Arbeitstags mit Segmenten und Pausen
 ```swift

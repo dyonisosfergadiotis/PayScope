@@ -23,7 +23,7 @@ struct StatsTabView: View {
             }
             .navigationTitle("Statistik")
         }
-        .wageWiseBackground(accent: settings.themeAccent.color)
+        .payScopeBackground(accent: settings.themeAccent.color)
     }
 
     private var monthRange: DateInterval {
@@ -109,16 +109,16 @@ struct StatsTabView: View {
     private var statsCards: some View {
         VStack(spacing: 10) {
             keyCard(label: "Monat", value: monthTitle)
-            keyCard(label: "Gesamtstunden", value: WageWiseFormatters.hoursString(seconds: monthSummary.totalSeconds))
-            keyCard(label: "Gesamtlohn", value: WageWiseFormatters.currencyString(cents: monthSummary.totalCents))
-            keyCard(label: "Ø Stunden / Tag", value: WageWiseFormatters.hoursString(seconds: averageSecondsPerDay))
-            keyCard(label: "Ø Stunden / Woche", value: WageWiseFormatters.hoursString(seconds: averageSecondsPerWeek))
+            keyCard(label: "Gesamtstunden", value: PayScopeFormatters.hoursString(seconds: monthSummary.totalSeconds))
+            keyCard(label: "Gesamtlohn", value: PayScopeFormatters.currencyString(cents: monthSummary.totalCents))
+            keyCard(label: "Ø Stunden / Tag", value: PayScopeFormatters.hoursString(seconds: averageSecondsPerDay))
+            keyCard(label: "Ø Stunden / Woche", value: PayScopeFormatters.hoursString(seconds: averageSecondsPerWeek))
             keyCard(label: "Arbeitstage", value: "\(activeDaysCount)")
-            keyCard(label: "Ø Monatslohn (Jahr)", value: WageWiseFormatters.currencyString(cents: yearAverageMonthlyCents))
+            keyCard(label: "Ø Monatslohn (Jahr)", value: PayScopeFormatters.currencyString(cents: yearAverageMonthlyCents))
             if let bestDay {
                 keyCard(
                     label: "Bester Tag",
-                    value: "\(WageWiseFormatters.day.string(from: bestDay.date)) · \(WageWiseFormatters.hoursString(seconds: bestDay.seconds))"
+                    value: "\(PayScopeFormatters.day.string(from: bestDay.date)) · \(PayScopeFormatters.hoursString(seconds: bestDay.seconds))"
                 )
             }
         }
@@ -129,11 +129,11 @@ struct StatsTabView: View {
             Text(label)
             Spacer()
             Text(value)
-                .font(WageWiseTypography.section)
+                .font(PayScopeTypography.section)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
-        .wageWiseCard(accent: settings.themeAccent.color)
+        .payScopeCard(accent: settings.themeAccent.color)
     }
 
     private var yearPayChartCard: some View {
@@ -174,7 +174,7 @@ struct StatsTabView: View {
 #endif
             }
         }
-        .wageWiseCard(accent: settings.themeAccent.color)
+        .payScopeCard(accent: settings.themeAccent.color)
     }
 
     private var monthDailyChartCard: some View {
@@ -209,7 +209,7 @@ struct StatsTabView: View {
 #endif
             }
         }
-        .wageWiseCard(accent: settings.themeAccent.color)
+        .payScopeCard(accent: settings.themeAccent.color)
     }
 
     private var monthDailyPoints: [(date: Date, hours: Double)] {

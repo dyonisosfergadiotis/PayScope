@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import Combine
 
 struct CalendarTabView: View {
     @Environment(\.modelContext) private var modelContext
@@ -15,9 +16,11 @@ struct CalendarTabView: View {
     @State private var deleteCandidateDate: Date?
     @State private var longPressTriggeredDate: Date?
     @State private var holidayImportKeys: Set<String> = []
+    @State private var now = Date()
 
     private let service = CalculationService()
     private let holidayImporter = HolidayImportService()
+    private let previewRefreshTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
         NavigationStack {
@@ -57,49 +60,46 @@ struct CalendarTabView: View {
             .task(id: holidayImportTaskKey) {
                 await importHolidaysIfNeededForDisplayedMonth()
             }
+            .onReceive(previewRefreshTimer) { value in
+                now = value
+            }
             .safeAreaInset(edge: .bottom) {
-                HStack {
-                    Button {
-                        displayedMonth = Date()
-                        activeSheet = .day(Date().startOfDayLocal())
-                    } label: {
-                        bottomActionButton(systemImage: "sun.max.fill")
-                    }
-                    .buttonStyle(.plain)
-
-                    Spacer()
-
-                    Button {
-                        addAutomaticSegmentForToday()
-                    } label: {
-                        bottomActionButton(systemImage: "plus")
-                    }
-                    .buttonStyle(.plain)
+                Button {
+                    displayedMonth = Date()
+                    activeSheet = .today
+                } label: {
+                    todayPreviewCard
                 }
+                .buttonStyle(.plain)
                 .padding(.horizontal, 16)
+                .padding(.top, 8)
                 .padding(.bottom, 8)
             }
             .sheet(item: $activeSheet) { sheet in
                 switch sheet {
                 case let .day(date):
                     DayEditorView(date: date.startOfDayLocal(), settings: settings)
-                        .presentationDetents([.fraction(0.65), .large])
-                        .wageWiseSheetSurface(accent: settings.themeAccent.color)
+                        .payScopeSheetSurface(accent: settings.themeAccent.color)
+                case .today:
+                    TodayFocusView(settings: settings)
+                        .presentationDetents([.fraction(0.65)])
+                        .presentationDragIndicator(.visible)
+                        .payScopeSheetSurface(accent: settings.themeAccent.color)
                 case .stats:
                     StatsTabView(settings: settings, referenceMonth: displayedMonth)
-                        .wageWiseSheetSurface(accent: settings.themeAccent.color)
+                        .payScopeSheetSurface(accent: settings.themeAccent.color)
                 case .settings:
                     SettingsTabView(settings: settings)
-                        .wageWiseSheetSurface(accent: settings.themeAccent.color)
+                        .payScopeSheetSurface(accent: settings.themeAccent.color)
                 }
             }
             .sheet(isPresented: $showNetWageConfig) {
                 if let config = netConfig(for: netConfigSheetMonth) {
                     NetWageConfigSheet(config: config)
-                        .wageWiseSheetSurface(accent: settings.themeAccent.color)
+                        .payScopeSheetSurface(accent: settings.themeAccent.color)
                 } else {
                     ProgressView("Netto-Konfiguration wird geladen...")
-                        .wageWiseSheetSurface(accent: settings.themeAccent.color)
+                        .payScopeSheetSurface(accent: settings.themeAccent.color)
                 }
             }
             .confirmationDialog(
@@ -168,11 +168,11 @@ struct CalendarTabView: View {
         return HStack(spacing: 8) {
             monthMetricChip(
                 title: "Stunden",
-                value: WageWiseFormatters.hhmmString(seconds: summary.totalSeconds)
+                value: PayScopeFormatters.hhmmString(seconds: summary.totalSeconds)
             )
             monthMetricChip(
                 title: "Lohn Brutto",
-                value: WageWiseFormatters.currencyString(cents: summary.totalCents)
+                value: PayScopeFormatters.currencyString(cents: summary.totalCents)
             )
 
             Button {
@@ -182,7 +182,7 @@ struct CalendarTabView: View {
             } label: {
                 monthMetricChip(
                     title: "Lohn Netto",
-                    value: WageWiseFormatters.currencyString(cents: monthlyNetCents)
+                    value: PayScopeFormatters.currencyString(cents: monthlyNetCents)
                 )
             }
             .buttonStyle(.plain)
@@ -198,14 +198,13 @@ struct CalendarTabView: View {
         let gross = Double(displayedMonthSummary.totalCents) / 100.0
         let effectiveConfig = effectiveNetConfig(for: displayedMonth.startOfMonthLocal())
         let bonusSum = bonuses(from: effectiveConfig.bonusesCSV).reduce(0, +)
-        let grossPlusBonuses = gross + bonusSum
-        let wageTax = (effectiveConfig.wageTaxPercent ?? 0) / 100.0
-        let pension = (effectiveConfig.pensionPercent ?? 0) / 100.0
-
-        // Net = gross + bonuses - tax share - pension share.
-        return grossPlusBonuses
-            - grossPlusBonuses * wageTax
-            - grossPlusBonuses * pension
+        return service.monthlyNetEuro(
+            grossEuro: gross,
+            bonusesEuro: bonusSum,
+            wageTaxPercent: effectiveConfig.wageTaxPercent,
+            pensionPercent: effectiveConfig.pensionPercent,
+            monthlyAllowanceEuro: effectiveConfig.monthlyAllowanceEuro
+        )
     }
 
     private func bonuses(from csv: String) -> [Double] {
@@ -225,16 +224,17 @@ struct CalendarTabView: View {
         return netConfig(for: previousMonth.startOfMonthLocal())
     }
 
-    private func effectiveNetConfig(for monthStart: Date) -> (wageTaxPercent: Double?, pensionPercent: Double?, bonusesCSV: String) {
+    private func effectiveNetConfig(for monthStart: Date) -> (wageTaxPercent: Double?, pensionPercent: Double?, monthlyAllowanceEuro: Double?, bonusesCSV: String) {
         if let current = netConfig(for: monthStart) {
-            return (current.wageTaxPercent, current.pensionPercent, current.bonusesCSV)
+            return (current.wageTaxPercent, current.pensionPercent, current.monthlyAllowanceEuro, current.bonusesCSV)
         }
         if let previous = previousMonthConfig(for: monthStart) {
-            return (previous.wageTaxPercent, previous.pensionPercent, previous.bonusesCSV)
+            return (previous.wageTaxPercent, previous.pensionPercent, previous.monthlyAllowanceEuro, previous.bonusesCSV)
         }
         return (
             settings.netWageTaxPercent,
             settings.netPensionPercent,
+            settings.netMonthlyAllowanceEuro,
             settings.netBonusesCSV ?? ""
         )
     }
@@ -250,6 +250,7 @@ struct CalendarTabView: View {
             monthStart: normalizedMonth,
             wageTaxPercent: seed.wageTaxPercent,
             pensionPercent: seed.pensionPercent,
+            monthlyAllowanceEuro: seed.monthlyAllowanceEuro,
             bonusesCSV: seed.bonusesCSV
         )
         modelContext.insert(config)
@@ -269,14 +270,7 @@ struct CalendarTabView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.ultraThinMaterial)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(settings.themeAccent.color.opacity(0.18), lineWidth: 1)
-        )
+        .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 16, emphasis: 0.22)
     }
 
     private var weekdayHeader: some View {
@@ -384,27 +378,44 @@ struct CalendarTabView: View {
             }
             .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(
-                        isMutedDay
-                        ? AnyShapeStyle(Color.gray.opacity(0.2))
-                        : AnyShapeStyle(.ultraThinMaterial)
+                        LinearGradient(
+                            colors: isMutedDay
+                            ? [
+                                Color(.tertiarySystemFill).opacity(0.86),
+                                Color(.secondarySystemFill).opacity(0.76)
+                            ]
+                            : [
+                                Color(.secondarySystemBackground).opacity(0.95),
+                                settings.themeAccent.color.opacity(visibleEntry == nil ? 0.06 : 0.14),
+                                Color(.systemBackground).opacity(0.98)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
                     )
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(visibleEntry == nil ? .clear : settings.themeAccent.color.opacity(0.07))
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(.white.opacity(0.2), lineWidth: 0.9)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(
                         isToday ? settings.themeAccent.color.opacity(0.52) : settings.themeAccent.color.opacity(0.2),
-                        lineWidth: isToday ? 1.3 : 1
+                        lineWidth: isToday ? 1.4 : 1
                     )
+            )
+            .shadow(
+                color: isToday ? settings.themeAccent.color.opacity(0.18) : .black.opacity(0.04),
+                radius: isToday ? 9 : 5,
+                x: 0,
+                y: isToday ? 6 : 3
             )
         }
         .buttonStyle(.plain)
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onLongPressGesture(minimumDuration: 0.6) {
             guard visibleEntry != nil else { return }
             longPressTriggeredDate = dayDate
@@ -426,11 +437,24 @@ struct CalendarTabView: View {
         }
         .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.gray.opacity(fillOpacity))
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(.tertiarySystemFill).opacity(fillOpacity),
+                            Color(.secondarySystemFill).opacity(fillOpacity + 0.08)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(.white.opacity(0.18), lineWidth: 0.8)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.gray.opacity(isNextMonth ? 0.22 : 0.14), lineWidth: 1)
         )
     }
@@ -462,7 +486,7 @@ struct CalendarTabView: View {
                 }
             }()
             VStack(spacing: 2) {
-                Text(WageWiseFormatters.hhmmString(seconds: seconds))
+                Text(PayScopeFormatters.hhmmString(seconds: seconds))
                     .font(.caption2.bold())
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -512,50 +536,6 @@ struct CalendarTabView: View {
             current = current.addingDays(1)
         }
         return dates
-    }
-
-    private func addAutomaticSegmentForToday() {
-        let today = Date().startOfDayLocal()
-        let day = entries.first(where: { $0.date.isSameLocalDay(as: today) }) ?? {
-            let newDay = DayEntry(date: today, type: .work)
-            modelContext.insert(newDay)
-            return newDay
-        }()
-
-        let start = automaticSegmentStart(for: day, on: today)
-        let dayEnd = today.addingTimeInterval(24 * 3600)
-        let end = min(dayEnd, start.addingTimeInterval(3600))
-        guard end > start else { return }
-
-        day.segments.append(TimeSegment(start: start, end: end, breakSeconds: 0))
-        modelContext.persistIfPossible()
-    }
-
-    private func automaticSegmentStart(for day: DayEntry, on dayStart: Date) -> Date {
-        let roundedNow = roundedNowDate(on: dayStart)
-        if let lastEnd = day.segments.map(\.end).max() {
-            return max(lastEnd, roundedNow)
-        }
-        return roundedNow
-    }
-
-    private func roundedNowDate(on dayStart: Date) -> Date {
-        let calendar = Calendar.current
-        let now = Date()
-        let components = calendar.dateComponents([.hour, .minute], from: now)
-        let hour = components.hour ?? 0
-        let minute = components.minute ?? 0
-        let roundedMinuteOfDay = min(24 * 60, ((hour * 60 + minute + 14) / 15) * 15)
-        return dateAtMinute(roundedMinuteOfDay, on: dayStart)
-    }
-
-    private func dateAtMinute(_ minute: Int, on dayStart: Date) -> Date {
-        if minute >= 24 * 60 {
-            return dayStart.addingTimeInterval(24 * 3600)
-        }
-        let h = max(0, minute / 60)
-        let m = max(0, minute % 60)
-        return Calendar.current.date(bySettingHour: h, minute: m, second: 0, of: dayStart) ?? dayStart
     }
 
     private func deleteSegments(for date: Date) {
@@ -635,12 +615,8 @@ struct CalendarTabView: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.headline.weight(.semibold))
-                .frame(width: 36, height: 36)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(settings.themeAccent.color.opacity(0.2), lineWidth: 1)
-                )
+                .frame(width: 40, height: 40)
+                .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 14, emphasis: 0.26)
         }
         .buttonStyle(.plain)
     }
@@ -665,31 +641,137 @@ struct CalendarTabView: View {
         }
     }
 
-    private func bottomActionButton(systemImage: String) -> some View {
-        Image(systemName: systemImage)
-            .font(.system(size: 18, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 48, height: 48)
-            .background(
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [settings.themeAccent.color, settings.themeAccent.color.opacity(0.82)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
+    private var todayPreviewCard: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(PayScopeFormatters.day.string(from: todayStart))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+
+                HStack(spacing: 10) {
+                    Image(systemName: todayShiftIcon)
+                        .font(.subheadline.weight(.bold))
+                        .frame(width: 28, height: 28)
+                        .background(.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                    Text(todayWorkedDisplay)
+                        .font(.system(.title3, design: .rounded).weight(.bold))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 10)
+
+            CompletionRing(
+                progress: todayShiftCompletionFraction,
+                accent: settings.themeAccent.color
+            )
+            .frame(width: 35, height: 35)
+        }
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [settings.themeAccent.color.opacity(0.65), settings.themeAccent.color.opacity(0.45)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
                     )
-            )
-            .overlay(
-                Circle()
-                    .stroke(.white.opacity(0.28), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 6)
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(.white.opacity(0.28), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Heute Vorschau")
+        .accessibilityValue("\(todayWorkedDisplay), \(todayShiftCompletionPercent)% der Schichtlänge")
+    }
+
+    private var todayStart: Date {
+        now.startOfDayLocal()
+    }
+
+    private var todayEntry: DayEntry? {
+        entries.first(where: { $0.date.isSameLocalDay(as: todayStart) })
+    }
+
+    private var todayShiftIcon: String {
+        todayEntry?.type.icon ?? "calendar.badge.clock"
+    }
+
+    private var todayWorkedDisplay: String {
+        "\(PayScopeFormatters.hhmmString(seconds: todayWorkedSeconds)) h"
+    }
+
+    private var todayWorkedSeconds: Int {
+        workedSeconds(until: now, for: todayEntry)
+    }
+
+    private var todayShiftCompletionFraction: Double {
+        guard todayShiftLengthSeconds > 0 else { return 0 }
+        let fraction = Double(todayWorkedSeconds) / Double(todayShiftLengthSeconds)
+        return min(max(fraction, 0), 1)
+    }
+
+    private var todayShiftCompletionPercent: Int {
+        Int((todayShiftCompletionFraction * 100).rounded())
+    }
+
+    private var todayShiftLengthSeconds: Int {
+        shiftLengthSeconds(for: todayEntry)
+    }
+
+    private var plannedDaySeconds: Int? {
+        guard let weeklyTarget = settings.weeklyTargetSeconds else { return nil }
+        let days = max(1, settings.scheduledWorkdaysCount)
+        return max(0, Int((Double(weeklyTarget) / Double(days)).rounded()))
+    }
+
+    private func shiftLengthSeconds(for day: DayEntry?) -> Int {
+        guard let day else {
+            return max(0, plannedDaySeconds ?? 0)
+        }
+        if let manual = day.manualWorkedSeconds {
+            return max(0, manual)
+        }
+
+        let totalFromSegments = day.segments.reduce(0) { partial, segment in
+            let segmentSeconds = max(0, Int(segment.end.timeIntervalSince(segment.start)) - max(0, segment.breakSeconds))
+            return partial + segmentSeconds
+        }
+        if totalFromSegments > 0 {
+            return totalFromSegments
+        }
+        return max(0, plannedDaySeconds ?? 0)
+    }
+
+    private func workedSeconds(until now: Date, for day: DayEntry?) -> Int {
+        guard let day else { return 0 }
+        if let manual = day.manualWorkedSeconds {
+            return max(0, manual)
+        }
+
+        return day.segments.reduce(0) { partial, segment in
+            guard now > segment.start else { return partial }
+            let effectiveEnd = min(now, segment.end)
+            let elapsedSeconds = max(0, Int(effectiveEnd.timeIntervalSince(segment.start)))
+            let totalSegmentSeconds = max(1, Int(segment.end.timeIntervalSince(segment.start)))
+            let breakSeconds = max(0, segment.breakSeconds)
+            let elapsedBreak = Int((Double(breakSeconds) * Double(elapsedSeconds) / Double(totalSegmentSeconds)).rounded())
+            return partial + max(0, elapsedSeconds - elapsedBreak)
+        }
     }
 }
 
 private enum CalendarSheet: Identifiable {
     case day(Date)
+    case today
     case stats
     case settings
 
@@ -697,11 +779,92 @@ private enum CalendarSheet: Identifiable {
         switch self {
         case let .day(date):
             return "day-\(date.timeIntervalSinceReferenceDate)"
+        case .today:
+            return "today"
         case .stats:
             return "stats"
         case .settings:
             return "settings"
         }
+    }
+}
+
+private struct CompletionRing: View {
+    let progress: Double
+    let accent: Color
+
+    private var clampedProgress: Double {
+        min(max(progress, 0), 1)
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(
+                    accent.opacity(0.2),
+                    lineWidth: 6
+                )
+
+            Circle()
+                .trim(from: 0, to: clampedProgress)
+                .stroke(
+                    accent,
+                    style: StrokeStyle(
+                        lineWidth: 6,
+                        lineCap: .round
+                    )
+                )
+                .rotationEffect(.degrees(-90))
+        }
+        .shadow(color: .black.opacity(0.18), radius: 2, x: 0, y: 1)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct TodayCompletionPieIcon: View {
+    let progress: Double
+    let accent: Color
+
+    private var clampedProgress: Double {
+        min(max(progress, 0), 1)
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let side = min(geometry.size.width, geometry.size.height)
+            let center = CGPoint(x: side / 2, y: side / 2)
+            let radius = side / 2
+
+            ZStack {
+                Circle()
+                    .fill(.white.opacity(0.15))
+
+                if clampedProgress > 0 {
+                    Path { path in
+                        path.move(to: center)
+                        path.addArc(
+                            center: center,
+                            radius: radius,
+                            startAngle: .degrees(-90),
+                            endAngle: .degrees(-90 + (clampedProgress * 360)),
+                            clockwise: false
+                        )
+                        path.closeSubpath()
+                    }
+                    .fill(.white.opacity(0.9))
+                }
+
+                Circle()
+                    .fill(accent.opacity(0.56))
+                    .padding(side * 0.26)
+
+                Circle()
+                    .stroke(.white.opacity(0.32), lineWidth: 1)
+            }
+            .frame(width: side, height: side)
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .accessibilityHidden(true)
     }
 }
 
@@ -712,6 +875,7 @@ private struct NetWageConfigSheet: View {
 
     @State private var wageTaxText = ""
     @State private var pensionText = ""
+    @State private var allowanceText = ""
     @State private var bonusTexts: [String] = []
     @State private var newBonusText = ""
 
@@ -729,6 +893,15 @@ private struct NetWageConfigSheet: View {
                         TextField("Rentenversicherung", text: $pensionText)
                             .keyboardType(.decimalPad)
                         Text("%")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Freibetrag (€ / Monat)") {
+                    HStack {
+                        TextField("Monatlicher Freibetrag", text: $allowanceText)
+                            .keyboardType(.decimalPad)
+                        Text("€")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -794,6 +967,10 @@ private struct NetWageConfigSheet: View {
             .onAppear {
                 wageTaxText = formattedPercent(config.wageTaxPercent)
                 pensionText = formattedPercent(config.pensionPercent)
+                allowanceText = formatForDisplay(from: String(config.monthlyAllowanceEuro ?? 0)) ?? ""
+                if config.monthlyAllowanceEuro == nil {
+                    allowanceText = ""
+                }
                 bonusTexts = config.bonusesCSV
                     .split(separator: ";")
                     .map { formatForDisplay(from: String($0)) ?? String($0) }
@@ -829,14 +1006,17 @@ private struct NetWageConfigSheet: View {
     private func save() {
         let wageTax = normalizedDouble(from: wageTaxText)
         let pension = normalizedDouble(from: pensionText)
+        let allowance = normalizedDouble(from: allowanceText)
         config.wageTaxPercent = wageTax
         config.pensionPercent = pension
+        config.monthlyAllowanceEuro = allowance
         config.bonusesCSV = bonusTexts
             .compactMap { normalizedDouble(from: $0) }
             .map { String(format: "%.2f", $0) }
             .joined(separator: ";")
         wageTaxText = formatForDisplay(from: wageTaxText) ?? ""
         pensionText = formatForDisplay(from: pensionText) ?? ""
+        allowanceText = formatForDisplay(from: allowanceText) ?? ""
         bonusTexts = bonusTexts.map { formatForDisplay(from: $0) ?? $0 }
         modelContext.persistIfPossible()
     }

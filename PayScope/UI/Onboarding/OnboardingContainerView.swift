@@ -39,7 +39,7 @@ private struct OnboardingSplashView: View {
                     .frame(width: 120, height: 120)
                     .overlay(Image(systemName: "clock.badge.checkmark.fill").font(.system(size: 48)).foregroundStyle(.white))
 
-                Text("WageWise")
+                Text("PayScope")
                     .font(.system(.largeTitle, design: .rounded).bold())
 
                 Text("Zeit erfassen. Lohn verstehen.")
@@ -107,7 +107,7 @@ private struct OnboardingFlowView: View {
             .padding(.horizontal)
             .padding(.bottom, 16)
         }
-        .wageWiseBackground(accent: settings.themeAccent.color)
+        .payScopeBackground(accent: settings.themeAccent.color)
         .onAppear {
             hourlyRate = settings.hourlyRateCents.map { String(format: "%.2f", Double($0) / 100) } ?? ""
             monthlySalary = settings.monthlySalaryCents.map { String(format: "%.2f", Double($0) / 100) } ?? ""
@@ -327,9 +327,10 @@ private struct OnboardingFlowView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(settings.themeAccent == accent ? accent.color.opacity(0.2) : Color(.secondarySystemBackground))
+                        .payScopeSurface(
+                            accent: accent.color,
+                            cornerRadius: 14,
+                            emphasis: settings.themeAccent == accent ? 0.45 : 0.2
                         )
                     }
                     .buttonStyle(.plain)
@@ -490,14 +491,7 @@ private struct OnboardingPageShell<Content: View>: View {
 
                 content
                     .padding(14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(.ultraThinMaterial)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(accent.opacity(0.2), lineWidth: 1)
-                    )
+                    .payScopeSurface(accent: accent, cornerRadius: 18, emphasis: 0.28)
             }
             .padding(24)
         }
