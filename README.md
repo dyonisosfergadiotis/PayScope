@@ -1,95 +1,82 @@
 # PayScope
 
-Die professionelle Arbeitszeit- und Lohnübersicht für iOS – erfasse Arbeitstage präzise, verwalte Pausen intelligent und behalte deine Vergütung in Echtzeit im Blick.
+PayScope ist eine iOS-App zur Zeiterfassung mit Lohnberechnung, Monatsauswertung, CSV-Export, Feiertagsimport und Live Activity.
 
-- iOS: 17+
-- Swift: 5.9+
-- SwiftUI: ✓
-- SwiftData: ✓
-- Xcode: 26+
+## Features
+- Tageserfassung mit Segmenten (Start/Ende), Notizen und Tagestypen (`work`, `manual`, `vacation`, `holiday`, `sick`)
+- Automatische und manuelle Pausenlogik inkl. Validierung
+- Lohnberechnung für Stundenlohn und Monatsgehalt
+- Monatsübersicht mit Brutto-/Nettoauswertung
+- Statistikansicht mit Tages- und Monatsverlauf
+- CSV-Export pro Monat
+- Feiertagsimport über die Nager-Date API
+- Widget + Live Activity (`PayScope WidgetsExtension`)
 
-## Inhaltsverzeichnis
-- [Überblick](#überblick)
-- [Funktionen](#funktionen)
-- [Screens & UX](#screens--ux)
-- [Schnellstart](#schnellstart)
-- [Architektur](#architektur)
-- [Datenmodell](#datenmodell)
-- [Geschäftsregeln](#geschäftsregeln)
-- [Konfiguration](#konfiguration)
-- [Bauen & Ausführen](#bauen--ausführen)
-- [Testen](#testen)
-- [Lokalisierung & Barrierefreiheit](#lokalisierung--barrierefreiheit)
-- [Persistenz](#persistenz)
-- [Projektstruktur](#projektstruktur)
-- [Erweiterbarkeit & Roadmap](#erweiterbarkeit--roadmap)
-- [Bekannte Einschränkungen](#bekannte-einschränkungen)
-- [Datenschutz](#datenschutz)
-- [Lizenz](#lizenz)
-- [Danksagungen](#danksagungen)
-- [Support & Beiträge](#support--beiträge)
+## Tech Stack
+- SwiftUI
+- SwiftData
+- ActivityKit / WidgetKit
+- Charts (wenn verfügbar)
+- XCTest
 
-## Überblick
-PayScope ist eine moderne iOS-App zur Erfassung von Arbeitszeiten und zur Berechnung deiner Vergütung. Der Tageseditor unterstützt mehrteilige Arbeitssegmente, eine automatische sowie manuelle Pausenverwaltung, manuelle Gesamtdauererfassung und „angerechnete“ Tagestypen wie Urlaub, Feiertag oder Krank. Eine Timeline-Vorschau visualisiert den Tag, während Live-Metriken (Dauer, Brutto, Pause) jederzeit sichtbar sind. Änderungen an einem Tag können automatisch nachfolgende, automatisch verwaltete angerechnete Tage aktualisieren.
+## Voraussetzungen
+- Xcode (aktuelle Version, Projekt ist derzeit auf iOS Deployment Target `26.2` gesetzt)
+- iOS Simulator oder Gerät passend zum Deployment Target
 
-Wesentliche Bausteine in der UI sind der Segment-Editor, der Pausen-Inline-Editor, der Notizbereich und die untere Toolbar mit Kennzahlen. Die Berechnung der Vergütung erfolgt über eine zentrale `CalculationService`-Komponente.
+## Projekt starten
+```bash
+open PayScope.xcodeproj
+```
 
-## Funktionen
-- Tageseditor mit Timeline-Vorschau und Segmentbearbeitung (Start/Ende je Segment)
-- Automatische und benutzerdefinierte Pausenverwaltung mit Validierung
-- Manueller Erfassungsmodus (Dauer HH:MM) ohne Pausenabzug
-- Tagestypen mit Icon/Tint und automatischer Anrechnung für Nicht-Arbeitstage (z. B. Urlaub, Feiertag, Krank)
-- Live-Metriken in der unteren Toolbar: Dauer, Bruttovergütung, Pause
-- Notizen-Editor mit Material-Optik
-- Automatische Neuberechnung nachfolgender, automatisch verwalteter angerechneter Einträge bei Änderungen
-- Konfigurierbare Timeline-Grenzen über `Settings` (Min-/Max-Minuten)
+Dann in Xcode:
+1. Scheme `PayScope` wählen.
+2. Simulator/Gerät wählen.
+3. Run (`Cmd + R`).
 
-## Screens & UX
-- Obere Timeline: `MultiSegmentTimelinePreview` zeigt Segmente und Stundenmarken.
-- Segmente-Panel: Hinzufügen/Entfernen von Segmenten, Start-/Endzeit über kompakte `DatePicker` je Segment, Dauerhinweis und Validierung.
-- Pausen-Inline-Editor: Schnelle Anpassung in 1- oder 5-Minuten-Schritten und „Auto“-Vorschlag.
-- Notizen: Ein-/ausblendbarer Editor für Textnotizen zum Tag.
-- Toolbar-Metriken: Anzeige von Netto-Dauer, Bruttobetrag und Pausen (je nach Modus/Tagestyp).
-- Zugänglichkeit: Wichtige Aktionen sind mit Accessibility-Labels versehen (z. B. „Schließen“, „Speichern“, „Tagestyp“).
+## Tests ausführen
+In Xcode:
+- `Product > Test` (`Cmd + U`)
 
-## Schnellstart
-1. Projekt in Xcode öffnen und ein Ziel (Simulator oder Gerät) wählen.
-2. App starten. Wähle ein Datum über den kompakten `DatePicker` in der Navigation.
-3. Tagestyp wählen (z. B. Arbeit, Urlaub, Feiertag, Krank).
-4. Arbeitssegmente anlegen und Zeiten anpassen – oder in den manuellen Modus wechseln, um eine Gesamtdauer zu erfassen.
-5. Bei Arbeitstagen Pausen automatisch vorschlagen lassen oder manuell anpassen.
-6. Live-Metriken prüfen und „Speichern“ tippen.
+Oder per CLI:
+```bash
+xcodebuild test \
+  -project PayScope.xcodeproj \
+  -scheme PayScope \
+  -destination 'platform=iOS Simulator,name=iPhone 16'
+```
 
-## Architektur
-- UI: SwiftUI (`NavigationStack`, Toolbars, Material-Styles, kompakte `DatePicker`).
-- Persistenz: SwiftData via `@Query` und `@Environment(\.modelContext)`.
-- Zustand: `@State` für View-Zustand und `@Bindable` für `Settings`.
-- Domäne: `DayEntry`, `TimeSegment`, `DayType`.
-- Service: `CalculationService` für Geschäftslogik (`dayComputation`, `creditedResult`).
-- Formatierung: `PayScopeFormatters` für Datum, Zeit und Währung.
+## Architektur (Kurzüberblick)
+- `PayScope/PayScopeApp.swift`: App-Entry, SwiftData-Container, Live-Activity-Sync
+- `PayScope/UI/RootView.swift`: Einstieg in Onboarding oder Hauptansicht
+- `PayScope/UI/Tabs/CalendarTabView.swift`: Hauptscreen mit Kalender, Monatsmetriken, Day Editor
+- `PayScope/UI/Tabs/SettingsTabView.swift`: Konfiguration, Export, Feiertagsimport
+- `PayScope/UI/Tabs/StatsTabView.swift`: Kennzahlen und Charts
+- `PayScope/Core/CalculationService.swift`: zentrale Arbeitszeit-/Lohn-Logik
+- `PayScope/Core/Models.swift`: SwiftData-Modelle (`DayEntry`, `TimeSegment`, `Settings`, `HolidayCalendarDay`, `NetWageMonthConfig`)
 
-Beispiel: Speichern eines Arbeitstags mit Segmenten und Pausen
-```swift
-// Clamping der Pausen auf die Bruttodauer
-let clampedBreakSeconds = (selectedType == .work) ? max(0, min(totalBreakMinutes * 60, totalGrossSeconds)) : 0
-var didAssignBreak = false
+## Geschäftslogik
+- Arbeitszeit kann aus Segmenten oder manuell (`manualWorkedSeconds`) kommen.
+- Für Arbeitstage greift Pausenvalidierung und eine gesetzliche Mindestpausenlogik.
+- Urlaub/Krank/Feiertag können über eine 13-Wochen-Rückschau bewertet werden.
+- Fehlende Historie wird aktuell als `0` in die Rückschau einbezogen.
 
-// Segmente neu aufbauen und die Pause nur einmal vergeben
-target.segments.removeAll()
-for segment in editSegments {
-    guard let start = dateAtMinute(segment.startMinute),
-          let end = dateAtMinute(segment.endMinute) else { continue }
-    let breakSeconds = didAssignBreak ? 0 : clampedBreakSeconds
-    target.segments.append(TimeSegment(start: start, end: end, breakSeconds: breakSeconds))
-    didAssignBreak = true
-}
+## Daten & Datenschutz
+- Daten werden lokal via SwiftData gespeichert.
+- Es gibt keine eigene Backend-Infrastruktur in diesem Repo.
+- Netzwerkzugriff wird nur für den Feiertagsimport verwendet (`https://date.nager.at/...`).
 
-// Manueller Modus speichert stattdessen die Gesamtdauer und keine Segmente
-if isManualEntry {
-    target.manualWorkedSeconds = max(0, manualWorkedSeconds)
-    target.segments = []
-} else {
-    target.manualWorkedSeconds = nil
-}
+## Projektstruktur
+```text
+PayScope/
+  Core/
+  Export/
+  Helpers/
+  UI/
+PayScope Widgets/
+PayScopeTests/
+PayScope.xcodeproj
+```
 
-modelContext.persistIfPossible()
+## Hinweise
+- App-Texte und UX sind aktuell primär auf Deutsch ausgelegt.
+- Eine `LICENSE`-Datei ist im Repository aktuell nicht enthalten.
