@@ -10,6 +10,12 @@ struct StatsTabView: View {
     let referenceMonth: Date
 
     private let service = CalculationService()
+    private static let monthTitleFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "MMMM yyyy"
+        return formatter
+    }()
 
     var body: some View {
         NavigationStack {
@@ -58,22 +64,24 @@ struct StatsTabView: View {
     }
 
     private var activeDaysCount: Int {
-        monthEntries.compactMap { workedSeconds(for: $0) }.filter { $0 > 0 }.count
+        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
+        return monthEntries
+            .compactMap { workedSeconds(for: $0, entriesByDate: entriesByDate) }
+            .filter { $0 > 0 }
+            .count
     }
 
     private var bestDay: (date: Date, seconds: Int)? {
-        monthEntries.compactMap { day in
-            guard let seconds = workedSeconds(for: day), seconds > 0 else { return nil }
+        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
+        return monthEntries.compactMap { day -> (date: Date, seconds: Int)? in
+            guard let seconds = workedSeconds(for: day, entriesByDate: entriesByDate), seconds > 0 else { return nil }
             return (day.date, seconds)
         }
         .max { $0.seconds < $1.seconds }
     }
 
     private var monthTitle: String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "de_DE")
-        formatter.dateFormat = "MMMM yyyy"
-        return formatter.string(from: referenceMonth)
+        Self.monthTitleFormatter.string(from: referenceMonth)
     }
 
     private var yearPayPoints: [MonthPayPoint] {
@@ -82,11 +90,13 @@ struct StatsTabView: View {
         }
 
         let months = (0..<12).compactMap { Calendar.current.date(byAdding: .month, value: $0, to: yearInterval.start) }
+        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
 
         return months.map { monthStart in
             let monthEnd = Calendar.current.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart
             let summary = service.periodSummary(
                 entries: entries,
+                entriesByDate: entriesByDate,
                 from: monthStart,
                 to: monthEnd.addingTimeInterval(-1),
                 settings: settings
@@ -213,14 +223,15 @@ struct StatsTabView: View {
     }
 
     private var monthDailyPoints: [(date: Date, hours: Double)] {
-        monthEntries.compactMap { day in
-            guard let seconds = workedSeconds(for: day) else { return nil }
+        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
+        return monthEntries.compactMap { day -> (date: Date, hours: Double)? in
+            guard let seconds = workedSeconds(for: day, entriesByDate: entriesByDate) else { return nil }
             return (day.date, Double(seconds) / 3600.0)
         }
     }
 
-    private func workedSeconds(for day: DayEntry) -> Int? {
-        let result = service.dayComputation(for: day, allEntries: entries, settings: settings)
+    private func workedSeconds(for day: DayEntry, entriesByDate: [Date: DayEntry]) -> Int? {
+        let result = service.dayComputation(for: day, entriesByDate: entriesByDate, settings: settings)
         switch result {
         case let .ok(seconds, _), let .warning(seconds, _, _):
             return seconds

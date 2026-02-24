@@ -10,6 +10,7 @@
 		E5ABAA5D2F458AC000031FB6 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5ABAA5C2F458AC000031FB6 /* WidgetKit.framework */; };
 		E5ABAA5F2F458AC000031FB6 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5ABAA5E2F458AC000031FB6 /* SwiftUI.framework */; };
 		E5ABAA702F458AC100031FB6 /* PayScope WidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = E5ABAA5A2F458AC000031FB6 /* PayScope WidgetsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		E5ABAEA42F4DAA0100031FB6 /* CloudKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5ABAEA32F4DAA0100031FB6 /* CloudKit.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -41,6 +42,8 @@
 		E5ABAA5A2F458AC000031FB6 /* PayScope WidgetsExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "PayScope WidgetsExtension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E5ABAA5C2F458AC000031FB6 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		E5ABAA5E2F458AC000031FB6 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		E5ABAEA32F4DAA0100031FB6 /* CloudKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CloudKit.framework; path = System/Library/Frameworks/CloudKit.framework; sourceTree = SDKROOT; };
+		E5ABAEA52F4DAAAF00031FB6 /* PayScope WidgetsExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "PayScope WidgetsExtension.entitlements"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -81,6 +84,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E5ABAEA42F4DAA0100031FB6 /* CloudKit.framework in Frameworks */,
 				E5ABAA5F2F458AC000031FB6 /* SwiftUI.framework in Frameworks */,
 				E5ABAA5D2F458AC000031FB6 /* WidgetKit.framework in Frameworks */,
 			);
@@ -92,6 +96,7 @@
 		E5ABA9B92F44731100031FB6 = {
 			isa = PBXGroup;
 			children = (
+				E5ABAEA52F4DAAAF00031FB6 /* PayScope WidgetsExtension.entitlements */,
 				E5ABA9C42F44731100031FB6 /* PayScope */,
 				E5ABAA602F458AC000031FB6 /* PayScope Widgets */,
 				E5ABAA5B2F458AC000031FB6 /* Frameworks */,
@@ -111,6 +116,7 @@
 		E5ABAA5B2F458AC000031FB6 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				E5ABAEA32F4DAA0100031FB6 /* CloudKit.framework */,
 				E5ABAA5C2F458AC000031FB6 /* WidgetKit.framework */,
 				E5ABAA5E2F458AC000031FB6 /* SwiftUI.framework */,
 			);
@@ -373,6 +379,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = PayScope/PayScope.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
@@ -386,6 +393,7 @@
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -408,6 +416,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = PayScope/PayScope.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
@@ -421,6 +430,7 @@
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -443,6 +453,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = "PayScope WidgetsExtension.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
@@ -473,6 +484,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = "PayScope WidgetsExtension.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;

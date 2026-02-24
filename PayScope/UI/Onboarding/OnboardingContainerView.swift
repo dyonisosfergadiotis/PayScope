@@ -238,7 +238,7 @@ private struct OnboardingFlowView: View {
                     .textInputAutocapitalization(.characters)
                     .autocorrectionDisabled()
 
-                Text("Feiertage werden über die API geladen und im Kalender grau markiert.")
+                Text("Feiertage werden über die API geladen und im Kalender separat markiert.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 

@@ -177,7 +177,22 @@ struct CalculationService {
         return grossMonthly - wageTax - pension
     }
 
+    func makeEntriesByDateLookup(from entries: [DayEntry]) -> [Date: DayEntry] {
+        Dictionary(
+            entries.map { ($0.date.startOfDayLocal(calendar: calendar), $0) },
+            uniquingKeysWith: { existing, _ in existing }
+        )
+    }
+
     func dayComputation(for day: DayEntry, allEntries: [DayEntry], settings: Settings) -> ComputationResult {
+        dayComputation(
+            for: day,
+            entriesByDate: makeEntriesByDateLookup(from: allEntries),
+            settings: settings
+        )
+    }
+
+    func dayComputation(for day: DayEntry, entriesByDate: [Date: DayEntry], settings: Settings) -> ComputationResult {
         switch day.type {
         case .work, .manual:
             switch workedSeconds(for: day) {
@@ -186,12 +201,22 @@ struct CalculationService {
             case let .failure(message):
                 return .error(message: message.message, missingDates: [])
             }
-        case .vacation, .holiday, .sick:
+        case .vacation:
             if let overrideSeconds = day.creditedOverrideSeconds {
                 let clamped = max(0, overrideSeconds)
                 return .ok(valueSeconds: clamped, valueCents: payCents(for: clamped, settings: settings))
             }
-            return creditedResult(for: day, allEntries: allEntries, settings: settings)
+            if settings.effectiveVacationCreditingMode == .fixedValue {
+                let fixedSeconds = settings.effectiveVacationFixedSeconds
+                return .ok(valueSeconds: fixedSeconds, valueCents: payCents(for: fixedSeconds, settings: settings))
+            }
+            return creditedResult(for: day, entriesByDate: entriesByDate, settings: settings)
+        case .holiday, .sick:
+            if let overrideSeconds = day.creditedOverrideSeconds {
+                let clamped = max(0, overrideSeconds)
+                return .ok(valueSeconds: clamped, valueCents: payCents(for: clamped, settings: settings))
+            }
+            return creditedResult(for: day, entriesByDate: entriesByDate, settings: settings)
         }
     }
 
@@ -205,10 +230,9 @@ struct CalculationService {
         }
     }
 
-    func creditedResult(for day: DayEntry, allEntries: [DayEntry], settings: Settings) -> ComputationResult {
+    func creditedResult(for day: DayEntry, entriesByDate: [Date: DayEntry], settings: Settings) -> ComputationResult {
         let normalizedDate = day.date.startOfDayLocal(calendar: calendar)
-        let lookback = 13
-        let entriesByDate = Dictionary(uniqueKeysWithValues: allEntries.map { ($0.date.startOfDayLocal(calendar: calendar), $0) })
+        let lookback = max(1, settings.vacationLookbackCount)
 
         var values: [Int] = []
 
@@ -238,7 +262,7 @@ struct CalculationService {
         let pay = payCents(for: average, settings: settings)
 
         if values.allSatisfy({ $0 == 0 }) {
-            return .warning(valueSeconds: 0, valueCents: 0, message: "All 13 lookback values are 0.")
+            return .warning(valueSeconds: 0, valueCents: 0, message: "All \(lookback) lookback values are 0.")
         }
 
         return .ok(valueSeconds: average, valueCents: pay)
@@ -258,11 +282,27 @@ struct CalculationService {
         to endDate: Date,
         settings: Settings
     ) -> TotalsSummary {
+        periodSummary(
+            entries: entries,
+            entriesByDate: makeEntriesByDateLookup(from: entries),
+            from: startDate,
+            to: endDate,
+            settings: settings
+        )
+    }
+
+    func periodSummary(
+        entries: [DayEntry],
+        entriesByDate: [Date: DayEntry],
+        from startDate: Date,
+        to endDate: Date,
+        settings: Settings
+    ) -> TotalsSummary {
         var summary = TotalsSummary()
         let ranged = entries.filter { $0.date >= startDate && $0.date <= endDate }
 
         for day in ranged {
-            let result = dayComputation(for: day, allEntries: entries, settings: settings)
+            let result = dayComputation(for: day, entriesByDate: entriesByDate, settings: settings)
             switch result {
             case let .ok(seconds, cents):
                 summary.totalSeconds += seconds

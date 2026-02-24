@@ -5,6 +5,8 @@ struct DayEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \DayEntry.date) private var allEntries: [DayEntry]
+    @Query(sort: \NetWageMonthConfig.monthStart) private var netWageConfigs: [NetWageMonthConfig]
+    @Query(sort: \HolidayCalendarDay.date) private var holidayDays: [HolidayCalendarDay]
 
     let date: Date
     @Bindable var settings: Settings
@@ -23,10 +25,15 @@ struct DayEditorView: View {
     @State private var shortcutDraftStartMinute: Int = 9 * 60
     @State private var shortcutDraftEndMinute: Int = 17 * 60
     @State private var selectedSheetDetent: PresentationDetent = .fraction(0.55)
+    @State private var hasAnimatedIn = false
+    @State private var didRunEntryAnimation = false
 
     @AppStorage("dayEditorShiftShortcut1") private var shiftShortcut1 = ""
     @AppStorage("dayEditorShiftShortcut2") private var shiftShortcut2 = ""
     @AppStorage("dayEditorShiftShortcut3") private var shiftShortcut3 = ""
+    @AppStorage("dayEditorShiftShortcutName1") private var shiftShortcutName1 = ""
+    @AppStorage("dayEditorShiftShortcutName2") private var shiftShortcutName2 = ""
+    @AppStorage("dayEditorShiftShortcutName3") private var shiftShortcutName3 = ""
 
     private let service = CalculationService()
 
@@ -48,6 +55,9 @@ struct DayEditorView: View {
                 .padding(.top, 10)
                 .padding(.bottom, 24)
             }
+            .opacity(hasAnimatedIn ? 1 : 0)
+            .offset(y: hasAnimatedIn ? 0 : 14)
+            .animation(.spring(response: 0.34, dampingFraction: 0.9), value: hasAnimatedIn)
             .navigationTitle(PayScopeFormatters.day.string(from: date))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -110,14 +120,23 @@ struct DayEditorView: View {
             .onAppear {
                 selectedDate = date.startOfDayLocal()
                 load(for: selectedDate)
-                selectedSheetDetent = defaultEditorDetent(for: selectedType)
+                setEditorDetent(defaultEditorDetent(for: selectedType), animated: false)
+                if didRunEntryAnimation {
+                    hasAnimatedIn = true
+                } else {
+                    hasAnimatedIn = false
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
+                        hasAnimatedIn = true
+                    }
+                    didRunEntryAnimation = true
+                }
             }
             .onChange(of: selectedDate) { _, newValue in
                 load(for: newValue)
             }
             .onChange(of: selectedType) { oldType, _ in
-                selectedSheetDetent = defaultEditorDetent(for: selectedType)
                 if isApplyingLoad { return }
+                setEditorDetent(defaultEditorDetent(for: selectedType), animated: true)
                 if selectedType == .manual {
                     if oldType != .manual {
                         manualWorkedSeconds = max(0, totalNetSeconds)
@@ -142,6 +161,11 @@ struct DayEditorView: View {
                 }
                 applyAutoCreditedSegmentIfNeeded()
             }
+            .onChange(of: entriesSignature) { _, _ in
+                // Query results can arrive after .onAppear; only auto-reload while no local draft exists.
+                if isApplyingLoad || hasLocalDraftData { return }
+                load(for: selectedDate)
+            }
         }
         .payScopeSheetSurface(accent: settings.themeAccent.color)
         .presentationDetents(editorDetents, selection: $selectedSheetDetent)
@@ -159,6 +183,20 @@ struct DayEditorView: View {
 
     private func defaultEditorDetent(for type: DayType) -> PresentationDetent {
         type == .work ? .fraction(0.55) : .fraction(0.5)
+    }
+
+    private func setEditorDetent(_ detent: PresentationDetent, animated: Bool) {
+        if animated {
+            withAnimation(.interactiveSpring(response: 0.34, dampingFraction: 0.9)) {
+                selectedSheetDetent = detent
+            }
+        } else {
+            var transaction = Transaction()
+            transaction.animation = nil
+            withTransaction(transaction) {
+                selectedSheetDetent = detent
+            }
+        }
     }
 
     @ToolbarContentBuilder
@@ -215,19 +253,17 @@ struct DayEditorView: View {
     }
 
     private var segmentsPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             if selectedType == .manual {
                 Text("Manuell")
                     .font(.headline.weight(.semibold))
             }
 
             if usesManualDurationInput {
-                // Manual duration editor HH:MM
                 HStack(spacing: 12) {
                     Text("Dauer")
                         .font(.subheadline.weight(.semibold))
                     Spacer()
-                    // Simple steppers for hours and minutes
                     ManualDurationEditor(seconds: $manualWorkedSeconds, accent: settings.themeAccent.color)
                 }
                 Text("Bei manueller Erfassung wird keine Pause abgezogen.")
@@ -236,17 +272,24 @@ struct DayEditorView: View {
             }
 
             if !usesManualDurationInput && !isCreditedType {
-                HStack {
-                    Text("Segmente")
-                        .font(.headline.weight(.semibold))
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Segmente")
+                            .font(.headline.weight(.semibold))
+                        if !editSegments.isEmpty {
+                            Text(editSegments.count == 1 ? "1 Segment" : "\(editSegments.count) Segmente")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     Spacer()
                     Button {
                         addDefaultSegment()
                     } label: {
-                        Label("Neu", systemImage: "plus.circle.fill")
+                        Label("Neu", systemImage: "plus")
                             .font(.footnote.weight(.semibold))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
                 }
 
                 if editSegments.isEmpty {
@@ -270,41 +313,48 @@ struct DayEditorView: View {
                                         .minimumScaleFactor(0.8)
                                         .frame(maxWidth: .infinity)
                                 }
-                                .buttonStyle(.plain)
-                                .padding(.vertical, 10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .fill(settings.themeAccent.color)
-                                )
-                                .foregroundStyle(.white)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .stroke(settings.themeAccent.color.opacity(0.25), lineWidth: 1)
-                                )
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
                             }
                         }
                     }
                     .frame(maxWidth: .infinity)
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
-                List {
+                VStack(spacing: 8) {
                     ForEach($editSegments, id: \.id) { $segment in
                         VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 8) {
+                                Text("Segment")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button(role: .destructive) {
+                                    removeSegment(segment.id)
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.caption.weight(.semibold))
+                                        .padding(6)
+                                        .foregroundStyle(.red)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Segment löschen")
+                            }
+
                             HStack(spacing: 8) {
                                 HHMMMinuteInput(
                                     minuteOfDay: minuteBinding(segment: $segment, isStart: true),
                                     accent: settings.themeAccent.color
                                 )
-                                Spacer()
+                                Spacer(minLength: 8)
 
                                 Text(segment.durationLabel)
                                     .font(.caption.weight(.bold))
                                     .foregroundStyle(settings.themeAccent.color)
                                     .frame(minWidth: 72, alignment: .center)
-                                
-                                Spacer()
-                                
+
+                                Spacer(minLength: 8)
+
                                 HHMMMinuteInput(
                                     minuteOfDay: minuteBinding(segment: $segment, isStart: false),
                                     accent: settings.themeAccent.color
@@ -319,24 +369,15 @@ struct DayEditorView: View {
                                     .foregroundStyle(.red)
                             }
                         }
-                        .padding(12)
-                        .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 16, emphasis: 0.28)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 14, emphasis: 0.2)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button(role: .destructive) {
-                                removeSegment(segment.id)
-                            } label: {
-                                Label("Löschen", systemImage: "trash")
-                            }
-                        }
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
-                .listStyle(.plain)
-                .scrollDisabled(true)
-                
+                .animation(.spring(response: 0.3, dampingFraction: 0.88), value: editSegments.map(\.id))
+
                 PauseInlineEditor(
                     breakMinutes: $totalBreakMinutes,
                     isPauseCustom: $isPauseCustom,
@@ -351,7 +392,7 @@ struct DayEditorView: View {
                 }
             } else if isCreditedType {
                 VStack(alignment: .center, spacing: 10) {
-                    Text("Dieser Typ wird automatisch mit der 13-Wochen-Regel berechnet.")
+                    Text(creditedComputationDescription)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -394,7 +435,7 @@ struct DayEditorView: View {
     }
 
     private var notesButtonPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             if showNotesEditor {
                 HStack {
                     Text("Notizen")
@@ -406,15 +447,16 @@ struct DayEditorView: View {
                     } label: {
                         Image(systemName: "xmark")
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
                     .accessibilityLabel("Notizen ausblenden")
                 }
 
                 TextEditor(text: $notes)
-                    .frame(minHeight: 70)
-                    .padding(8)
+                    .frame(minHeight: 84)
+                    .padding(10)
                     .scrollContentBackground(.hidden)
-                    .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 12, emphasis: 0.2)
+                    .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 12, emphasis: 0.16)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             } else {
                 Button {
                     showNotesEditor = true
@@ -422,9 +464,10 @@ struct DayEditorView: View {
                     Label("Notizen", systemImage: "plus")
                         .font(.subheadline.weight(.semibold))
                 }
-                .buttonStyle(.payScopePrimary(accent: settings.themeAccent.color))
+                .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: showNotesEditor)
     }
 
     private var totalNetSeconds: Int {
@@ -446,8 +489,43 @@ struct DayEditorView: View {
         selectedType == .vacation || selectedType == .holiday || selectedType == .sick
     }
 
+    private var creditedComputationDescription: String {
+        if selectedType == .vacation, settings.effectiveVacationCreditingMode == .fixedValue {
+            return "Dieser Urlaubstag nutzt den festen Wert aus den Einstellungen."
+        }
+        return "Dieser Typ wird automatisch mit der 13-Wochen-Regel berechnet."
+    }
+
     private var usesManualDurationInput: Bool {
         selectedType == .manual
+    }
+
+    private var hasLocalDraftData: Bool {
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if selectedType != .work { return true }
+        if usesManualDurationInput {
+            return manualWorkedSeconds > 0 || !trimmedNotes.isEmpty
+        }
+        return !editSegments.isEmpty || totalBreakMinutes > 0 || isPauseCustom || !trimmedNotes.isEmpty
+    }
+
+    private var entriesSignature: Int {
+        var hasher = Hasher()
+        for day in allEntries {
+            hasher.combine(day.date.timeIntervalSinceReferenceDate)
+            hasher.combine(day.type.rawValue)
+            hasher.combine(day.manualWorkedSeconds ?? -1)
+            hasher.combine(day.creditedOverrideSeconds ?? -1)
+            hasher.combine(day.notes)
+            hasher.combine(day.segments.count)
+
+            for segment in day.segments {
+                hasher.combine(segment.start.timeIntervalSinceReferenceDate)
+                hasher.combine(segment.end.timeIntervalSinceReferenceDate)
+                hasher.combine(segment.breakSeconds)
+            }
+        }
+        return hasher.finalize()
     }
 
     private var previewComputation: ComputationResult {
@@ -589,6 +667,11 @@ struct DayEditorView: View {
 
     private func applyShortcut(_ shortcut: ShiftShortcut) {
         let clamped = clampedShortcut(shortcut)
+        if clamped.isRichTemplate {
+            applyShortcutTemplate(clamped)
+            return
+        }
+
         withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
             editSegments.append(EditableSegment(startMinute: clamped.startMinute, endMinute: clamped.endMinute))
         }
@@ -596,17 +679,33 @@ struct DayEditorView: View {
 
     private func saveShortcutDraft() {
         guard let index = editingShortcutIndex else { return }
-        let shortcut = clampedShortcut(ShiftShortcut(startMinute: shortcutDraftStartMinute, endMinute: shortcutDraftEndMinute))
+        let fallbackShortcut = clampedShortcut(
+            ShiftShortcut(startMinute: shortcutDraftStartMinute, endMinute: shortcutDraftEndMinute)
+        )
+        let shortcut = clampedShortcut(shortcutForCurrentDraft(fallback: fallbackShortcut))
         setShortcut(shortcut, at: index)
         applyShortcut(shortcut)
         editingShortcutIndex = nil
     }
 
     private func shortcutButtonLabel(for index: Int) -> String {
+        let customName = shortcutName(for: index).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !customName.isEmpty {
+            return customName
+        }
         guard let shortcut = shiftShortcut(at: index) else {
             return "S\(index + 1) speichern"
         }
         return "\(formatMinute(shortcut.startMinute))-\(formatMinute(shortcut.endMinute))"
+    }
+
+    private func shortcutName(for index: Int) -> String {
+        switch index {
+        case 0: return shiftShortcutName1
+        case 1: return shiftShortcutName2
+        case 2: return shiftShortcutName3
+        default: return ""
+        }
     }
 
     private func shiftShortcut(at index: Int) -> ShiftShortcut? {
@@ -629,10 +728,168 @@ struct DayEditorView: View {
         }
     }
 
+    private func shortcutForCurrentDraft(fallback: ShiftShortcut) -> ShiftShortcut {
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let draftSegments = normalizedShortcutSegmentsFromDraft()
+        let effectiveSegments = draftSegments.isEmpty
+            ? [ShiftShortcutSegment(startMinute: fallback.startMinute, endMinute: fallback.endMinute)]
+            : draftSegments
+
+        let earliestStart = effectiveSegments.map(\.startMinute).min() ?? fallback.startMinute
+        let latestEnd = effectiveSegments.map(\.endMinute).max() ?? fallback.endMinute
+        let grossMinutes = max(
+            0,
+            effectiveSegments.reduce(0) { partial, segment in
+                partial + max(0, segment.endMinute - segment.startMinute)
+            }
+        )
+        let clampedBreakMinutes = selectedType == .work
+            ? max(0, min(totalBreakMinutes, grossMinutes))
+            : 0
+
+        let shouldStoreRichTemplate = selectedType != .work ||
+            !trimmedNotes.isEmpty ||
+            effectiveSegments.count > 1 ||
+            clampedBreakMinutes > 0
+
+        guard shouldStoreRichTemplate else {
+            return ShiftShortcut(startMinute: earliestStart, endMinute: latestEnd)
+        }
+
+        let payload = ShiftShortcutPayload(
+            startMinute: earliestStart,
+            endMinute: latestEnd,
+            dayType: selectedType,
+            notes: notes,
+            segments: effectiveSegments,
+            breakMinutes: clampedBreakMinutes,
+            manualWorkedSeconds: selectedType == .manual ? max(0, manualWorkedSeconds) : nil,
+            creditedOverrideSeconds: isCredited(selectedType) ? creditedOverrideSeconds.map { max(0, $0) } : nil
+        )
+        return ShiftShortcut(startMinute: earliestStart, endMinute: latestEnd, payload: payload)
+    }
+
+    private func normalizedShortcutSegmentsFromDraft() -> [ShiftShortcutSegment] {
+        editSegments
+            .map {
+                ShiftShortcutSegment(
+                    startMinute: $0.startMinute,
+                    endMinute: $0.endMinute
+                )
+            }
+            .filter { $0.endMinute > $0.startMinute }
+            .sorted(by: { lhs, rhs in
+                if lhs.startMinute != rhs.startMinute { return lhs.startMinute < rhs.startMinute }
+                return lhs.endMinute < rhs.endMinute
+            })
+    }
+
+    private func applyShortcutTemplate(_ shortcut: ShiftShortcut) {
+        let targetType = shortcut.dayType ?? .work
+        let templateSegments = shortcut.segments.isEmpty
+            ? [ShiftShortcutSegment(startMinute: shortcut.startMinute, endMinute: shortcut.endMinute)]
+            : shortcut.segments
+
+        isApplyingLoad = true
+        defer { isApplyingLoad = false }
+
+        selectedType = targetType
+        notes = shortcut.notes
+        showNotesEditor = !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        manualWorkedSeconds = 0
+        creditedOverrideSeconds = nil
+        editSegments = []
+        totalBreakMinutes = 0
+        isPauseCustom = false
+
+        if targetType == .manual {
+            let fallbackSeconds = max(
+                0,
+                templateSegments.reduce(0) { partial, segment in
+                    partial + max(0, segment.endMinute - segment.startMinute) * 60
+                }
+            )
+            manualWorkedSeconds = max(0, shortcut.manualWorkedSeconds ?? fallbackSeconds)
+            return
+        }
+
+        let editableSegments = templateSegments.map {
+            EditableSegment(startMinute: $0.startMinute, endMinute: $0.endMinute)
+        }
+
+        if isCredited(targetType) {
+            editSegments = editableSegments
+            creditedOverrideSeconds = shortcut.creditedOverrideSeconds.map { max(0, $0) }
+            if editSegments.isEmpty {
+                applyAutoCreditedSegmentIfNeeded(force: true)
+            }
+            return
+        }
+
+        editSegments = editableSegments
+        let grossMinutes = max(0, editSegments.reduce(0) { $0 + max(0, $1.grossDurationMinutes) })
+        let clampedBreakMinutes = max(0, min(shortcut.breakMinutes, grossMinutes))
+        totalBreakMinutes = clampedBreakMinutes
+        isPauseCustom = clampedBreakMinutes != automaticBreakMinutes(forDurationMinutes: grossMinutes)
+    }
+
     private func clampedShortcut(_ shortcut: ShiftShortcut) -> ShiftShortcut {
-        let start = max(timelineBounds.lowerBound, min(timelineBounds.upperBound - 1, shortcut.startMinute))
-        let end = min(timelineBounds.upperBound, max(start + 1, shortcut.endMinute))
-        return ShiftShortcut(startMinute: start, endMinute: end)
+        func clampedRange(start: Int, end: Int) -> (start: Int, end: Int) {
+            let clampedStart = max(timelineBounds.lowerBound, min(timelineBounds.upperBound - 1, start))
+            let clampedEnd = min(timelineBounds.upperBound, max(clampedStart + 1, end))
+            return (clampedStart, clampedEnd)
+        }
+
+        let fallbackRange = clampedRange(start: shortcut.startMinute, end: shortcut.endMinute)
+        guard let payload = shortcut.payload else {
+            return ShiftShortcut(startMinute: fallbackRange.start, endMinute: fallbackRange.end)
+        }
+
+        let sourceSegments = payload.segments.isEmpty
+            ? [ShiftShortcutSegment(startMinute: fallbackRange.start, endMinute: fallbackRange.end)]
+            : payload.segments
+
+        let clampedSegments = sourceSegments
+            .map {
+                let range = clampedRange(start: $0.startMinute, end: $0.endMinute)
+                return ShiftShortcutSegment(startMinute: range.start, endMinute: range.end)
+            }
+            .sorted(by: { lhs, rhs in
+                if lhs.startMinute != rhs.startMinute { return lhs.startMinute < rhs.startMinute }
+                return lhs.endMinute < rhs.endMinute
+            })
+
+        let normalizedSegments = clampedSegments.isEmpty
+            ? [ShiftShortcutSegment(startMinute: fallbackRange.start, endMinute: fallbackRange.end)]
+            : clampedSegments
+
+        let earliestStart = normalizedSegments.map(\.startMinute).min() ?? fallbackRange.start
+        let latestEnd = normalizedSegments.map(\.endMinute).max() ?? fallbackRange.end
+        let dayType = payload.dayType ?? .work
+        let grossMinutes = max(
+            0,
+            normalizedSegments.reduce(0) { partial, segment in
+                partial + max(0, segment.endMinute - segment.startMinute)
+            }
+        )
+
+        let normalizedPayload = ShiftShortcutPayload(
+            startMinute: earliestStart,
+            endMinute: latestEnd,
+            dayType: dayType,
+            notes: payload.notes,
+            segments: normalizedSegments,
+            breakMinutes: dayType == .work ? max(0, min(payload.breakMinutes, grossMinutes)) : 0,
+            manualWorkedSeconds: dayType == .manual ? max(0, payload.manualWorkedSeconds ?? 0) : nil,
+            creditedOverrideSeconds: isCredited(dayType) ? payload.creditedOverrideSeconds.map { max(0, $0) } : nil
+        )
+
+        return ShiftShortcut(
+            startMinute: earliestStart,
+            endMinute: latestEnd,
+            payload: normalizedPayload
+        )
     }
 
     private func defaultShortcut(for index: Int) -> ShiftShortcut {
@@ -767,16 +1024,19 @@ struct DayEditorView: View {
                 modelContext.delete(existing)
                 refreshFollowingAutoCreditedEntries(changedFrom: dayDate)
                 modelContext.persistIfPossible()
+                let entriesAfterDelete = allEntries.filter { $0 !== existing }
+                exportICloudSnapshot(entries: entriesAfterDelete)
 
                 if isTodaySave {
-                    let entriesForSync = allEntries.filter { $0 !== existing }
                     Task { @MainActor in
                         await PayScopeLiveActivityManager.syncAtAppLaunch(
                             settings: settings,
-                            entries: entriesForSync
+                            entries: entriesAfterDelete
                         )
                     }
                 }
+            } else {
+                exportICloudSnapshot(entries: allEntries)
             }
 
             dismiss()
@@ -820,11 +1080,13 @@ struct DayEditorView: View {
 
         modelContext.persistIfPossible()
 
+        var entriesForSync = allEntries
+        if !entriesForSync.contains(where: { $0 === target }) {
+            entriesForSync.append(target)
+        }
+        exportICloudSnapshot(entries: entriesForSync)
+
         if isTodaySave {
-            var entriesForSync = allEntries
-            if !entriesForSync.contains(where: { $0 === target }) {
-                entriesForSync.append(target)
-            }
             Task { @MainActor in
                 await PayScopeLiveActivityManager.syncAtAppLaunch(
                     settings: settings,
@@ -834,6 +1096,15 @@ struct DayEditorView: View {
         }
 
         dismiss()
+    }
+
+    private func exportICloudSnapshot(entries dayEntries: [DayEntry]) {
+        ICloudSettingsSync.export(
+            settings: settings,
+            entries: dayEntries,
+            netWageConfigs: netWageConfigs,
+            holidayDays: holidayDays
+        )
     }
 
     private func refreshFollowingAutoCreditedEntries(changedFrom changedDate: Date) {
@@ -889,7 +1160,7 @@ struct DayEditorView: View {
 
     private func creditedBaselineSeconds() -> Int {
         let probe = DayEntry(date: selectedDate.startOfDayLocal(), type: selectedType)
-        let result = service.creditedResult(for: probe, allEntries: allEntries, settings: settings)
+        let result = service.dayComputation(for: probe, allEntries: allEntries, settings: settings)
         switch result {
         case let .ok(valueSeconds, _), let .warning(valueSeconds, _, _):
             return valueSeconds
@@ -902,7 +1173,7 @@ struct DayEditorView: View {
         if let override = day.creditedOverrideSeconds {
             return max(0, override)
         }
-        let result = service.creditedResult(for: day, allEntries: allEntries, settings: settings)
+        let result = service.dayComputation(for: day, allEntries: allEntries, settings: settings)
         switch result {
         case let .ok(valueSeconds, _), let .warning(valueSeconds, _, _):
             return valueSeconds
@@ -1011,24 +1282,86 @@ private struct EditableSegment: Identifiable {
 private struct ShiftShortcut {
     let startMinute: Int
     let endMinute: Int
+    let payload: ShiftShortcutPayload?
 
-    init(startMinute: Int, endMinute: Int) {
+    init(startMinute: Int, endMinute: Int, payload: ShiftShortcutPayload? = nil) {
         self.startMinute = startMinute
         self.endMinute = endMinute
+        self.payload = payload
     }
 
     init?(rawValue: String) {
+        if let data = rawValue.data(using: .utf8),
+           let payload = try? JSONDecoder().decode(ShiftShortcutPayload.self, from: data) {
+            self.startMinute = payload.startMinute
+            self.endMinute = payload.endMinute
+            self.payload = payload
+            return
+        }
+
         let parts = rawValue.split(separator: "-")
         guard parts.count == 2,
               let start = Int(parts[0]),
               let end = Int(parts[1]) else { return nil }
         self.startMinute = start
         self.endMinute = end
+        self.payload = nil
     }
 
     var rawValue: String {
-        "\(startMinute)-\(endMinute)"
+        guard let payload else { return "\(startMinute)-\(endMinute)" }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(payload),
+              let string = String(data: data, encoding: .utf8) else {
+            return "\(startMinute)-\(endMinute)"
+        }
+        return string
     }
+
+    var isRichTemplate: Bool {
+        payload != nil
+    }
+
+    var dayType: DayType? {
+        payload?.dayType
+    }
+
+    var notes: String {
+        payload?.notes ?? ""
+    }
+
+    var segments: [ShiftShortcutSegment] {
+        payload?.segments ?? []
+    }
+
+    var breakMinutes: Int {
+        max(0, payload?.breakMinutes ?? 0)
+    }
+
+    var manualWorkedSeconds: Int? {
+        payload?.manualWorkedSeconds
+    }
+
+    var creditedOverrideSeconds: Int? {
+        payload?.creditedOverrideSeconds
+    }
+}
+
+private struct ShiftShortcutPayload: Codable, Equatable {
+    let startMinute: Int
+    let endMinute: Int
+    let dayType: DayType?
+    let notes: String
+    let segments: [ShiftShortcutSegment]
+    let breakMinutes: Int
+    let manualWorkedSeconds: Int?
+    let creditedOverrideSeconds: Int?
+}
+
+private struct ShiftShortcutSegment: Codable, Equatable {
+    let startMinute: Int
+    let endMinute: Int
 }
 
 private struct MultiSegmentTimelinePreview: View {

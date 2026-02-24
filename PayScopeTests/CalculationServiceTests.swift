@@ -185,6 +185,52 @@ final class CalculationServiceTests: XCTestCase {
         }
     }
 
+    func testVacationCanUseFixedValueMode() {
+        let settings = Settings(
+            payMode: .hourly,
+            hourlyRateCents: 2000,
+            vacationCreditingMode: .fixedValue,
+            vacationFixedSeconds: 7 * 3600 + 30 * 60
+        )
+        let vacation = DayEntry(date: date(daysBack: 0), type: .vacation)
+        let result = CalculationService().dayComputation(for: vacation, allEntries: [vacation], settings: settings)
+
+        if case let .ok(valueSeconds, valueCents) = result {
+            XCTAssertEqual(valueSeconds, 7 * 3600 + 30 * 60)
+            XCTAssertEqual(valueCents, 15000)
+        } else {
+            XCTFail("Expected fixed vacation value to be used.")
+        }
+    }
+
+    func testVacationFixedValueFallsBackToZeroWhenUnset() {
+        let settings = Settings(vacationCreditingMode: .fixedValue, vacationFixedSeconds: nil)
+        let vacation = DayEntry(date: date(daysBack: 0), type: .vacation)
+        let result = CalculationService().dayComputation(for: vacation, allEntries: [vacation], settings: settings)
+
+        if case let .ok(valueSeconds, _) = result {
+            XCTAssertEqual(valueSeconds, 0)
+        } else {
+            XCTFail("Expected zero when no fixed vacation value is set.")
+        }
+    }
+
+    func testVacationOverrideTakesPrecedenceOverFixedValue() {
+        let settings = Settings(vacationCreditingMode: .fixedValue, vacationFixedSeconds: 8 * 3600)
+        let vacation = DayEntry(
+            date: date(daysBack: 0),
+            type: .vacation,
+            creditedOverrideSeconds: 6 * 3600 + 15 * 60
+        )
+        let result = CalculationService().dayComputation(for: vacation, allEntries: [vacation], settings: settings)
+
+        if case let .ok(valueSeconds, _) = result {
+            XCTAssertEqual(valueSeconds, 6 * 3600 + 15 * 60)
+        } else {
+            XCTFail("Expected override to have priority over fixed vacation value.")
+        }
+    }
+
     func testMonthlyNetUsesAllowanceForWageTaxBase() {
         let service = CalculationService()
         let net = service.monthlyNetEuro(

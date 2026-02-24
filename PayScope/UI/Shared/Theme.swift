@@ -42,18 +42,12 @@ struct PayScopeBackground: ViewModifier {
                     .ignoresSafeArea()
 
                     LinearGradient(
-                        colors: [.white.opacity(0.24), .clear, .white.opacity(0.08)],
+                        colors: [.white.opacity(0.14), .clear, .white.opacity(0.04)],
                         startPoint: .top,
                         endPoint: .bottom
                     )
                     .blendMode(.softLight)
                     .ignoresSafeArea()
-
-                    Ellipse()
-                        .fill(accent.opacity(0.08))
-                        .frame(width: 360, height: 180)
-                        .blur(radius: 34)
-                        .offset(x: -120, y: 210)
                 }
             )
     }
@@ -98,8 +92,7 @@ struct PayScopeSurfaceStyle: ViewModifier {
                     .stroke(accent.opacity(0.16 + (emphasis * 0.14)), lineWidth: 1)
                     .allowsHitTesting(false)
             )
-            .shadow(color: .black.opacity(0.06 + (emphasis * 0.05)), radius: 9 + (depth * 10), x: 0, y: 6 + (depth * 5))
-            .shadow(color: accent.opacity(0.08 + (emphasis * 0.08)), radius: 14 + (depth * 12), x: 0, y: 7 + (depth * 4))
+            .shadow(color: .black.opacity(0.05 + (emphasis * 0.03)), radius: 6 + (depth * 7), x: 0, y: 4 + (depth * 3))
     }
 }
 
@@ -165,8 +158,7 @@ struct PayScopePrimaryButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(.white.opacity(0.28), lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.16), radius: 8, x: 0, y: 4)
-            .shadow(color: accent.opacity(0.26), radius: 12, x: 0, y: 6)
+            .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 3)
             .opacity(configuration.isPressed ? 0.9 : 1)
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
@@ -199,7 +191,6 @@ struct PayScopeSecondaryButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(accent.opacity(0.3), lineWidth: 1)
             )
-            .shadow(color: accent.opacity(0.1), radius: 6, x: 0, y: 3)
             .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
     }
 }

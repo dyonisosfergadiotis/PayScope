@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import Combine
+import UIKit
 
 struct CalendarTabView: View {
     @Environment(\.modelContext) private var modelContext
@@ -8,6 +9,7 @@ struct CalendarTabView: View {
     @Query(sort: \NetWageMonthConfig.monthStart) private var netConfigs: [NetWageMonthConfig]
     @Query(sort: \HolidayCalendarDay.date) private var importedHolidays: [HolidayCalendarDay]
     @Bindable var settings: Settings
+    let isOffline: Bool
 
     @State private var displayedMonth = Date()
     @State private var activeSheet: CalendarSheet?
@@ -17,10 +19,30 @@ struct CalendarTabView: View {
     @State private var longPressTriggeredDate: Date?
     @State private var holidayImportKeys: Set<String> = []
     @State private var now = Date()
+    @State private var monthChangeDirection: MonthChangeDirection = .next
+    @State private var weekdayColumnsVisible = true
+    @State private var dayColumnsVisible = true
 
     private let service = CalculationService()
     private let holidayImporter = HolidayImportService()
     private let previewRefreshTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+    private let calendarContentHorizontalPadding: CGFloat = 16
+    private let todayPreviewEdgePadding: CGFloat = 5
+    private static let monthYearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "MMMM yyyy"
+        return formatter
+    }()
+    private static let compactCurrencyFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
+    private let monthChangeAnimation = Animation.easeInOut(duration: 0.24)
+    private let weekdayColumnAnimationDuration: Double = 0.18
+    private let weekdayColumnAnimationStagger: Double = 0.035
 
     var body: some View {
         NavigationStack {
@@ -29,14 +51,25 @@ struct CalendarTabView: View {
                 monthSummaryBar
                 weekdayHeader
                 calendarSurface
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.horizontal, calendarContentHorizontalPadding)
+            .padding(.top)
+            .padding(.bottom, 6)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Text("PayScope")
-                        .font(.headline.weight(.semibold))
+                    VStack(spacing: 0) {
+                        Text("PayScope")
+                            .font(.headline.weight(.semibold))
+                        if isOffline {
+                            Text("offline")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 ToolbarItem(placement: .topBarLeading) {
@@ -63,23 +96,22 @@ struct CalendarTabView: View {
             .onReceive(previewRefreshTimer) { value in
                 now = value
             }
-            .safeAreaInset(edge: .bottom) {
+            .safeAreaInset(edge: .bottom, spacing: 0) {
                 Button {
-                    displayedMonth = Date()
+                    jumpToCurrentMonth()
                     activeSheet = .today
                 } label: {
                     todayPreviewCard
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 8)
+                .padding(.horizontal, todayPreviewEdgePadding)
+                .padding(.top, todayPreviewEdgePadding)
+                .padding(.bottom, todayPreviewBottomInsetCompensation)
             }
             .sheet(item: $activeSheet) { sheet in
                 switch sheet {
                 case let .day(date):
                     DayEditorView(date: date.startOfDayLocal(), settings: settings)
-                        .payScopeSheetSurface(accent: settings.themeAccent.color)
                 case .today:
                     TodayFocusView(settings: settings)
                         .presentationDetents([.fraction(0.65)])
@@ -90,7 +122,6 @@ struct CalendarTabView: View {
                         .payScopeSheetSurface(accent: settings.themeAccent.color)
                 case .settings:
                     SettingsTabView(settings: settings)
-                        .payScopeSheetSurface(accent: settings.themeAccent.color)
                 }
             }
             .sheet(isPresented: $showNetWageConfig) {
@@ -132,6 +163,13 @@ struct CalendarTabView: View {
                 .textCase(.uppercase)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
+                .id(displayedMonth.startOfMonthLocal())
+                .transition(
+                    .asymmetric(
+                        insertion: .move(edge: monthChangeDirection.monthInsertionEdge).combined(with: .opacity),
+                        removal: .move(edge: monthChangeDirection.monthRemovalEdge).combined(with: .opacity)
+                    )
+                )
 
             HStack(spacing: 12) {
                 calendarControlButton(systemImage: "chevron.left") {
@@ -164,6 +202,7 @@ struct CalendarTabView: View {
 
     private var monthSummaryBar: some View {
         let summary = displayedMonthSummary
+        let monthlyNetCents = monthlyNetCents(for: summary)
 
         return HStack(spacing: 8) {
             monthMetricChip(
@@ -190,12 +229,12 @@ struct CalendarTabView: View {
         }
     }
 
-    private var monthlyNetCents: Int {
-        Int((monthlyNetEuro * 100).rounded())
+    private func monthlyNetCents(for summary: TotalsSummary) -> Int {
+        Int((monthlyNetEuro(for: summary) * 100).rounded())
     }
 
-    private var monthlyNetEuro: Double {
-        let gross = Double(displayedMonthSummary.totalCents) / 100.0
+    private func monthlyNetEuro(for summary: TotalsSummary) -> Double {
+        let gross = Double(summary.totalCents) / 100.0
         let effectiveConfig = effectiveNetConfig(for: displayedMonth.startOfMonthLocal())
         let bonusSum = bonuses(from: effectiveConfig.bonusesCSV).reduce(0, +)
         return service.monthlyNetEuro(
@@ -280,11 +319,18 @@ struct CalendarTabView: View {
         let ordered = settings.weekStart == .monday ? Array(symbols[1...6] + [symbols[0]]) : symbols
 
         return HStack {
-            ForEach(ordered, id: \.self) { value in
+            ForEach(Array(ordered.enumerated()), id: \.offset) { index, value in
                 Text(value)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
+                    .opacity(weekdayColumnsVisible ? 1 : 0)
+                    .offset(x: weekdayColumnsVisible ? 0 : monthChangeDirection.weekdayColumnOffset)
+                    .animation(
+                        .easeOut(duration: weekdayColumnAnimationDuration)
+                            .delay(Double(monthChangeDirection.weekdayAnimationRank(for: index, total: ordered.count)) * weekdayColumnAnimationStagger),
+                        value: weekdayColumnsVisible
+                    )
             }
         }
     }
@@ -292,21 +338,50 @@ struct CalendarTabView: View {
     private var calendarGrid: some View {
         let dates = monthDates()
         let rowCount = max(1, Int(ceil(Double(dates.count) / 7.0)))
+        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
+        let dayResultsByDate = dayResultLookup(for: dates, entriesByDate: entriesByDate)
+        let holidayDateSet = holidayDates
+        let weekBadgesByDate = weekBadgeLookup(for: dates, entriesByDate: entriesByDate)
 
         return GeometryReader { geo in
             let spacing: CGFloat = 8
             let totalSpacing = spacing * CGFloat(max(0, rowCount - 1))
-            let cellHeight = max(86, (geo.size.height - totalSpacing) / CGFloat(rowCount))
+            let availableHeight = max(0, geo.size.height - totalSpacing)
+            let cellHeight = max(1, availableHeight / CGFloat(rowCount))
 
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: spacing), count: 7), spacing: spacing) {
-                ForEach(dates, id: \.self) { date in
-                    if Calendar.current.isDate(date, equalTo: displayedMonth, toGranularity: .month) {
-                        dayCell(for: date, height: cellHeight)
-                    } else if date > displayedMonthBounds.1 {
-                        adjacentMonthCell(for: date, height: cellHeight, isNextMonth: true)
-                    } else {
-                        adjacentMonthCell(for: date, height: cellHeight, isNextMonth: false)
+                ForEach(Array(dates.enumerated()), id: \.element) { index, date in
+                    let dayDate = date.startOfDayLocal()
+                    let entry = entriesByDate[dayDate]
+                    let isHoliday = holidayDateSet.contains(dayDate) || entry?.type == .holiday
+                    let weekBadgeData = shouldShowWeekBadge && index % 7 == 0
+                        ? weekBadgesByDate[dayDate]
+                        : nil
+                    let columnIndex = index % 7
+
+                    Group {
+                        if Calendar.current.isDate(date, equalTo: displayedMonth, toGranularity: .month) {
+                            dayCell(
+                                for: dayDate,
+                                height: cellHeight,
+                                entry: entry,
+                                result: dayResultsByDate[dayDate],
+                                isHoliday: isHoliday,
+                                weekBadgeData: weekBadgeData
+                            )
+                        } else if date > displayedMonthBounds.1 {
+                            adjacentMonthCell(for: dayDate, height: cellHeight, isNextMonth: true, weekBadgeData: weekBadgeData)
+                        } else {
+                            adjacentMonthCell(for: dayDate, height: cellHeight, isNextMonth: false, weekBadgeData: weekBadgeData)
+                        }
                     }
+                    .opacity(dayColumnsVisible ? 1 : 0)
+                    .offset(x: dayColumnsVisible ? 0 : monthChangeDirection.weekdayColumnOffset)
+                    .animation(
+                        .easeOut(duration: weekdayColumnAnimationDuration)
+                            .delay(Double(monthChangeDirection.weekdayAnimationRank(for: columnIndex, total: 7)) * weekdayColumnAnimationStagger),
+                        value: dayColumnsVisible
+                    )
                 }
             }
         }
@@ -316,8 +391,6 @@ struct CalendarTabView: View {
     private var calendarSurface: some View {
         ZStack {
             calendarGrid
-                .id(displayedMonth.startOfMonthLocal())
-                .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.985)), removal: .opacity))
         }
             .padding(.top, 2)
             .contentShape(Rectangle())
@@ -329,15 +402,25 @@ struct CalendarTabView: View {
             )
     }
 
-    private func dayCell(for date: Date, height: CGFloat) -> some View {
-        let dayDate = date.startOfDayLocal()
-        let entry = entries.first(where: { $0.date.isSameLocalDay(as: dayDate) })
-        let visibleEntry = entry.flatMap { $0.segments.isEmpty ? nil : $0 }
-        let result = visibleEntry.map { service.dayComputation(for: $0, allEntries: entries, settings: settings) }
+    private func dayCell(
+        for dayDate: Date,
+        height: CGFloat,
+        entry: DayEntry?,
+        result: ComputationResult?,
+        isHoliday: Bool,
+        weekBadgeData: WeekBadgeData?
+    ) -> some View {
+        let visibleEntry = entry.flatMap { isVisibleInCalendarCell($0) ? $0 : nil }
+        let hasSegments = (entry?.segments.isEmpty == false)
         let isToday = Calendar.current.isDateInToday(dayDate)
         let isWeekend = Calendar.current.isDateInWeekend(dayDate)
-        let isHoliday = holidayDates.contains(dayDate)
-        let isMutedDay = isWeekend || isHoliday
+        let categoryTint = categoryTintColor(for: visibleEntry?.type, isHoliday: isHoliday)
+        let dayBackgroundColors = dayCellBackgroundColors(
+            isWeekend: isWeekend,
+            isHoliday: isHoliday,
+            hasEntry: visibleEntry != nil,
+            categoryTint: categoryTint
+        )
         let numberTopPadding = max(8, (height * 0.38) - 24)
 
         return Button {
@@ -350,7 +433,13 @@ struct CalendarTabView: View {
             VStack(spacing: 0) {
                 Text("\(Calendar.current.component(.day, from: dayDate))")
                     .font(.system(size: 26, weight: .semibold, design: .rounded))
-                    .foregroundStyle(isMutedDay ? .secondary : .primary)
+                    .foregroundStyle(
+                        dayNumberForegroundColor(
+                            isWeekend: isWeekend,
+                            isHoliday: isHoliday,
+                            categoryTint: categoryTint
+                        )
+                    )
                     .padding(.top, numberTopPadding)
 
                 Spacer(minLength: 2)
@@ -381,16 +470,7 @@ struct CalendarTabView: View {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(
                         LinearGradient(
-                            colors: isMutedDay
-                            ? [
-                                Color(.tertiarySystemFill).opacity(0.86),
-                                Color(.secondarySystemFill).opacity(0.76)
-                            ]
-                            : [
-                                Color(.secondarySystemBackground).opacity(0.95),
-                                settings.themeAccent.color.opacity(visibleEntry == nil ? 0.06 : 0.14),
-                                Color(.systemBackground).opacity(0.98)
-                            ],
+                            colors: dayBackgroundColors,
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -400,6 +480,13 @@ struct CalendarTabView: View {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(.white.opacity(0.2), lineWidth: 0.9)
             )
+            .overlay(alignment: .topLeading) {
+                if let weekBadgeData {
+                    weekBadgeView(weekBadgeData, muted: isWeekend && !isHoliday)
+                        .padding(.top, 7)
+                        .padding(.leading, 7)
+                }
+            }
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(
@@ -417,13 +504,130 @@ struct CalendarTabView: View {
         .buttonStyle(.plain)
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .onLongPressGesture(minimumDuration: 0.6) {
-            guard visibleEntry != nil else { return }
+            guard hasSegments else { return }
             longPressTriggeredDate = dayDate
             deleteCandidateDate = dayDate
         }
     }
 
-    private func adjacentMonthCell(for date: Date, height: CGFloat, isNextMonth: Bool) -> some View {
+    private func dayResultLookup(
+        for dates: [Date],
+        entriesByDate: [Date: DayEntry]
+    ) -> [Date: ComputationResult] {
+        var lookup: [Date: ComputationResult] = [:]
+
+        for date in dates where Calendar.current.isDate(date, equalTo: displayedMonth, toGranularity: .month) {
+            let dayDate = date.startOfDayLocal()
+            guard let entry = entriesByDate[dayDate], isVisibleInCalendarCell(entry) else {
+                continue
+            }
+            lookup[dayDate] = service.dayComputation(
+                for: entry,
+                entriesByDate: entriesByDate,
+                settings: settings
+            )
+        }
+
+        return lookup
+    }
+
+    private func weekBadgeLookup(
+        for dates: [Date],
+        entriesByDate: [Date: DayEntry]
+    ) -> [Date: WeekBadgeData] {
+        guard shouldShowWeekBadge else { return [:] }
+        var lookup: [Date: WeekBadgeData] = [:]
+
+        for index in stride(from: 0, to: dates.count, by: 7) {
+            let dayDate = dates[index].startOfDayLocal()
+            lookup[dayDate] = weekBadgeData(for: dayDate, entriesByDate: entriesByDate)
+        }
+
+        return lookup
+    }
+
+    private func isVisibleInCalendarCell(_ entry: DayEntry) -> Bool {
+        if !entry.segments.isEmpty { return true }
+        if (entry.manualWorkedSeconds ?? 0) > 0 { return true }
+        if (entry.creditedOverrideSeconds ?? 0) > 0 { return true }
+        if entry.type != .work { return true }
+        return !entry.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func dayCellBackgroundColors(
+        isWeekend: Bool,
+        isHoliday: Bool,
+        hasEntry: Bool,
+        categoryTint: Color?
+    ) -> [Color] {
+        if isWeekend && isHoliday {
+            return [
+                Color(.tertiarySystemFill).opacity(0.84),
+                Color.orange.opacity(0.18),
+                Color(.secondarySystemFill).opacity(0.72)
+            ]
+        }
+
+        if isHoliday {
+            return [
+                Color.orange.opacity(0.2),
+                Color.orange.opacity(0.09),
+                Color(.secondarySystemBackground).opacity(0.94)
+            ]
+        }
+
+        if let categoryTint {
+            if isWeekend {
+                return [
+                    Color(.tertiarySystemFill).opacity(0.84),
+                    categoryTint.opacity(0.16),
+                    Color(.secondarySystemFill).opacity(0.74)
+                ]
+            }
+
+            return [
+                categoryTint.opacity(0.2),
+                categoryTint.opacity(0.09),
+                Color(.secondarySystemBackground).opacity(0.94)
+            ]
+        }
+
+        if isWeekend {
+            return [
+                Color(.tertiarySystemFill).opacity(0.86),
+                Color(.secondarySystemFill).opacity(0.76)
+            ]
+        }
+
+        return [
+            Color(.secondarySystemBackground).opacity(0.95),
+            settings.themeAccent.color.opacity(hasEntry ? 0.14 : 0.06),
+            Color(.systemBackground).opacity(0.98)
+        ]
+    }
+
+    private func dayNumberForegroundColor(
+        isWeekend: Bool,
+        isHoliday: Bool,
+        categoryTint: Color?
+    ) -> Color {
+        if isHoliday {
+            return .orange
+        }
+        if let categoryTint {
+            return categoryTint
+        }
+        return isWeekend ? .secondary : .primary
+    }
+
+    private func categoryTintColor(for dayType: DayType?, isHoliday: Bool) -> Color? {
+        if isHoliday {
+            return .orange
+        }
+        return dayType?.tint
+    }
+
+    private func adjacentMonthCell(for date: Date, height: CGFloat, isNextMonth: Bool, weekBadgeData: WeekBadgeData?) -> some View {
         let dayDate = date.startOfDayLocal()
         let fillOpacity: Double = isNextMonth ? 0.38 : 0.24
         let textOpacity: Double = isNextMonth ? 0.34 : 0.5
@@ -453,6 +657,13 @@ struct CalendarTabView: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(.white.opacity(0.18), lineWidth: 0.8)
         )
+        .overlay(alignment: .topLeading) {
+            if let weekBadgeData {
+                weekBadgeView(weekBadgeData, muted: true)
+                    .padding(.top, 7)
+                    .padding(.leading, 7)
+            }
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.gray.opacity(isNextMonth ? 0.22 : 0.14), lineWidth: 1)
@@ -460,37 +671,100 @@ struct CalendarTabView: View {
     }
 
     private func germanMonthYear(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "de_DE")
-        formatter.dateFormat = "MMMM yyyy"
-        return formatter.string(from: date)
+        Self.monthYearFormatter.string(from: date)
+    }
+
+    private var shouldShowWeekBadge: Bool {
+        settings.effectiveShowCalendarWeekNumbers ||
+        settings.effectiveShowCalendarWeekHours ||
+        settings.effectiveShowCalendarWeekPay
+    }
+
+    private func weekBadgeData(
+        for date: Date,
+        entriesByDate: [Date: DayEntry]
+    ) -> WeekBadgeData {
+        let day = date.startOfDayLocal()
+        let weekStart = service.weekStartDate(for: day, weekStart: settings.weekStart)
+        let weekEnd = weekStart.addingDays(6)
+        let summary = service.periodSummary(
+            entries: entries,
+            entriesByDate: entriesByDate,
+            from: weekStart,
+            to: weekEnd,
+            settings: settings
+        )
+
+        let weekNumber = settings.effectiveShowCalendarWeekNumbers
+            ? calendarWeekNumber(for: weekStart)
+            : nil
+
+        var detailParts: [String] = []
+        if settings.effectiveShowCalendarWeekHours {
+            detailParts.append("\(PayScopeFormatters.hhmmString(seconds: summary.totalSeconds)) h")
+        }
+        if settings.effectiveShowCalendarWeekPay {
+            detailParts.append(shortCurrency(cents: summary.totalCents))
+        }
+
+        return WeekBadgeData(
+            weekNumber: weekNumber,
+            detailText: detailParts.isEmpty ? nil : detailParts.joined(separator: " · ")
+        )
+    }
+
+    private func calendarWeekNumber(for date: Date) -> Int {
+        var calendar = Calendar.current
+        calendar.firstWeekday = settings.weekStart == .sunday ? 1 : 2
+        return calendar.component(.weekOfYear, from: date.startOfDayLocal(calendar: calendar))
+    }
+
+    private func weekBadgeView(_ data: WeekBadgeData, muted: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            if let weekNumber = data.weekNumber {
+                Text("KW \(weekNumber)")
+            }
+            if let detailText = data.detailText {
+                Text(detailText)
+            }
+        }
+        .font(.caption2.weight(.semibold))
+        .lineLimit(1)
+        .foregroundStyle(muted ? .secondary : settings.themeAccent.color)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill((muted ? Color.secondary : settings.themeAccent.color).opacity(0.12))
+        )
     }
 
     @ViewBuilder
     private func cellMetric(for entry: DayEntry, result: ComputationResult?) -> some View {
+        let hasShiftDeviation = entry.creditedOverrideSeconds != nil
         let typeIcon = Image(systemName: entry.type.icon)
             .font(.caption2)
             .foregroundStyle(entry.type.tint)
+        let categoryIconRow = HStack(spacing: 4) {
+            typeIcon
+            if hasShiftDeviation {
+                Image(systemName: "pencil")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
+        }
 
         switch settings.calendarCellDisplayMode ?? .dot {
         case .dot:
-            typeIcon
+            categoryIconRow
         case .hours:
-            let seconds: Int = {
-                guard let result else { return 0 }
-                switch result {
-                case let .ok(valueSeconds, _), let .warning(valueSeconds, _, _):
-                    return valueSeconds
-                case .error:
-                    return 0
-                }
-            }()
+            let seconds = calendarCellHoursSeconds(for: entry, result: result)
             VStack(spacing: 2) {
+                categoryIconRow
                 Text(PayScopeFormatters.hhmmString(seconds: seconds))
                     .font(.caption2.bold())
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                typeIcon
             }
         case .pay:
             let cents: Int = {
@@ -503,21 +777,43 @@ struct CalendarTabView: View {
                 }
             }()
             VStack(spacing: 2) {
+                categoryIconRow
                 Text(shortCurrency(cents: cents))
                     .font(.caption2.bold())
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                typeIcon
             }
         }
     }
 
+    private func calendarCellHoursSeconds(for entry: DayEntry, result: ComputationResult?) -> Int {
+        switch settings.effectiveCalendarHoursBreakMode {
+        case .withoutBreak:
+            return secondsFromResult(result)
+        case .withBreak:
+            let grossFromSegments = entry.segments.reduce(0) { partial, segment in
+                partial + max(0, Int(segment.end.timeIntervalSince(segment.start)))
+            }
+            if grossFromSegments > 0 {
+                return grossFromSegments
+            }
+            return secondsFromResult(result)
+        }
+    }
+
+    private func secondsFromResult(_ result: ComputationResult?) -> Int {
+        guard let result else { return 0 }
+        switch result {
+        case let .ok(valueSeconds, _), let .warning(valueSeconds, _, _):
+            return valueSeconds
+        case .error:
+            return 0
+        }
+    }
+
     private func shortCurrency(cents: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.maximumFractionDigits = 0
         let value = NSNumber(value: Double(cents) / 100)
-        return formatter.string(from: value) ?? "0"
+        return Self.compactCurrencyFormatter.string(from: value) ?? "0"
     }
 
     private func monthDates() -> [Date] {
@@ -542,6 +838,16 @@ struct CalendarTabView: View {
         guard let existing = entries.first(where: { $0.date.isSameLocalDay(as: date.startOfDayLocal()) }) else { return }
         existing.segments.removeAll()
         modelContext.persistIfPossible()
+        exportICloudSnapshot()
+    }
+
+    private func exportICloudSnapshot() {
+        ICloudSettingsSync.export(
+            settings: settings,
+            entries: entries,
+            netWageConfigs: netConfigs,
+            holidayDays: importedHolidays
+        )
     }
 
     private var holidayImportTaskKey: String {
@@ -552,7 +858,7 @@ struct CalendarTabView: View {
     }
 
     private var normalizedHolidayCountryCode: String? {
-        normalizeCode(settings.holidayCountryCode)
+        normalizeCode(settings.holidayCountryCode) ?? "DE"
     }
 
     private var normalizedHolidaySubdivisionCode: String? {
@@ -636,28 +942,79 @@ struct CalendarTabView: View {
     }
 
     private func shiftDisplayedMonth(by delta: Int) {
-        withAnimation(.easeInOut(duration: 0.22)) {
+        guard delta != 0 else { return }
+        monthChangeDirection = delta > 0 ? .next : .previous
+
+        withAnimation(monthChangeAnimation) {
             displayedMonth = Calendar.current.date(byAdding: .month, value: delta, to: displayedMonth) ?? displayedMonth
+        }
+        triggerMonthChangeAnimations()
+    }
+
+    private func jumpToCurrentMonth() {
+        let currentMonth = displayedMonth.startOfMonthLocal()
+        let targetMonth = Date().startOfMonthLocal()
+        guard !currentMonth.isSameLocalDay(as: targetMonth) else {
+            displayedMonth = Date()
+            return
+        }
+
+        monthChangeDirection = targetMonth > currentMonth ? .next : .previous
+        withAnimation(monthChangeAnimation) {
+            displayedMonth = targetMonth
+        }
+        triggerMonthChangeAnimations()
+    }
+
+    private func triggerMonthChangeAnimations() {
+        withTransaction(Transaction(animation: nil)) {
+            weekdayColumnsVisible = false
+            dayColumnsVisible = false
+        }
+        DispatchQueue.main.async {
+            weekdayColumnsVisible = true
+            dayColumnsVisible = true
         }
     }
 
     private var todayPreviewCard: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(PayScopeFormatters.day.string(from: todayStart))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.9))
+        let cardCornerRadius = todayPreviewCornerRadius
 
-                HStack(spacing: 10) {
-                    Image(systemName: todayShiftIcon)
-                        .font(.subheadline.weight(.bold))
-                        .frame(width: 28, height: 28)
-                        .background(.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 0) {
+                    Text("Heute • ")
+                        .foregroundStyle(settings.themeAccent.color.opacity(0.94))
+
+                    Text(PayScopeFormatters.day.string(from: todayStart))
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+
+                HStack(spacing: 8) {
+                    HStack(spacing: 4) {
+                        Image(systemName: todayShiftIcon)
+                            .font(.subheadline.weight(.bold))
+                            .frame(width: 24, height: 24)
+                            .foregroundStyle(settings.themeAccent.color)
+                            .background(
+                                settings.themeAccent.color.opacity(0.16),
+                                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            )
+                        if todayHasShiftDeviation {
+                            Image(systemName: "pencil")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
 
                     Text(todayWorkedDisplay)
-                        .font(.system(.title3, design: .rounded).weight(.bold))
+                        .font(.system(.headline, design: .rounded).weight(.bold))
                         .monospacedDigit()
                         .lineLimit(1)
+                        .foregroundStyle(.primary)
                 }
             }
 
@@ -667,30 +1024,51 @@ struct CalendarTabView: View {
                 progress: todayShiftCompletionFraction,
                 accent: settings.themeAccent.color
             )
-            .frame(width: 35, height: 35)
+            .frame(width: 30, height: 30)
         }
-        .foregroundStyle(.white)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [settings.themeAccent.color.opacity(0.65), settings.themeAccent.color.opacity(0.45)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        )
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: cardCornerRadius, emphasis: 0.36)
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(.white.opacity(0.28), lineWidth: 1)
+            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+                .stroke(settings.themeAccent.color.opacity(0.34), lineWidth: 1.2)
         )
-        .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 6)
+        .shadow(color: settings.themeAccent.color.opacity(0.18), radius: 10, x: 0, y: 5)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Heute Vorschau")
         .accessibilityValue("\(todayWorkedDisplay), \(todayShiftCompletionPercent)% der Schichtlänge")
+    }
+
+    private var todayPreviewCornerRadius: CGFloat {
+        deviceDisplayCornerRadius + todayPreviewEdgePadding
+    }
+
+    private var todayPreviewBottomInsetCompensation: CGFloat {
+        todayPreviewEdgePadding - deviceBottomSafeAreaInset
+    }
+
+    private var deviceDisplayCornerRadius: CGFloat {
+        guard let keyWindow else {
+            return 0
+        }
+
+        let windowCornerRadius = keyWindow.layer.cornerRadius
+        if windowCornerRadius > 0 {
+            return windowCornerRadius
+        }
+        return max(0, deviceBottomSafeAreaInset)
+    }
+
+    private var deviceBottomSafeAreaInset: CGFloat {
+        keyWindow?.safeAreaInsets.bottom ?? 0
+    }
+
+    private var keyWindow: UIWindow? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)
     }
 
     private var todayStart: Date {
@@ -703,6 +1081,10 @@ struct CalendarTabView: View {
 
     private var todayShiftIcon: String {
         todayEntry?.type.icon ?? "calendar.badge.clock"
+    }
+
+    private var todayHasShiftDeviation: Bool {
+        todayEntry?.creditedOverrideSeconds != nil
     }
 
     private var todayWorkedDisplay: String {
@@ -767,6 +1149,52 @@ struct CalendarTabView: View {
             return partial + max(0, elapsedSeconds - elapsedBreak)
         }
     }
+}
+
+private enum MonthChangeDirection {
+    case next
+    case previous
+
+    var monthInsertionEdge: Edge {
+        switch self {
+        case .next:
+            return .trailing
+        case .previous:
+            return .leading
+        }
+    }
+
+    var monthRemovalEdge: Edge {
+        switch self {
+        case .next:
+            return .leading
+        case .previous:
+            return .trailing
+        }
+    }
+
+    var weekdayColumnOffset: CGFloat {
+        switch self {
+        case .next:
+            return 12
+        case .previous:
+            return -12
+        }
+    }
+
+    func weekdayAnimationRank(for index: Int, total: Int) -> Int {
+        switch self {
+        case .next:
+            return max(0, total - index - 1)
+        case .previous:
+            return index
+        }
+    }
+}
+
+private struct WeekBadgeData {
+    let weekNumber: Int?
+    let detailText: String?
 }
 
 private enum CalendarSheet: Identifiable {

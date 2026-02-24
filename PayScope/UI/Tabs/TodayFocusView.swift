@@ -153,7 +153,14 @@ struct TodayFocusView: View {
                     .font(.system(.title3, design: .rounded).weight(.bold))
             }
             Spacer()
-            Label(todayTypeLabel, systemImage: todayTypeIcon)
+            HStack(spacing: 5) {
+                Image(systemName: todayTypeIcon)
+                if todayHasShiftDeviation {
+                    Image(systemName: "pencil")
+                        .font(.caption2.weight(.bold))
+                }
+                Text(todayTypeLabel)
+            }
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(todayTypeColor)
                 .padding(.horizontal, 10)
@@ -211,6 +218,10 @@ struct TodayFocusView: View {
             return today.type.tint
         }
         return nextEntry != nil ? settings.themeAccent.color : .secondary
+    }
+
+    private var todayHasShiftDeviation: Bool {
+        todayEntry?.creditedOverrideSeconds != nil
     }
 
     private var pauseBlocksCount: Int {

@@ -5,6 +5,21 @@ import ActivityKit
 @main
 struct PayScopeApp: App {
     var sharedModelContainer: ModelContainer = {
+        let fileManager = FileManager.default
+        do {
+            let applicationSupportURL = try fileManager.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+            try fileManager.createDirectory(at: applicationSupportURL, withIntermediateDirectories: true)
+        } catch {
+            #if DEBUG
+            print("Failed to ensure Application Support directory: \(error)")
+            #endif
+        }
+
         let schema = Schema([
             DayEntry.self,
             TimeSegment.self,
@@ -13,12 +28,43 @@ struct PayScopeApp: App {
             HolidayCalendarDay.self
         ])
 
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        let localFallbackConfiguration = ModelConfiguration(
+            "PayScope",
+            schema: schema,
+            isStoredInMemoryOnly: false,
+            cloudKitDatabase: .none
+        )
+        let isolatedLocalConfiguration = ModelConfiguration(
+            "PayScopeLocalFallback",
+            schema: schema,
+            isStoredInMemoryOnly: false,
+            cloudKitDatabase: .none
+        )
+        let inMemoryConfiguration = ModelConfiguration(
+            "PayScopeInMemoryFallback",
+            schema: schema,
+            isStoredInMemoryOnly: true,
+            cloudKitDatabase: .none
+        )
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            return try ModelContainer(for: schema, configurations: [localFallbackConfiguration])
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            #if DEBUG
+            print("Local ModelContainer failed, trying isolated local store: \(error)")
+            #endif
+            do {
+                return try ModelContainer(for: schema, configurations: [isolatedLocalConfiguration])
+            } catch {
+                #if DEBUG
+                print("Isolated local ModelContainer failed, using in-memory fallback: \(error)")
+                #endif
+                do {
+                    return try ModelContainer(for: schema, configurations: [inMemoryConfiguration])
+                } catch {
+                    preconditionFailure("Could not create any ModelContainer configuration: \(error)")
+                }
+            }
         }
     }()
 
@@ -77,16 +123,28 @@ enum PayScopeLiveActivityManager {
             staleDate: payload.staleDate
         )
 
-        if let existing = Activity<PayScope_WidgetsAttributes>.activities.first {
-            await existing.update(content)
-            return
-        }
-
         let attributes = PayScope_WidgetsAttributes(
             title: payload.title,
             timelineStart: payload.timelineStart,
             timelineEnd: payload.timelineEnd
         )
+
+        if let existing = Activity<PayScope_WidgetsAttributes>.activities.first {
+            if existing.attributes.title != attributes.title ||
+                existing.attributes.timelineStart != attributes.timelineStart ||
+                existing.attributes.timelineEnd != attributes.timelineEnd {
+                await existing.end(nil, dismissalPolicy: .immediate)
+                _ = try? Activity.request(
+                    attributes: attributes,
+                    content: content,
+                    pushType: nil
+                )
+                return
+            }
+
+            await existing.update(content)
+            return
+        }
 
         _ = try? Activity.request(
             attributes: attributes,
@@ -242,7 +300,7 @@ enum PayScopeLiveActivityManager {
     private static func shiftIcon(for type: DayType?) -> String {
         switch type {
         case .manual:
-            return "sparkles"
+            return "square.and.pencil"
         case .vacation:
             return "sun.max.fill"
         case .holiday:

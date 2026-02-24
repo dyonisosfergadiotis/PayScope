@@ -198,7 +198,7 @@ extension PayScope_WidgetsAttributes.ContentState {
         PayScope_WidgetsAttributes.ContentState(
             workedTodaySeconds: 6 * 3600 + 40 * 60,
             workedReferenceStart: .now.addingTimeInterval(-(6 * 3600 + 40 * 60)),
-            shiftCategoryIcon: "sparkles",
+            shiftCategoryIcon: "square.and.pencil",
             themeAccentRawValue: "green",
             isCompleted: true,
             completedPayCents: 18640,

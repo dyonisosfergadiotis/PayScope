@@ -24,7 +24,7 @@ enum DayType: String, Codable, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .work: return "briefcase.fill"
-        case .manual: return "sparkles"
+        case .manual: return "square.and.pencil"
         case .vacation: return "sun.max.fill"
         case .holiday: return "flag.fill"
         case .sick: return "cross.case.fill"
@@ -84,6 +84,20 @@ enum HolidayCreditingMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum VacationCreditingMode: String, Codable, CaseIterable, Identifiable {
+    case lookback13Weeks
+    case fixedValue
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .lookback13Weeks: return "Folgt 13-Wochen-Regel"
+        case .fixedValue: return "Hat festen Wert"
+        }
+    }
+}
+
 enum ThemeAccent: String, Codable, CaseIterable, Identifiable {
     case system
     case blue
@@ -129,6 +143,20 @@ enum CalendarCellDisplayMode: String, Codable, CaseIterable, Identifiable {
         case .dot: return "Icon"
         case .hours: return "Stunden"
         case .pay: return "Geld"
+        }
+    }
+}
+
+enum CalendarHoursBreakMode: String, Codable, CaseIterable, Identifiable {
+    case withoutBreak
+    case withBreak
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .withoutBreak: return "Ohne Pause"
+        case .withBreak: return "Mit Pause"
         }
     }
 }
@@ -186,16 +214,24 @@ final class Settings {
     var weeklyTargetSeconds: Int?
     var weekStart: WeekStart
     var vacationLookbackCount: Int
+    var vacationCreditingMode: VacationCreditingMode?
+    var vacationFixedSeconds: Int?
     var countMissingAsZero: Bool
     var strictHistoryRequired: Bool
     var holidayCreditingMode: HolidayCreditingMode
     var scheduledWorkdaysCount: Int
     var themeAccent: ThemeAccent
     var calendarCellDisplayMode: CalendarCellDisplayMode?
+    var calendarHoursBreakMode: CalendarHoursBreakMode?
+    var showCalendarWeekNumbers: Bool?
+    var showCalendarWeekHours: Bool?
+    var showCalendarWeekPay: Bool?
     var timelineMinMinute: Int?
     var timelineMaxMinute: Int?
     var holidayCountryCode: String?
     var holidaySubdivisionCode: String?
+    var markPaidHolidays: Bool?
+    var paidHolidayWeekdayMask: Int?
     var netWageTaxPercent: Double?
     var netPensionPercent: Double?
     var netMonthlyAllowanceEuro: Double?
@@ -209,16 +245,24 @@ final class Settings {
         weeklyTargetSeconds: Int? = nil,
         weekStart: WeekStart = .monday,
         vacationLookbackCount: Int = 13,
+        vacationCreditingMode: VacationCreditingMode = .lookback13Weeks,
+        vacationFixedSeconds: Int? = nil,
         countMissingAsZero: Bool = true,
         strictHistoryRequired: Bool = true,
         holidayCreditingMode: HolidayCreditingMode = .zero,
         scheduledWorkdaysCount: Int = 5,
         themeAccent: ThemeAccent = .system,
         calendarCellDisplayMode: CalendarCellDisplayMode? = .dot,
+        calendarHoursBreakMode: CalendarHoursBreakMode = .withoutBreak,
+        showCalendarWeekNumbers: Bool = false,
+        showCalendarWeekHours: Bool = false,
+        showCalendarWeekPay: Bool = false,
         timelineMinMinute: Int? = 6 * 60,
         timelineMaxMinute: Int? = 22 * 60,
         holidayCountryCode: String? = "DE",
         holidaySubdivisionCode: String? = nil,
+        markPaidHolidays: Bool = false,
+        paidHolidayWeekdayMask: Int? = nil,
         netWageTaxPercent: Double? = nil,
         netPensionPercent: Double? = nil,
         netMonthlyAllowanceEuro: Double? = nil,
@@ -231,20 +275,109 @@ final class Settings {
         self.weeklyTargetSeconds = weeklyTargetSeconds
         self.weekStart = weekStart
         self.vacationLookbackCount = vacationLookbackCount
+        self.vacationCreditingMode = vacationCreditingMode
+        self.vacationFixedSeconds = vacationFixedSeconds.map { max(0, $0) }
         self.countMissingAsZero = countMissingAsZero
         self.strictHistoryRequired = strictHistoryRequired
         self.holidayCreditingMode = holidayCreditingMode
         self.scheduledWorkdaysCount = min(max(scheduledWorkdaysCount, 1), 7)
         self.themeAccent = themeAccent
         self.calendarCellDisplayMode = calendarCellDisplayMode
+        self.calendarHoursBreakMode = calendarHoursBreakMode
+        self.showCalendarWeekNumbers = showCalendarWeekNumbers
+        self.showCalendarWeekHours = showCalendarWeekHours
+        self.showCalendarWeekPay = showCalendarWeekPay
         self.timelineMinMinute = timelineMinMinute
         self.timelineMaxMinute = timelineMaxMinute
         self.holidayCountryCode = holidayCountryCode
         self.holidaySubdivisionCode = holidaySubdivisionCode
+        self.markPaidHolidays = markPaidHolidays
+        self.paidHolidayWeekdayMask = Settings.sanitizedWeekdayMask(paidHolidayWeekdayMask)
         self.netWageTaxPercent = netWageTaxPercent
         self.netPensionPercent = netPensionPercent
         self.netMonthlyAllowanceEuro = netMonthlyAllowanceEuro
         self.netBonusesCSV = netBonusesCSV
+    }
+}
+
+extension Settings {
+    var effectiveVacationCreditingMode: VacationCreditingMode {
+        vacationCreditingMode ?? .lookback13Weeks
+    }
+
+    var effectiveVacationFixedSeconds: Int {
+        max(0, vacationFixedSeconds ?? 0)
+    }
+
+    var effectiveCalendarHoursBreakMode: CalendarHoursBreakMode {
+        calendarHoursBreakMode ?? .withoutBreak
+    }
+
+    var effectiveShowCalendarWeekNumbers: Bool {
+        showCalendarWeekNumbers ?? false
+    }
+
+    var effectiveShowCalendarWeekHours: Bool {
+        showCalendarWeekHours ?? false
+    }
+
+    var effectiveShowCalendarWeekPay: Bool {
+        showCalendarWeekPay ?? false
+    }
+
+    var effectiveMarkPaidHolidays: Bool {
+        markPaidHolidays ?? false
+    }
+
+    var effectivePaidHolidayWeekdayMask: Int {
+        let fallbackMask = Self.defaultWeekdayMask(
+            weekStart: weekStart,
+            scheduledWorkdaysCount: scheduledWorkdaysCount
+        )
+        return Self.sanitizedWeekdayMask(paidHolidayWeekdayMask) ?? fallbackMask
+    }
+
+    func isPaidHolidayWeekday(_ date: Date, calendar: Calendar = .current) -> Bool {
+        let weekday = calendar.component(.weekday, from: date.startOfDayLocal(calendar: calendar))
+        return isPaidHolidayWeekday(weekday: weekday)
+    }
+
+    func isPaidHolidayWeekday(weekday: Int) -> Bool {
+        guard (1...7).contains(weekday) else { return false }
+        let bit = 1 << (weekday - 1)
+        return (effectivePaidHolidayWeekdayMask & bit) != 0
+    }
+
+    func updatingPaidHolidayWeekdayMask(weekday: Int, isSelected: Bool) -> Int {
+        guard (1...7).contains(weekday) else {
+            return effectivePaidHolidayWeekdayMask
+        }
+        let bit = 1 << (weekday - 1)
+        var mask = effectivePaidHolidayWeekdayMask
+        if isSelected {
+            mask |= bit
+        } else {
+            mask &= ~bit
+        }
+        return Self.sanitizedWeekdayMask(mask) ?? 0
+    }
+
+    private static func sanitizedWeekdayMask(_ value: Int?) -> Int? {
+        guard let value else { return nil }
+        return value & 0b1111111
+    }
+
+    private static func defaultWeekdayMask(weekStart: WeekStart, scheduledWorkdaysCount: Int) -> Int {
+        let count = min(max(scheduledWorkdaysCount, 1), 7)
+        let orderedWeekdays = weekStart == .sunday
+            ? [1, 2, 3, 4, 5, 6, 7]
+            : [2, 3, 4, 5, 6, 7, 1]
+
+        var mask = 0
+        for weekday in orderedWeekdays.prefix(count) {
+            mask |= (1 << (weekday - 1))
+        }
+        return mask
     }
 }
 
