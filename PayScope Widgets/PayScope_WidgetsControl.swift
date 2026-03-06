@@ -98,7 +98,7 @@ struct StartTimerIntent: SetValueIntent {
                 workedTodaySeconds: 0,
                 workedReferenceStart: now,
                 shiftCategoryIcon: "briefcase.fill",
-                themeAccentRawValue: "system",
+                themeAccentRawValue: "blue",
                 isCompleted: false,
                 completedPayCents: 0,
                 nextShiftStart: nil,

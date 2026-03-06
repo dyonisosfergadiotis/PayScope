@@ -53,24 +53,10 @@ struct HolidayImportService {
         }
     }
 
-    private static let plainDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
-
-    private static let isoDateFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
-
-    private static let isoDateFormatterFractional: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
+    private static let utcCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
     }()
 
     @MainActor
@@ -120,6 +106,39 @@ struct HolidayImportService {
 
         modelContext.persistIfPossible()
         return insertedCount
+    }
+
+    @MainActor
+    func fetchHolidayCalendarDays(
+        year: Int,
+        countryCode: String?,
+        subdivisionCode: String?
+    ) async throws -> [HolidayCalendarDay] {
+        guard let normalizedCountry = normalize(countryCode), normalizedCountry.count == 2 else {
+            throw HolidayImportError.invalidCountryCode
+        }
+        let normalizedSubdivision = normalize(subdivisionCode)
+        let items = try await fetch(year: year, countryCode: normalizedCountry)
+        let filtered = filter(items: items, countryCode: normalizedCountry, subdivisionCode: normalizedSubdivision)
+
+        var result: [HolidayCalendarDay] = []
+        var seenKeys = Set<String>()
+        for item in filtered {
+            guard let date = parse(dateString: item.date) else { continue }
+            let key = HolidayCalendarDay.makeKey(date: date, countryCode: normalizedCountry, subdivisionCode: normalizedSubdivision)
+            if seenKeys.contains(key) { continue }
+            seenKeys.insert(key)
+            let day = HolidayCalendarDay(
+                date: date,
+                localName: item.localName,
+                countryCode: normalizedCountry,
+                subdivisionCode: normalizedSubdivision,
+                sourceYear: year
+            )
+            result.append(day)
+        }
+
+        return result
     }
 
     private func fetch(year: Int, countryCode: String) async throws -> [HolidayAPIItem] {
@@ -194,19 +213,19 @@ struct HolidayImportService {
     }
 
     private func parse(dateString: String) -> Date? {
-        if let date = Self.plainDateFormatter.date(from: dateString) {
-            return date.startOfDayLocal()
+        let prefix = String(dateString.prefix(10))
+        let parts = prefix.split(separator: "-")
+        guard
+            parts.count == 3,
+            let year = Int(parts[0]),
+            let month = Int(parts[1]),
+            let day = Int(parts[2])
+        else {
+            return nil
         }
-        if let date = Self.isoDateFormatterFractional.date(from: dateString) ?? Self.isoDateFormatter.date(from: dateString) {
-            return date.startOfDayLocal()
-        }
-        if dateString.count >= 10 {
-            let prefix = String(dateString.prefix(10))
-            if let date = Self.plainDateFormatter.date(from: prefix) {
-                return date.startOfDayLocal()
-            }
-        }
-        return nil
+
+        let components = DateComponents(year: year, month: month, day: day)
+        return Self.utcCalendar.date(from: components)
     }
 
     private func normalizedSubdivisionCode(_ value: String, countryCode: String) -> String {

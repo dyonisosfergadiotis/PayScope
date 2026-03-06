@@ -1,13 +1,19 @@
 import SwiftUI
-import SwiftData
 import Combine
-import UIKit
+import SwiftData
 
 struct CalendarTabView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query(sort: \DayEntry.date) private var entries: [DayEntry]
-    @Query(sort: \NetWageMonthConfig.monthStart) private var netConfigs: [NetWageMonthConfig]
-    @Query(sort: \HolidayCalendarDay.date) private var importedHolidays: [HolidayCalendarDay]
+    private enum DataLoadMode: Equatable {
+        case localOnly
+        case fullSync
+    }
+
+    @EnvironmentObject private var cloudKitService: CloudKitService
+    @Environment(\.scenePhase) private var scenePhase
+    private let localStore = LocalDayEntryStore.shared
+    @State private var entries: [DayEntry] = []
+    @State private var netConfigs: [NetWageMonthConfig] = []
+    @State private var importedHolidays: [HolidayCalendarDay] = []
     @Bindable var settings: Settings
     let isOffline: Bool
 
@@ -19,19 +25,40 @@ struct CalendarTabView: View {
     @State private var longPressTriggeredDate: Date?
     @State private var holidayImportKeys: Set<String> = []
     @State private var now = Date()
-    @State private var monthChangeDirection: MonthChangeDirection = .next
-    @State private var weekdayColumnsVisible = true
     @State private var dayColumnsVisible = true
+    @State private var dayFlipDirection: DayFlipDirection = .fromRightToLeft
+    @State private var toolbarContainerWidth: CGFloat = 0
+    @State private var isRefreshingCloud = false
+    @State private var isLoadingData = false
+    @State private var pendingLoadAfterCurrentCycle = false
+    @State private var showUnsyncedIndicator = false
+
+    @State private var notificationCancellable: AnyCancellable?
+    @State private var isInitialLoading = true
+    @State private var initialLoadTask: Task<Void, Never>?
 
     private let service = CalculationService()
     private let holidayImporter = HolidayImportService()
     private let previewRefreshTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     private let calendarContentHorizontalPadding: CGFloat = 16
-    private let todayPreviewEdgePadding: CGFloat = 5
+    private let calendarBottomToolbarSpacerHeight: CGFloat = 12
     private static let monthYearFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "de_DE")
         formatter.dateFormat = "MMMM yyyy"
+        return formatter
+    }()
+    private static let monthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "MMMM"
+        return formatter
+    }()
+
+    private static let yearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "yyyy"
         return formatter
     }()
     private static let compactCurrencyFormatter: NumberFormatter = {
@@ -40,9 +67,9 @@ struct CalendarTabView: View {
         formatter.maximumFractionDigits = 0
         return formatter
     }()
-    private let monthChangeAnimation = Animation.easeInOut(duration: 0.24)
-    private let weekdayColumnAnimationDuration: Double = 0.18
-    private let weekdayColumnAnimationStagger: Double = 0.035
+    private let dayColumnFlipDuration: Double = 0.3
+    private let dayColumnFlipStagger: Double = 0.03
+    private let unsyncedIndicatorDebounce = RunLoop.SchedulerTimeType.Stride.milliseconds(900)
 
     var body: some View {
         NavigationStack {
@@ -52,6 +79,8 @@ struct CalendarTabView: View {
                 weekdayHeader
                 calendarSurface
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                Color.clear
+                    .frame(height: calendarBottomToolbarSpacerHeight)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .padding(.horizontal, calendarContentHorizontalPadding)
@@ -64,8 +93,8 @@ struct CalendarTabView: View {
                     VStack(spacing: 0) {
                         Text("PayScope")
                             .font(.headline.weight(.semibold))
-                        if isOffline {
-                            Text("offline")
+                        if showUnsyncedIndicator {
+                            Text("Nicht Synchronisiert")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.secondary)
                         }
@@ -82,59 +111,125 @@ struct CalendarTabView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        activeSheet = .stats
-                    } label: {
-                        Image(systemName: "chart.bar")
+                    if isRefreshingCloud {
+                        Button(action: {}) {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                        }
+                        .disabled(true)
+                        .accessibilityLabel("iCloud lädt…")
+                    } else {
+                        Button {
+                            Task {
+                                await refreshCloudWithMinimumDelay()
+                            }
+                        } label: {
+                            Image(systemName: "icloud.and.arrow.down")
+                        }
+                        .accessibilityLabel("iCloud neu laden")
                     }
-                    .accessibilityLabel("Statistik öffnen")
                 }
+
+                ToolbarItem(placement: .bottomBar) {
+                    HStack {
+                        Spacer(minLength: 0)
+                        Button {
+                            jumpToCurrentMonth()
+                            activeSheet = .today
+                        } label: {
+                            todayBottomBarPill
+                        }
+                        .buttonStyle(.plain)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: CalendarTabToolbarWidthPreferenceKey.self, value: proxy.size.width)
+                }
+            )
+            .onPreferenceChange(CalendarTabToolbarWidthPreferenceKey.self) { value in
+                toolbarContainerWidth = value
             }
             .task(id: holidayImportTaskKey) {
                 await importHolidaysIfNeededForDisplayedMonth()
             }
+            .task {
+                await runInitialLoadingSequence()
+            }
+            .onAppear {
+                notificationCancellable = NotificationCenter.default.publisher(for: .dayEntriesDidChange)
+                    .sink { _ in
+                        Task { await loadData(mode: .localOnly) }
+                    }
+            }
+            .onDisappear {
+                notificationCancellable?.cancel()
+                notificationCancellable = nil
+                initialLoadTask?.cancel()
+                initialLoadTask = nil
+                withTransaction(Transaction(animation: nil)) {
+                    dayColumnsVisible = true
+                }
+            }
             .onReceive(previewRefreshTimer) { value in
                 now = value
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                Button {
-                    jumpToCurrentMonth()
-                    activeSheet = .today
-                } label: {
-                    todayPreviewCard
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, todayPreviewEdgePadding)
-                .padding(.top, todayPreviewEdgePadding)
-                .padding(.bottom, todayPreviewBottomInsetCompensation)
+            .onReceive(
+                cloudKitService.$isUnsynced
+                    .removeDuplicates()
+                    .debounce(for: unsyncedIndicatorDebounce, scheduler: RunLoop.main)
+            ) { value in
+                showUnsyncedIndicator = value
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .active else { return }
+                guard activeSheet == nil else { return }
+                guard !isRefreshingCloud else { return }
+                Task { await loadData(mode: .fullSync) }
             }
             .sheet(item: $activeSheet) { sheet in
                 switch sheet {
                 case let .day(date):
-                    DayEditorView(date: date.startOfDayLocal(), settings: settings)
+                    DayEditorView(
+                        date: date.startOfDayLocal(),
+                        settings: settings,
+                        onDaySaved: applyDayEditorChange
+                    )
                 case .today:
                     TodayFocusView(settings: settings)
                         .presentationDetents([.fraction(0.65)])
                         .presentationDragIndicator(.visible)
-                        .payScopeSheetSurface(accent: settings.themeAccent.color)
-                case .stats:
-                    StatsTabView(settings: settings, referenceMonth: displayedMonth)
                         .payScopeSheetSurface(accent: settings.themeAccent.color)
                 case .settings:
                     SettingsTabView(settings: settings)
                 }
             }
             .sheet(isPresented: $showNetWageConfig) {
-                if let config = netConfig(for: netConfigSheetMonth) {
-                    NetWageConfigSheet(config: config)
+                if let idx = netConfigs.firstIndex(where: { $0.monthStart.isSameLocalDay(as: netConfigSheetMonth) }) {
+                    NetWageConfigSheet(
+                        config: $netConfigs[idx],
+                        onPersistDefaults: persistNetDefaultsToSettings
+                    )
+                        .environmentObject(cloudKitService)
                         .payScopeSheetSurface(accent: settings.themeAccent.color)
                 } else {
-                    ProgressView("Netto-Konfiguration wird geladen...")
-                        .payScopeSheetSurface(accent: settings.themeAccent.color)
+                    VStack(spacing: 12) {
+                        ProgressView("Netto-Konfiguration wird geladen...")
+                        Button("Erneut laden") {
+                            ensureNetConfigExists(for: netConfigSheetMonth)
+                        }
+                    }
+                    .task {
+                        ensureNetConfigExists(for: netConfigSheetMonth)
+                    }
+                    .payScopeSheetSurface(accent: settings.themeAccent.color)
                 }
             }
             .confirmationDialog(
-                "Segmente löschen?",
+                "Tag löschen?",
                 isPresented: Binding(
                     get: { deleteCandidateDate != nil },
                     set: { if !$0 { deleteCandidateDate = nil } }
@@ -143,7 +238,7 @@ struct CalendarTabView: View {
             ) {
                 Button("Bestätigen", role: .destructive) {
                     if let deleteCandidateDate {
-                        deleteSegments(for: deleteCandidateDate)
+                        deleteDayEntry(for: deleteCandidateDate)
                     }
                     deleteCandidateDate = nil
                 }
@@ -151,36 +246,94 @@ struct CalendarTabView: View {
                     deleteCandidateDate = nil
                 }
             } message: {
-                Text("Alle Segmente dieses Tages werden gelöscht.")
+                Text("Der komplette Tageseintrag wird gelöscht.")
             }
         }
+        .background(
+            LinearGradient(
+                colors: [settings.themeAccent.color, .black],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        )
+        .overlay(
+            Group {
+                if isInitialLoading {
+                    splashView
+                }
+            }
+        )
+    }
+
+    @MainActor
+    private func runInitialLoadingSequence() async {
+        guard isInitialLoading else { return }
+
+        initialLoadTask?.cancel()
+        let localLoadTask = Task { @MainActor in
+            await loadData(mode: .localOnly)
+        }
+        initialLoadTask = localLoadTask
+        await localLoadTask.value
+
+        guard !Task.isCancelled else { return }
+        isInitialLoading = false
+
+        let cloudLoadTask = Task { @MainActor in
+            await loadData(mode: .fullSync)
+        }
+        initialLoadTask = cloudLoadTask
+    }
+
+    private func refreshCloudWithMinimumDelay() async {
+        await MainActor.run { isRefreshingCloud = true }
+        let start = Date()
+
+        await loadData()
+
+        let elapsed = Date().timeIntervalSince(start)
+        let remaining = max(0, 2.0 - elapsed)
+        if remaining > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+        }
+        await MainActor.run { isRefreshingCloud = false }
     }
 
     private var monthHeader: some View {
         ZStack {
-            Text(germanMonthYear(displayedMonth))
-                .font(.system(.title3, design: .rounded).weight(.bold))
-                .textCase(.uppercase)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-                .id(displayedMonth.startOfMonthLocal())
-                .transition(
-                    .asymmetric(
-                        insertion: .move(edge: monthChangeDirection.monthInsertionEdge).combined(with: .opacity),
-                        removal: .move(edge: monthChangeDirection.monthRemovalEdge).combined(with: .opacity)
-                    )
-                )
+            VStack(spacing: 2) {
+                Text(germanMonth(displayedMonth))
+                    .font(.system(.title3, design: .rounded).weight(.bold))
+                    .textCase(.uppercase)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .id(displayedMonth.startOfMonthLocal())
+
+                Text(yearString(displayedMonth))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .id(Calendar.current.component(.year, from: displayedMonth))
+            }
 
             HStack(spacing: 12) {
                 calendarControlButton(systemImage: "chevron.left") {
-                    shiftDisplayedMonth(by: -1)
+                    shiftDisplayedMonth(by: -1, flipDirection: .fromLeftToRight)
                 }
                 Spacer()
                 calendarControlButton(systemImage: "chevron.right") {
-                    shiftDisplayedMonth(by: 1)
+                    shiftDisplayedMonth(by: 1, flipDirection: .fromRightToLeft)
                 }
             }
         }
+    }
+
+    private func germanMonth(_ date: Date) -> String {
+        Self.monthFormatter.string(from: date)
+    }
+
+    private func yearString(_ date: Date) -> String {
+        Self.yearFormatter.string(from: date)
     }
 
     private var displayedMonthBounds: (Date, Date) {
@@ -210,7 +363,7 @@ struct CalendarTabView: View {
                 value: PayScopeFormatters.hhmmString(seconds: summary.totalSeconds)
             )
             monthMetricChip(
-                title: "Lohn Brutto",
+                title: "Brutto",
                 value: PayScopeFormatters.currencyString(cents: summary.totalCents)
             )
 
@@ -220,7 +373,7 @@ struct CalendarTabView: View {
                 showNetWageConfig = true
             } label: {
                 monthMetricChip(
-                    title: "Lohn Netto",
+                    title: "Netto",
                     value: PayScopeFormatters.currencyString(cents: monthlyNetCents)
                 )
             }
@@ -292,8 +445,39 @@ struct CalendarTabView: View {
             monthlyAllowanceEuro: seed.monthlyAllowanceEuro,
             bonusesCSV: seed.bonusesCSV
         )
-        modelContext.insert(config)
-        modelContext.persistIfPossible()
+        // keep config locally and persist via CloudKit
+        netConfigs.append(config)
+        Task {
+            do {
+                try await cloudKitService.saveNetWageConfig(config)
+            } catch {
+                #if DEBUG
+                print("Failed to save net config: \(error)")
+                #endif
+            }
+        }
+    }
+
+    private func persistNetDefaultsToSettings(
+        wageTaxPercent: Double?,
+        pensionPercent: Double?,
+        monthlyAllowanceEuro: Double?,
+        bonusesCSV: String
+    ) {
+        settings.netWageTaxPercent = wageTaxPercent
+        settings.netPensionPercent = pensionPercent
+        settings.netMonthlyAllowanceEuro = monthlyAllowanceEuro
+        settings.netBonusesCSV = bonusesCSV.isEmpty ? nil : bonusesCSV
+
+        Task {
+            do {
+                try await cloudKitService.saveSettings(settings)
+            } catch {
+                #if DEBUG
+                print("Failed saving net defaults in settings: \(error)")
+                #endif
+            }
+        }
     }
 
     private func monthMetricChip(title: String, value: String) -> some View {
@@ -301,12 +485,14 @@ struct CalendarTabView: View {
             Text(title)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary.opacity(0.9))
+                .frame(maxWidth: .infinity, alignment: .center)
             Text(value)
                 .font(.subheadline.weight(.bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 16, emphasis: 0.22)
@@ -316,21 +502,14 @@ struct CalendarTabView: View {
         var germanCalendar = Calendar.current
         germanCalendar.locale = Locale(identifier: "de_DE")
         let symbols = germanCalendar.shortWeekdaySymbols
-        let ordered = settings.weekStart == .monday ? Array(symbols[1...6] + [symbols[0]]) : symbols
+        let ordered = Array(symbols[1...6] + [symbols[0]])
 
         return HStack {
-            ForEach(Array(ordered.enumerated()), id: \.offset) { index, value in
+            ForEach(ordered, id: \.self) { value in
                 Text(value)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
-                    .opacity(weekdayColumnsVisible ? 1 : 0)
-                    .offset(x: weekdayColumnsVisible ? 0 : monthChangeDirection.weekdayColumnOffset)
-                    .animation(
-                        .easeOut(duration: weekdayColumnAnimationDuration)
-                            .delay(Double(monthChangeDirection.weekdayAnimationRank(for: index, total: ordered.count)) * weekdayColumnAnimationStagger),
-                        value: weekdayColumnsVisible
-                    )
             }
         }
     }
@@ -350,14 +529,16 @@ struct CalendarTabView: View {
             let cellHeight = max(1, availableHeight / CGFloat(rowCount))
 
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: spacing), count: 7), spacing: spacing) {
-                ForEach(Array(dates.enumerated()), id: \.element) { index, date in
+                ForEach(Array(dates.enumerated()), id: \.offset) { index, date in
                     let dayDate = date.startOfDayLocal()
                     let entry = entriesByDate[dayDate]
                     let isHoliday = holidayDateSet.contains(dayDate) || entry?.type == .holiday
                     let weekBadgeData = shouldShowWeekBadge && index % 7 == 0
                         ? weekBadgesByDate[dayDate]
                         : nil
-                    let columnIndex = index % 7
+                    let column = index % 7
+                    let delayRank = dayFlipDirection.delayRank(for: column)
+                    let hiddenAngle = dayFlipDirection.hiddenAngle
 
                     Group {
                         if Calendar.current.isDate(date, equalTo: displayedMonth, toGranularity: .month) {
@@ -375,11 +556,16 @@ struct CalendarTabView: View {
                             adjacentMonthCell(for: dayDate, height: cellHeight, isNextMonth: false, weekBadgeData: weekBadgeData)
                         }
                     }
+                    .rotation3DEffect(
+                        .degrees(dayColumnsVisible ? 0 : hiddenAngle),
+                        axis: (x: 0, y: 1, z: 0),
+                        anchor: dayFlipDirection.flipAnchor,
+                        perspective: 0.72
+                    )
                     .opacity(dayColumnsVisible ? 1 : 0)
-                    .offset(x: dayColumnsVisible ? 0 : monthChangeDirection.weekdayColumnOffset)
                     .animation(
-                        .easeOut(duration: weekdayColumnAnimationDuration)
-                            .delay(Double(monthChangeDirection.weekdayAnimationRank(for: columnIndex, total: 7)) * weekdayColumnAnimationStagger),
+                        .easeOut(duration: dayColumnFlipDuration)
+                            .delay(Double(delayRank) * dayColumnFlipStagger),
                         value: dayColumnsVisible
                     )
                 }
@@ -392,6 +578,7 @@ struct CalendarTabView: View {
         ZStack {
             calendarGrid
         }
+            .clipped()
             .padding(.top, 2)
             .contentShape(Rectangle())
             .gesture(
@@ -411,16 +598,16 @@ struct CalendarTabView: View {
         weekBadgeData: WeekBadgeData?
     ) -> some View {
         let visibleEntry = entry.flatMap { isVisibleInCalendarCell($0) ? $0 : nil }
-        let hasSegments = (entry?.segments.isEmpty == false)
         let isToday = Calendar.current.isDateInToday(dayDate)
         let isWeekend = Calendar.current.isDateInWeekend(dayDate)
         let categoryTint = categoryTintColor(for: visibleEntry?.type, isHoliday: isHoliday)
+        let hasSavedShift = hasSavedShift(in: visibleEntry)
         let dayBackgroundColors = dayCellBackgroundColors(
             isWeekend: isWeekend,
             isHoliday: isHoliday,
-            hasEntry: visibleEntry != nil,
-            categoryTint: categoryTint
+            categoryTint: hasSavedShift ? nil : categoryTint
         )
+        let dayCardShape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         let numberTopPadding = max(8, (height * 0.38) - 24)
 
         return Button {
@@ -444,9 +631,19 @@ struct CalendarTabView: View {
 
                 Spacer(minLength: 2)
 
-                if let visibleEntry {
-                    cellMetric(for: visibleEntry, result: result)
+                ZStack {
+                    if let visibleEntry {
+                        cellMetric(for: visibleEntry, result: result)
+                            .id(metricIdentity(for: visibleEntry, result: result))
+                            .transition(
+                                .asymmetric(
+                                    insertion: .move(edge: .bottom).combined(with: .opacity),
+                                    removal: .move(edge: .bottom).combined(with: .opacity)
+                                )
+                            )
+                    }
                 }
+                .animation(.easeOut(duration: 0.22), value: metricAnimationKey(for: visibleEntry, result: result))
 
                 if let result {
                     switch result {
@@ -455,9 +652,11 @@ struct CalendarTabView: View {
                             .font(.caption2)
                             .foregroundStyle(.orange)
                     case .error:
-                        Image(systemName: "xmark.octagon.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.red)
+                        if !shouldHideCalendarErrorIcon(for: visibleEntry, result: result) {
+                            Image(systemName: "xmark.octagon.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.red)
+                        }
                     case .ok:
                         EmptyView()
                     }
@@ -467,17 +666,37 @@ struct CalendarTabView: View {
             }
             .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
             .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: dayBackgroundColors,
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                ZStack {
+                    dayCardShape
+                        .fill(
+                            LinearGradient(
+                                colors: dayBackgroundColors,
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
+                    if hasSavedShift {
+                        dayCardShape
+                            .fill(
+                                LinearGradient(
+                                    colors: shiftHighlightColors(categoryTint: categoryTint),
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .transition(
+                                .asymmetric(
+                                    insertion: .move(edge: .top).combined(with: .opacity),
+                                    removal: .move(edge: .top).combined(with: .opacity)
+                                )
+                            )
+                    }
+                }
+                .clipShape(dayCardShape)
             )
+            .animation(.easeOut(duration: 0.22), value: hasSavedShift)
             .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                dayCardShape
                     .stroke(.white.opacity(0.2), lineWidth: 0.9)
             )
             .overlay(alignment: .topLeading) {
@@ -488,7 +707,7 @@ struct CalendarTabView: View {
                 }
             }
             .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                dayCardShape
                     .stroke(
                         isToday ? settings.themeAccent.color.opacity(0.52) : settings.themeAccent.color.opacity(0.2),
                         lineWidth: isToday ? 1.4 : 1
@@ -502,9 +721,9 @@ struct CalendarTabView: View {
             )
         }
         .buttonStyle(.plain)
-        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .contentShape(dayCardShape)
         .onLongPressGesture(minimumDuration: 0.6) {
-            guard hasSegments else { return }
+            guard entry != nil else { return }
             longPressTriggeredDate = dayDate
             deleteCandidateDate = dayDate
         }
@@ -547,17 +766,16 @@ struct CalendarTabView: View {
     }
 
     private func isVisibleInCalendarCell(_ entry: DayEntry) -> Bool {
-        if !entry.segments.isEmpty { return true }
         if (entry.manualWorkedSeconds ?? 0) > 0 { return true }
         if (entry.creditedOverrideSeconds ?? 0) > 0 { return true }
         if entry.type != .work { return true }
+        if let s = entry.shiftStart, let e = entry.shiftEnd, e > s { return true }
         return !entry.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func dayCellBackgroundColors(
         isWeekend: Bool,
         isHoliday: Bool,
-        hasEntry: Bool,
         categoryTint: Color?
     ) -> [Color] {
         if isWeekend && isHoliday {
@@ -601,9 +819,26 @@ struct CalendarTabView: View {
 
         return [
             Color(.secondarySystemBackground).opacity(0.95),
-            settings.themeAccent.color.opacity(hasEntry ? 0.14 : 0.06),
+            settings.themeAccent.color.opacity(0.06),
             Color(.systemBackground).opacity(0.98)
         ]
+    }
+
+    private func shiftHighlightColors(categoryTint: Color?) -> [Color] {
+        let tint = categoryTint ?? settings.themeAccent.color
+        return [
+            tint.opacity(0.2),
+            tint.opacity(0.09),
+            Color(.secondarySystemBackground).opacity(0.94)
+        ]
+    }
+
+    private func hasSavedShift(in entry: DayEntry?) -> Bool {
+        guard let entry else { return false }
+        if let start = entry.shiftStart, let end = entry.shiftEnd, end > start {
+            return true
+        }
+        return false
     }
 
     private func dayNumberForegroundColor(
@@ -612,7 +847,7 @@ struct CalendarTabView: View {
         categoryTint: Color?
     ) -> Color {
         if isHoliday {
-            return .orange
+            return DayType.holiday.tint(for: settings.themeAccent)
         }
         if let categoryTint {
             return categoryTint
@@ -622,9 +857,9 @@ struct CalendarTabView: View {
 
     private func categoryTintColor(for dayType: DayType?, isHoliday: Bool) -> Color? {
         if isHoliday {
-            return .orange
+            return DayType.holiday.tint(for: settings.themeAccent)
         }
-        return dayType?.tint
+        return dayType?.tint(for: settings.themeAccent)
     }
 
     private func adjacentMonthCell(for date: Date, height: CGFloat, isNextMonth: Bool, weekBadgeData: WeekBadgeData?) -> some View {
@@ -685,7 +920,7 @@ struct CalendarTabView: View {
         entriesByDate: [Date: DayEntry]
     ) -> WeekBadgeData {
         let day = date.startOfDayLocal()
-        let weekStart = service.weekStartDate(for: day, weekStart: settings.weekStart)
+        let weekStart = service.weekStartDate(for: day, weekStart: .monday)
         let weekEnd = weekStart.addingDays(6)
         let summary = service.periodSummary(
             entries: entries,
@@ -715,7 +950,7 @@ struct CalendarTabView: View {
 
     private func calendarWeekNumber(for date: Date) -> Int {
         var calendar = Calendar.current
-        calendar.firstWeekday = settings.weekStart == .sunday ? 1 : 2
+        calendar.firstWeekday = 2
         return calendar.component(.weekOfYear, from: date.startOfDayLocal(calendar: calendar))
     }
 
@@ -744,7 +979,7 @@ struct CalendarTabView: View {
         let hasShiftDeviation = entry.creditedOverrideSeconds != nil
         let typeIcon = Image(systemName: entry.type.icon)
             .font(.caption2)
-            .foregroundStyle(entry.type.tint)
+            .foregroundStyle(entry.type.tint(for: settings.themeAccent))
         let categoryIconRow = HStack(spacing: 4) {
             typeIcon
             if hasShiftDeviation {
@@ -756,7 +991,17 @@ struct CalendarTabView: View {
 
         switch settings.calendarCellDisplayMode ?? .dot {
         case .dot:
-            categoryIconRow
+            if let shiftTime = shiftTimeRangeText(for: entry) {
+                HStack(spacing: 4) {
+                    categoryIconRow
+                    Text(shiftTime)
+                        .font(.caption2.bold())
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
+            } else {
+                categoryIconRow
+            }
         case .hours:
             let seconds = calendarCellHoursSeconds(for: entry, result: result)
             VStack(spacing: 2) {
@@ -786,16 +1031,47 @@ struct CalendarTabView: View {
         }
     }
 
+    private func shiftTimeRangeText(for entry: DayEntry) -> String? {
+        guard let start = entry.shiftStart, let end = entry.shiftEnd, end > start else {
+            return nil
+        }
+        return "\(PayScopeFormatters.time.string(from: start))–\(PayScopeFormatters.time.string(from: end))"
+    }
+
+    private func metricIdentity(for entry: DayEntry, result: ComputationResult?) -> String {
+        "\(entry.updatedAt.timeIntervalSinceReferenceDate)-\(metricAnimationKey(for: entry, result: result))"
+    }
+
+    private func metricAnimationKey(for entry: DayEntry?, result: ComputationResult?) -> String {
+        guard let entry else { return "none" }
+        let resultKey: String = {
+            guard let result else { return "nil" }
+            switch result {
+            case let .ok(seconds, cents):
+                return "ok-\(seconds)-\(cents)"
+            case let .warning(seconds, cents, reason):
+                return "warn-\(seconds)-\(cents)-\(reason)"
+            case .error:
+                return "error"
+            }
+        }()
+        let shiftKey: String = {
+            guard let shift = shiftTimeRangeText(for: entry) else { return "no-shift" }
+            return shift
+        }()
+        return "\(entry.type.rawValue)-\(entry.updatedAt.timeIntervalSinceReferenceDate)-\(shiftKey)-\(resultKey)"
+    }
+
     private func calendarCellHoursSeconds(for entry: DayEntry, result: ComputationResult?) -> Int {
         switch settings.effectiveCalendarHoursBreakMode {
         case .withoutBreak:
             return secondsFromResult(result)
         case .withBreak:
-            let grossFromSegments = entry.segments.reduce(0) { partial, segment in
-                partial + max(0, Int(segment.end.timeIntervalSince(segment.start)))
+            if let manual = entry.manualWorkedSeconds {
+                return max(0, manual)
             }
-            if grossFromSegments > 0 {
-                return grossFromSegments
+            if let start = entry.shiftStart, let end = entry.shiftEnd, end > start {
+                return max(0, Int(end.timeIntervalSince(start)))
             }
             return secondsFromResult(result)
         }
@@ -811,43 +1087,79 @@ struct CalendarTabView: View {
         }
     }
 
+    private func shouldHideCalendarErrorIcon(for entry: DayEntry?, result: ComputationResult) -> Bool {
+        guard case .error = result else { return false }
+        guard let entry else { return false }
+        guard entry.type == .vacation || entry.type == .holiday || entry.type == .sick else { return false }
+        guard entry.creditedOverrideSeconds == nil else { return false }
+        switch entry.type {
+        case .vacation:
+            guard settings.effectiveVacationCreditingMode == .lookback13Weeks else { return false }
+        case .holiday:
+            guard settings.effectiveHolidayCreditingMode == .lookback13Weeks else { return false }
+        case .sick:
+            break
+        case .work, .manual:
+            return false
+        }
+        return secondsFromResult(result) == 0
+    }
+
     private func shortCurrency(cents: Int) -> String {
         let value = NSNumber(value: Double(cents) / 100)
         return Self.compactCurrencyFormatter.string(from: value) ?? "0"
     }
 
     private func monthDates() -> [Date] {
-        guard
-            let interval = Calendar.current.dateInterval(of: .month, for: displayedMonth),
-            let monthFirstWeek = Calendar.current.dateInterval(of: .weekOfMonth, for: interval.start),
-            let monthLastWeek = Calendar.current.dateInterval(of: .weekOfMonth, for: interval.end.addingTimeInterval(-1))
-        else {
+        // Determine the month interval for the currently displayed month
+        guard let monthInterval = Calendar.current.dateInterval(of: .month, for: displayedMonth) else {
             return []
         }
 
+        // Find the week that contains the first day of the month
+        guard let firstWeek = Calendar.current.dateInterval(of: .weekOfMonth, for: monthInterval.start) else {
+            return []
+        }
+
+        // We always want to show exactly 6 full weeks (42 days)
+        let sixWeeksEnd = Calendar.current.date(byAdding: .day, value: 42, to: firstWeek.start) ?? firstWeek.end
+
         var dates: [Date] = []
-        var current = monthFirstWeek.start
-        while current < monthLastWeek.end {
+        var current = firstWeek.start
+        while current < sixWeeksEnd {
             dates.append(current)
             current = current.addingDays(1)
         }
         return dates
     }
 
-    private func deleteSegments(for date: Date) {
-        guard let existing = entries.first(where: { $0.date.isSameLocalDay(as: date.startOfDayLocal()) }) else { return }
-        existing.segments.removeAll()
-        modelContext.persistIfPossible()
-        exportICloudSnapshot()
+    private func deleteDayEntry(for date: Date) {
+        // Optimistic UI update: remove the local entry immediately so the calendar reflects the change
+        entries.removeAll { $0.date.isSameLocalDay(as: date) }
+        localStore.delete(on: date)
+
+        Task { @MainActor in
+            do {
+                try await cloudKitService.deleteDayEntry(on: date)
+                // Refresh entries to ensure local state matches the server
+                await loadData()
+            } catch {
+                #if DEBUG
+                print("Failed to delete day entry for \(date): \(error)")
+                #endif
+                // In case of failure, reload to restore previous state if needed
+                await loadData()
+            }
+        }
     }
 
-    private func exportICloudSnapshot() {
-        ICloudSettingsSync.export(
-            settings: settings,
-            entries: entries,
-            netWageConfigs: netConfigs,
-            holidayDays: importedHolidays
-        )
+    private func applyDayEditorChange(_ dayDate: Date, _ entry: DayEntry?) {
+        let localDay = dayDate.startOfDayLocal()
+        entries.removeAll { $0.date.isSameLocalDay(as: localDay) }
+
+        guard let entry else { return }
+        entries.append(entry)
+        entries.sort { $0.date > $1.date }
     }
 
     private var holidayImportTaskKey: String {
@@ -879,6 +1191,273 @@ struct CalendarTabView: View {
     }
 
     @MainActor
+    private func loadData(mode: DataLoadMode = .fullSync) async {
+        if isLoadingData {
+            if mode == .fullSync {
+                pendingLoadAfterCurrentCycle = true
+            }
+            return
+        }
+        isLoadingData = true
+        defer {
+            isLoadingData = false
+            if pendingLoadAfterCurrentCycle {
+                pendingLoadAfterCurrentCycle = false
+                Task { await loadData(mode: .fullSync) }
+            }
+        }
+
+        let start = Date().addingDays(-365)
+        let end = Date().addingDays(365)
+        let interval = DateInterval(start: start, end: end)
+
+        let localEntries = localStore.loadAll(in: interval)
+        let localSnapshot = deduplicateEntriesByLocalDayKeepingNewest(localEntries)
+        if mode == .localOnly || entries.isEmpty {
+            // Cold start: show persisted data immediately, then refresh from cloud.
+            applyEntriesIfChanged(localSnapshot)
+        }
+        guard mode == .fullSync else { return }
+
+        let tombstonesByDay = Dictionary(
+            localStore.loadDeletionTombstones().map { (dayKey($0.date), $0.lastModified) },
+            uniquingKeysWith: { current, incoming in
+                incoming > current ? incoming : current
+            }
+        )
+
+        do {
+            // Cloud-first: prefer iCloud data when reachable.
+            var cloudEntries = deduplicateEntriesByLocalDayKeepingNewest(
+                try await cloudKitService.fetchDayEntries(in: interval)
+            )
+
+            // Sync local deletions to cloud first (LWW).
+            let didSyncDeletes = await syncPendingLocalDeletionsToCloud(cloudEntries: cloudEntries)
+            if didSyncDeletes {
+                cloudEntries = deduplicateEntriesByLocalDayKeepingNewest(
+                    try await cloudKitService.fetchDayEntries(in: interval)
+                )
+            }
+
+            // If local fallback entries exist, sync newer local versions back to iCloud.
+            if !localSnapshot.isEmpty {
+                let didSyncPending = await syncPendingLocalEntriesToCloud(localEntries: localSnapshot, cloudEntries: cloudEntries)
+                if didSyncPending {
+                    cloudEntries = deduplicateEntriesByLocalDayKeepingNewest(
+                        try await cloudKitService.fetchDayEntries(in: interval)
+                    )
+                }
+            }
+
+            let cloudEntriesWithoutLocallyDeleted = cloudEntries.filter { cloudEntry in
+                guard let deletedAt = tombstonesByDay[dayKey(cloudEntry.date)] else { return true }
+                return deletedAt < cloudEntry.updatedAt
+            }
+
+            // UI should reflect newest known state immediately, even if CloudKit query is briefly stale.
+            let mergedForUI = mergeEntriesByLocalDayKeepingNewest(
+                local: localSnapshot,
+                remote: cloudEntriesWithoutLocallyDeleted
+            )
+
+            applyEntriesIfChanged(mergedForUI)
+            localStore.upsertMany(cloudEntriesWithoutLocallyDeleted, notify: false)
+
+            // load persisted net wage configurations
+            applyNetConfigsIfChanged(try await cloudKitService.fetchNetWageConfigs())
+
+            // load holiday data for the displayed year
+            let year = Calendar.current.component(.year, from: displayedMonth)
+            let country = normalizedHolidayCountryCode
+            let subdivision = normalizedHolidaySubdivisionCode
+            applyImportedHolidaysIfChanged(
+                try await cloudKitService.fetchHolidayDays(
+                    countryCode: country,
+                    subdivisionCode: subdivision,
+                    year: year
+                )
+            )
+        } catch {
+            #if DEBUG
+            print("Calendar loadData failed: \(error)")
+            #endif
+            // Fallback: keep app usable offline/unreachable.
+            applyEntriesIfChanged(deduplicateEntriesByLocalDayKeepingNewest(localEntries))
+        }
+    }
+
+    private func applyEntriesIfChanged(_ newEntries: [DayEntry]) {
+        guard dayEntriesSignature(newEntries) != dayEntriesSignature(entries) else { return }
+        entries = newEntries
+    }
+
+    private func applyNetConfigsIfChanged(_ newConfigs: [NetWageMonthConfig]) {
+        guard netConfigSignature(newConfigs) != netConfigSignature(netConfigs) else { return }
+        netConfigs = newConfigs
+    }
+
+    private func applyImportedHolidaysIfChanged(_ newHolidays: [HolidayCalendarDay]) {
+        guard holidaySignature(newHolidays) != holidaySignature(importedHolidays) else { return }
+        importedHolidays = newHolidays
+    }
+
+    private func dayEntriesSignature(_ values: [DayEntry]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(values.count)
+        for value in values.sorted(by: { $0.date < $1.date }) {
+            hasher.combine(value.date.timeIntervalSinceReferenceDate)
+            hasher.combine(value.updatedAt.timeIntervalSinceReferenceDate)
+            hasher.combine(value.type.rawValue)
+            hasher.combine(value.manualWorkedSeconds ?? -1)
+            hasher.combine(value.creditedOverrideSeconds ?? -1)
+            hasher.combine(value.shiftStart?.timeIntervalSinceReferenceDate ?? -1)
+            hasher.combine(value.shiftEnd?.timeIntervalSinceReferenceDate ?? -1)
+            hasher.combine(value.breakSeconds ?? -1)
+            hasher.combine(value.notes)
+        }
+        return hasher.finalize()
+    }
+
+    private func netConfigSignature(_ values: [NetWageMonthConfig]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(values.count)
+        for value in values.sorted(by: { $0.monthStart < $1.monthStart }) {
+            hasher.combine(value.monthStart.timeIntervalSinceReferenceDate)
+            hasher.combine(value.wageTaxPercent ?? -1)
+            hasher.combine(value.pensionPercent ?? -1)
+            hasher.combine(value.monthlyAllowanceEuro ?? -1)
+            hasher.combine(value.bonusesCSV)
+        }
+        return hasher.finalize()
+    }
+
+    private func holidaySignature(_ values: [HolidayCalendarDay]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(values.count)
+        for value in values.sorted(by: { $0.key < $1.key }) {
+            hasher.combine(value.key)
+            hasher.combine(value.date.timeIntervalSinceReferenceDate)
+            hasher.combine(value.localName)
+            hasher.combine(value.countryCode)
+            hasher.combine(value.subdivisionCode ?? "")
+            hasher.combine(value.sourceYear)
+        }
+        return hasher.finalize()
+    }
+
+    private func syncPendingLocalEntriesToCloud(localEntries: [DayEntry], cloudEntries: [DayEntry]) async -> Bool {
+        let localNewestByDay = deduplicateEntriesByLocalDayKeepingNewest(localEntries)
+        let cloudByDay = Dictionary(
+            cloudEntries.map { (dayKey($0.date), $0) },
+            uniquingKeysWith: { existing, candidate in
+                candidate.updatedAt > existing.updatedAt ? candidate : existing
+            }
+        )
+        let pending = localNewestByDay.filter { local in
+            guard let cloud = cloudByDay[dayKey(local.date)] else { return true }
+            if local.updatedAt > cloud.updatedAt {
+                return true
+            }
+            if local.updatedAt == cloud.updatedAt && !isEquivalentEntry(local, cloud) {
+                return true
+            }
+            return false
+        }
+        guard !pending.isEmpty else { return false }
+
+        var syncedAny = false
+        for entry in pending {
+            do {
+                try await cloudKitService.saveDayEntry(entry)
+                syncedAny = true
+            } catch {
+                #if DEBUG
+                print("Pending local entry sync failed for \(entry.date): \(error)")
+                #endif
+            }
+        }
+        return syncedAny
+    }
+
+    private func syncPendingLocalDeletionsToCloud(cloudEntries: [DayEntry]) async -> Bool {
+        let cloudByDay = Dictionary(
+            cloudEntries.map { (dayKey($0.date), $0) },
+            uniquingKeysWith: { existing, candidate in
+                candidate.updatedAt > existing.updatedAt ? candidate : existing
+            }
+        )
+        let tombstones = localStore.loadDeletionTombstones()
+        guard !tombstones.isEmpty else { return false }
+
+        var changedAny = false
+        for tombstone in tombstones {
+            let key = dayKey(tombstone.date)
+            guard let cloud = cloudByDay[key] else {
+                localStore.clearDeletionTombstone(on: tombstone.date)
+                changedAny = true
+                continue
+            }
+
+            if tombstone.lastModified >= cloud.updatedAt {
+                do {
+                    try await cloudKitService.deleteDayEntry(on: tombstone.date)
+                    localStore.clearDeletionTombstone(on: tombstone.date)
+                    changedAny = true
+                } catch {
+                    #if DEBUG
+                    print("Pending tombstone sync failed for \(tombstone.date): \(error)")
+                    #endif
+                }
+            } else {
+                // Cloud entry is newer than local deletion.
+                localStore.clearDeletionTombstone(on: tombstone.date)
+                changedAny = true
+            }
+        }
+        return changedAny
+    }
+
+    private func isEquivalentEntry(_ lhs: DayEntry, _ rhs: DayEntry) -> Bool {
+        lhs.type == rhs.type &&
+        lhs.notes == rhs.notes &&
+        lhs.breakSeconds == rhs.breakSeconds &&
+        lhs.manualWorkedSeconds == rhs.manualWorkedSeconds &&
+        lhs.creditedOverrideSeconds == rhs.creditedOverrideSeconds &&
+        lhs.shiftStart == rhs.shiftStart &&
+        lhs.shiftEnd == rhs.shiftEnd
+    }
+
+    private func dayKey(_ date: Date) -> String {
+        let day = date.startOfDayLocal()
+        let year = Calendar.current.component(.year, from: day)
+        let month = Calendar.current.component(.month, from: day)
+        let dayOfMonth = Calendar.current.component(.day, from: day)
+        return String(format: "%04d-%02d-%02d", year, month, dayOfMonth)
+    }
+
+    private func deduplicateEntriesByLocalDayKeepingNewest(_ source: [DayEntry]) -> [DayEntry] {
+        let byDay = Dictionary(
+            source.map { (dayKey($0.date), $0) },
+            uniquingKeysWith: { existing, candidate in
+                candidate.updatedAt > existing.updatedAt ? candidate : existing
+            }
+        )
+
+        return byDay.values.sorted { $0.date > $1.date }
+    }
+
+    private func mergeEntriesByLocalDayKeepingNewest(local: [DayEntry], remote: [DayEntry]) -> [DayEntry] {
+        let byDay = Dictionary(
+            (local + remote).map { (dayKey($0.date), $0) },
+            uniquingKeysWith: { existing, candidate in
+                candidate.updatedAt > existing.updatedAt ? candidate : existing
+            }
+        )
+        return byDay.values.sorted { $0.date > $1.date }
+    }
+
+    @MainActor
     private func importHolidaysIfNeededForDisplayedMonth() async {
         let year = Calendar.current.component(.year, from: displayedMonth)
         guard let countryCode = normalizedHolidayCountryCode else { return }
@@ -899,13 +1478,28 @@ struct CalendarTabView: View {
         }
 
         do {
-            _ = try await holidayImporter.importHolidays(
+            let days = try await holidayImporter.fetchHolidayCalendarDays(
                 year: year,
                 countryCode: countryCode,
+                subdivisionCode: subdivisionCode
+            )
+            try await cloudKitService.replaceHolidayDays(
+                days,
+                countryCode: countryCode,
                 subdivisionCode: subdivisionCode,
-                modelContext: modelContext
+                year: year
+            )
+            let validHolidayDates = Set(days.map { $0.date.startOfDayLocal() })
+            let cleanedMarkers = try await cloudKitService.clearStaleHolidayMarkers(
+                validHolidayDates: validHolidayDates,
+                year: year
             )
             holidayImportKeys.insert(importKey)
+            // refresh local state
+            importedHolidays = try await cloudKitService.fetchHolidayDays(countryCode: countryCode, subdivisionCode: subdivisionCode, year: year)
+            if cleanedMarkers > 0 {
+                await loadData()
+            }
         } catch {
             // Non-blocking: calendar still works without imported holidays.
         }
@@ -935,20 +1529,27 @@ struct CalendarTabView: View {
         }
 
         if horizontal < 0 {
-            shiftDisplayedMonth(by: 1)
+            shiftDisplayedMonth(by: 1, flipDirection: .fromRightToLeft)
         } else {
-            shiftDisplayedMonth(by: -1)
+            shiftDisplayedMonth(by: -1, flipDirection: .fromLeftToRight)
         }
     }
 
-    private func shiftDisplayedMonth(by delta: Int) {
+    private func shiftDisplayedMonth(by delta: Int, flipDirection: DayFlipDirection) {
         guard delta != 0 else { return }
-        monthChangeDirection = delta > 0 ? .next : .previous
+        triggerDayCardColumnFlip(direction: flipDirection)
+        displayedMonth = Calendar.current.date(byAdding: .month, value: delta, to: displayedMonth) ?? displayedMonth
+    }
 
-        withAnimation(monthChangeAnimation) {
-            displayedMonth = Calendar.current.date(byAdding: .month, value: delta, to: displayedMonth) ?? displayedMonth
+    private func triggerDayCardColumnFlip(direction: DayFlipDirection) {
+        dayFlipDirection = direction
+
+        withTransaction(Transaction(animation: nil)) {
+            dayColumnsVisible = false
         }
-        triggerMonthChangeAnimations()
+        DispatchQueue.main.async {
+            dayColumnsVisible = true
+        }
     }
 
     private func jumpToCurrentMonth() {
@@ -959,116 +1560,89 @@ struct CalendarTabView: View {
             return
         }
 
-        monthChangeDirection = targetMonth > currentMonth ? .next : .previous
-        withAnimation(monthChangeAnimation) {
-            displayedMonth = targetMonth
-        }
-        triggerMonthChangeAnimations()
+        displayedMonth = targetMonth
     }
 
-    private func triggerMonthChangeAnimations() {
-        withTransaction(Transaction(animation: nil)) {
-            weekdayColumnsVisible = false
-            dayColumnsVisible = false
-        }
-        DispatchQueue.main.async {
-            weekdayColumnsVisible = true
-            dayColumnsVisible = true
-        }
+    private var todayBottomBarWidth: CGFloat {
+        let baseWidth = toolbarContainerWidth > 0 ? toolbarContainerWidth : 390
+        let proposedWidth = baseWidth * 0.9
+        return min(max(proposedWidth, 276), 388)
     }
 
-    private var todayPreviewCard: some View {
-        let cardCornerRadius = todayPreviewCornerRadius
+    private var todayBottomBarHeight: CGFloat {
+        let scaledHeight = todayBottomBarWidth * 0.17
+        return min(max(scaledHeight, 54), 68)
+    }
 
-        return HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 0) {
-                    Text("Heute • ")
-                        .foregroundStyle(settings.themeAccent.color.opacity(0.94))
+    private var todayBottomBarRingSize: CGFloat {
+        let scaledRing = todayBottomBarHeight * 0.52
+        return min(max(scaledRing, 30), 40)
+    }
 
-                    Text(PayScopeFormatters.day.string(from: todayStart))
-                        .foregroundStyle(.secondary)
-                }
-                .font(.caption.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
+    private var todayBottomBarPill: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
 
-                HStack(spacing: 8) {
-                    HStack(spacing: 4) {
-                        Image(systemName: todayShiftIcon)
-                            .font(.subheadline.weight(.bold))
-                            .frame(width: 24, height: 24)
-                            .foregroundStyle(settings.themeAccent.color)
-                            .background(
-                                settings.themeAccent.color.opacity(0.16),
-                                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            )
-                        if todayHasShiftDeviation {
-                            Image(systemName: "pencil")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Text(todayWorkedDisplay)
-                        .font(.system(.headline, design: .rounded).weight(.bold))
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .foregroundStyle(.primary)
-                }
+                Text(todayWorkedDisplay)
+                    .font(.system(.title, design: .rounded).weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                
+                Text("Heute • \(PayScopeFormatters.day.string(from: todayStart))")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
 
-            Spacer(minLength: 10)
+            Spacer(minLength: 6)
 
             CompletionRing(
                 progress: todayShiftCompletionFraction,
                 accent: settings.themeAccent.color
             )
-            .frame(width: 30, height: 30)
+            .frame(width: todayBottomBarRingSize, height: todayBottomBarRingSize)
+            .padding(4)
+            .background(
+                Circle()
+                    .fill(settings.themeAccent.color.opacity(0.1))
+            )
+            .overlay(
+                Circle()
+                    .stroke(.white.opacity(0.08), lineWidth: 0.8)
+            )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: cardCornerRadius, emphasis: 0.36)
-        .overlay(
-            RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                .stroke(settings.themeAccent.color.opacity(0.34), lineWidth: 1.2)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 9)
+        .frame(width: todayBottomBarWidth, height: todayBottomBarHeight, alignment: .leading)
+        .background(
+            Capsule(style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            settings.themeAccent.color.opacity(0.3),
+                            settings.themeAccent.color.opacity(0.1)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
         )
-        .shadow(color: settings.themeAccent.color.opacity(0.18), radius: 10, x: 0, y: 5)
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(.white.opacity(0.08), lineWidth: 0.8)
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(settings.themeAccent.color.opacity(0.34), lineWidth: 1.1)
+        )
+        //.shadow(color: .black.opacity(0.28), radius: 9, x: 0, y: 5)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Heute Vorschau")
         .accessibilityValue("\(todayWorkedDisplay), \(todayShiftCompletionPercent)% der Schichtlänge")
-    }
-
-    private var todayPreviewCornerRadius: CGFloat {
-        deviceDisplayCornerRadius + todayPreviewEdgePadding
-    }
-
-    private var todayPreviewBottomInsetCompensation: CGFloat {
-        todayPreviewEdgePadding - deviceBottomSafeAreaInset
-    }
-
-    private var deviceDisplayCornerRadius: CGFloat {
-        guard let keyWindow else {
-            return 0
-        }
-
-        let windowCornerRadius = keyWindow.layer.cornerRadius
-        if windowCornerRadius > 0 {
-            return windowCornerRadius
-        }
-        return max(0, deviceBottomSafeAreaInset)
-    }
-
-    private var deviceBottomSafeAreaInset: CGFloat {
-        keyWindow?.safeAreaInsets.bottom ?? 0
-    }
-
-    private var keyWindow: UIWindow? {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first(where: \.isKeyWindow)
     }
 
     private var todayStart: Date {
@@ -1077,14 +1651,6 @@ struct CalendarTabView: View {
 
     private var todayEntry: DayEntry? {
         entries.first(where: { $0.date.isSameLocalDay(as: todayStart) })
-    }
-
-    private var todayShiftIcon: String {
-        todayEntry?.type.icon ?? "calendar.badge.clock"
-    }
-
-    private var todayHasShiftDeviation: Bool {
-        todayEntry?.creditedOverrideSeconds != nil
     }
 
     private var todayWorkedDisplay: String {
@@ -1123,13 +1689,12 @@ struct CalendarTabView: View {
             return max(0, manual)
         }
 
-        let totalFromSegments = day.segments.reduce(0) { partial, segment in
-            let segmentSeconds = max(0, Int(segment.end.timeIntervalSince(segment.start)) - max(0, segment.breakSeconds))
-            return partial + segmentSeconds
+        if let start = day.shiftStart, let end = day.shiftEnd, end > start {
+            let gross = max(0, Int(end.timeIntervalSince(start)))
+            let breakSeconds = max(0, day.breakSeconds ?? 0)
+            return max(0, gross - breakSeconds)
         }
-        if totalFromSegments > 0 {
-            return totalFromSegments
-        }
+
         return max(0, plannedDaySeconds ?? 0)
     }
 
@@ -1139,56 +1704,48 @@ struct CalendarTabView: View {
             return max(0, manual)
         }
 
-        return day.segments.reduce(0) { partial, segment in
-            guard now > segment.start else { return partial }
-            let effectiveEnd = min(now, segment.end)
-            let elapsedSeconds = max(0, Int(effectiveEnd.timeIntervalSince(segment.start)))
-            let totalSegmentSeconds = max(1, Int(segment.end.timeIntervalSince(segment.start)))
-            let breakSeconds = max(0, segment.breakSeconds)
-            let elapsedBreak = Int((Double(breakSeconds) * Double(elapsedSeconds) / Double(totalSegmentSeconds)).rounded())
-            return partial + max(0, elapsedSeconds - elapsedBreak)
+        if let start = day.shiftStart, let end = day.shiftEnd, end > start {
+            guard now > start else { return 0 }
+            let effectiveEnd = min(now, end)
+            let elapsedSeconds = max(0, Int(effectiveEnd.timeIntervalSince(start)))
+            let totalShiftSeconds = max(1, Int(end.timeIntervalSince(start)))
+            let breakSeconds = max(0, day.breakSeconds ?? 0)
+            let elapsedBreak = Int((Double(breakSeconds) * Double(elapsedSeconds) / Double(totalShiftSeconds)).rounded())
+            return max(0, elapsedSeconds - elapsedBreak)
         }
-    }
-}
 
-private enum MonthChangeDirection {
-    case next
-    case previous
-
-    var monthInsertionEdge: Edge {
-        switch self {
-        case .next:
-            return .trailing
-        case .previous:
-            return .leading
-        }
+        return 0
     }
 
-    var monthRemovalEdge: Edge {
-        switch self {
-        case .next:
-            return .leading
-        case .previous:
-            return .trailing
-        }
-    }
+    private var splashView: some View {
+        ZStack {
+            LinearGradient(
+                colors: [settings.themeAccent.color, .black],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
 
-    var weekdayColumnOffset: CGFloat {
-        switch self {
-        case .next:
-            return 12
-        case .previous:
-            return -12
-        }
-    }
+            VStack(spacing: 16) {
+                // Replace with your app icon asset name if available
+                Image(systemName: "app.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 96, height: 96)
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 6)
 
-    func weekdayAnimationRank(for index: Int, total: Int) -> Int {
-        switch self {
-        case .next:
-            return max(0, total - index - 1)
-        case .previous:
-            return index
+                Text("PayScope wird vorbereitet…")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+            }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("PayScope wird vorbereitet")
     }
 }
 
@@ -1197,10 +1754,41 @@ private struct WeekBadgeData {
     let detailText: String?
 }
 
+private enum DayFlipDirection {
+    case fromRightToLeft
+    case fromLeftToRight
+
+    func delayRank(for column: Int) -> Int {
+        switch self {
+        case .fromRightToLeft:
+            return max(0, 6 - column)
+        case .fromLeftToRight:
+            return column
+        }
+    }
+
+    var hiddenAngle: Double {
+        switch self {
+        case .fromRightToLeft:
+            return -78
+        case .fromLeftToRight:
+            return 78
+        }
+    }
+
+    var flipAnchor: UnitPoint {
+        switch self {
+        case .fromRightToLeft:
+            return .trailing
+        case .fromLeftToRight:
+            return .leading
+        }
+    }
+}
+
 private enum CalendarSheet: Identifiable {
     case day(Date)
     case today
-    case stats
     case settings
 
     var id: String {
@@ -1209,11 +1797,17 @@ private enum CalendarSheet: Identifiable {
             return "day-\(date.timeIntervalSinceReferenceDate)"
         case .today:
             return "today"
-        case .stats:
-            return "stats"
         case .settings:
             return "settings"
         }
+    }
+}
+
+private struct CalendarTabToolbarWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
@@ -1298,8 +1892,9 @@ private struct TodayCompletionPieIcon: View {
 
 private struct NetWageConfigSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
-    @Bindable var config: NetWageMonthConfig
+    @EnvironmentObject private var cloudKitService: CloudKitService
+    @Binding var config: NetWageMonthConfig
+    let onPersistDefaults: (Double?, Double?, Double?, String) -> Void
 
     @State private var wageTaxText = ""
     @State private var pensionText = ""
@@ -1310,29 +1905,12 @@ private struct NetWageConfigSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Abgaben (%)") {
-                    HStack {
-                        TextField("Lohnsteuer", text: $wageTaxText)
-                            .keyboardType(.decimalPad)
-                        Text("%")
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        TextField("Rentenversicherung", text: $pensionText)
-                            .keyboardType(.decimalPad)
-                        Text("%")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Section("Freibetrag (€ / Monat)") {
-                    HStack {
-                        TextField("Monatlicher Freibetrag", text: $allowanceText)
-                            .keyboardType(.decimalPad)
-                        Text("€")
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                
+                FormAusgabenSection(
+                    wageTaxText: $wageTaxText,
+                    pensionText: $pensionText,
+                    allowanceText: $allowanceText
+                )
 
                 Section("Zuschläge (€)") {
                     if bonusTexts.isEmpty {
@@ -1382,15 +1960,15 @@ private struct NetWageConfigSheet: View {
                     .accessibilityLabel("Abbrechen")
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        save()
-                        dismiss()
-                    } label: {
-                        Image(systemName: "checkmark")
-                    }
-                    .accessibilityLabel("Speichern")
-                }
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button {
+                                save()
+                                dismiss()
+                            } label: {
+                                Image(systemName: "checkmark")
+                            }
+                            .accessibilityLabel("Speichern")
+                        }
             }
             .onAppear {
                 wageTaxText = formattedPercent(config.wageTaxPercent)
@@ -1411,6 +1989,39 @@ private struct NetWageConfigSheet: View {
             get: { bonusTexts[index] },
             set: { bonusTexts[index] = $0 }
         )
+    }
+    
+    private struct FormAusgabenSection: View {
+        @Binding var wageTaxText: String
+        @Binding var pensionText: String
+        @Binding var allowanceText: String
+
+        var body: some View {
+            Section("Abgaben (%)") {
+                HStack {
+                    TextField("Lohnsteuer", text: $wageTaxText)
+                        .keyboardType(.decimalPad)
+                    Text("%")
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    TextField("Rentenversicherung", text: $pensionText)
+                        .keyboardType(.decimalPad)
+                    Text("%")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Freibetrag (€ / Monat)") {
+                HStack {
+                    TextField("Monatlicher Freibetrag", text: $allowanceText)
+                        .keyboardType(.decimalPad)
+                    Text("€")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 
     private func formattedPercent(_ value: Double?) -> String {
@@ -1435,17 +2046,27 @@ private struct NetWageConfigSheet: View {
         let wageTax = normalizedDouble(from: wageTaxText)
         let pension = normalizedDouble(from: pensionText)
         let allowance = normalizedDouble(from: allowanceText)
-        config.wageTaxPercent = wageTax
-        config.pensionPercent = pension
-        config.monthlyAllowanceEuro = allowance
-        config.bonusesCSV = bonusTexts
+        let bonusesCSV = bonusTexts
             .compactMap { normalizedDouble(from: $0) }
             .map { String(format: "%.2f", $0) }
             .joined(separator: ";")
+        config.wageTaxPercent = wageTax
+        config.pensionPercent = pension
+        config.monthlyAllowanceEuro = allowance
+        config.bonusesCSV = bonusesCSV
         wageTaxText = formatForDisplay(from: wageTaxText) ?? ""
         pensionText = formatForDisplay(from: pensionText) ?? ""
         allowanceText = formatForDisplay(from: allowanceText) ?? ""
         bonusTexts = bonusTexts.map { formatForDisplay(from: $0) ?? $0 }
-        modelContext.persistIfPossible()
+        onPersistDefaults(wageTax, pension, allowance, bonusesCSV)
+        Task {
+            do {
+                try await cloudKitService.saveNetWageConfig(config)
+            } catch {
+                #if DEBUG
+                print("Failed saving net config: \(error)")
+                #endif
+            }
+        }
     }
 }

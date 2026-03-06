@@ -1,42 +1,35 @@
 import SwiftUI
-import SwiftData
 import Combine
 import Network
-import CoreData
+import SwiftData
 
 struct RootView: View {
+    @EnvironmentObject private var cloudKitService: CloudKitService
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
-    @Query private var settingsList: [Settings]
-    @Query(sort: \DayEntry.date) private var entries: [DayEntry]
-    @Query(sort: \NetWageMonthConfig.monthStart) private var netWageConfigs: [NetWageMonthConfig]
-    @Query(sort: \HolidayCalendarDay.date) private var holidayDays: [HolidayCalendarDay]
+    private let localStore = LocalDayEntryStore.shared
+    @AppStorage("payscope.onboarding.completed.sticky") private var onboardingCompletionSticky = false
+    @State private var settingsList: [Settings] = []
+    @State private var entries: [DayEntry] = []
 
     @State private var didRunInitialLiveActivitySync = false
     @State private var isSyncingLiveActivity = false
     @State private var didBootstrapSettings = false
-    @State private var didRunInitialICloudForceSync = false
-    @State private var isApplyingCloudSync = false
     @State private var hasSeenOfflineState = false
+    @State private var hasHandledInitialActivePhase = false
+    @State private var isResolvingOnboardingGate = true
     @State private var pendingLiveActivitySyncTask: Task<Void, Never>?
-    @State private var pendingCloudExportTask: Task<Void, Never>?
     @StateObject private var connectivityMonitor = ConnectivityMonitor()
 
-    private let liveActivityTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
-    private let iCloudSettingsChangePublisher = NotificationCenter.default.publisher(
-        for: NSUbiquitousKeyValueStore.didChangeExternallyNotification
-    )
-    private let userDefaultsChangePublisher = NotificationCenter.default.publisher(
-        for: UserDefaults.didChangeNotification
-    )
-    private let modelContextDidSavePublisher = NotificationCenter.default.publisher(
-        for: .NSManagedObjectContextDidSave
-    )
+    @State private var isLoadingData = false
 
     var body: some View {
         Group {
             if let settings = settingsList.first {
-                if settings.hasCompletedOnboarding {
+                let hasCompletedOnboarding = settings.hasCompletedOnboarding || onboardingCompletionSticky
+                if isResolvingOnboardingGate && !hasCompletedOnboarding {
+                    ProgressView("iCloud-Status wird geprüft...")
+                } else if hasCompletedOnboarding {
                     ZStack {
                         Color.clear
                             .payScopeBackground(accent: settings.themeAccent.color)
@@ -46,97 +39,88 @@ struct RootView: View {
                         )
                     }
                     .task {
-                        scheduleLaunchICloudSyncIfNeeded(
-                            settings,
-                            entries: entries,
-                            netWageConfigs: netWageConfigs,
-                            holidayDays: holidayDays
-                        )
                         guard !didRunInitialLiveActivitySync else { return }
                         didRunInitialLiveActivitySync = true
                         await syncLiveActivity()
+                        Task { @MainActor in
+                            await loadData()
+                            await syncLiveActivity()
+                        }
                     }
                 } else {
                     OnboardingContainerView(settings: settings)
-                        .task {
-                            scheduleLaunchICloudSyncIfNeeded(
-                                settings,
-                                entries: entries,
-                                netWageConfigs: netWageConfigs,
-                                holidayDays: holidayDays
-                            )
-                        }
                 }
             } else {
                 ProgressView("PayScope wird vorbereitet...")
                     .task {
                         guard !didBootstrapSettings else { return }
                         didBootstrapSettings = true
-                        await bootstrapInitialData()
+
+                        // Local-first: load (and de-duplicate) the local Settings singleton
+                        let descriptor = FetchDescriptor<Settings>(predicate: #Predicate<Settings> { $0.key == "singleton" })
+                        let fetched = (try? modelContext.fetch(descriptor)) ?? []
+
+                        let local: Settings
+                        if let newest = fetched.max(by: { $0.updatedAt < $1.updatedAt }) {
+                            local = newest
+
+                            // Delete any duplicates so we never flip onboarding due to old records
+                            for s in fetched where s !== newest {
+                                modelContext.delete(s)
+                            }
+                            try? modelContext.save()
+                        } else {
+                            // Fresh local installs should not outrank an existing cloud singleton.
+                            let created = Settings(key: "singleton", updatedAt: .distantPast)
+                            modelContext.insert(created)
+                            try? modelContext.save()
+                            local = created
+                        }
+
+                        settingsList = [local]
+                        if local.hasCompletedOnboarding {
+                            onboardingCompletionSticky = true
+                        }
+                        await refreshSettingsFromCloud(pushLocalIfMissing: true)
+                        isResolvingOnboardingGate = false
                     }
             }
         }
-        .onReceive(liveActivityTimer) { _ in
+        .onReceive(
+            NotificationCenter.default.publisher(for: .dayEntriesDidChange)
+                .debounce(for: .seconds(1), scheduler: RunLoop.main)
+        ) { _ in
             guard scenePhase == .active else { return }
             scheduleLiveActivitySync()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
-                if let settings = settingsList.first, !didRunInitialICloudForceSync {
-                    scheduleLaunchICloudSyncIfNeeded(
-                        settings,
-                        entries: entries,
-                        netWageConfigs: netWageConfigs,
-                        holidayDays: holidayDays
-                    )
+                // Initial activation already runs startup tasks above.
+                if !hasHandledInitialActivePhase {
+                    hasHandledInitialActivePhase = true
+                    return
+                }
+                // Refresh all cloud-backed state when returning to foreground.
+                Task {
+                    await refreshSettingsFromCloud(pushLocalIfMissing: false)
+                    await loadData()
                 }
                 scheduleLiveActivitySync()
-                scheduleCloudExport()
                 return
             }
-
-            scheduleCloudExport(requiresActiveScene: false)
-        }
-        .onReceive(modelContextDidSavePublisher) { _ in
-            scheduleLiveActivitySync(delayNanoseconds: 300_000_000)
-            scheduleCloudExport(delayNanoseconds: 700_000_000)
-        }
-        .onReceive(iCloudSettingsChangePublisher) { notification in
-            Task { @MainActor in
-                guard ICloudSettingsSync.shouldHandleExternalChange(notification) else { return }
-                guard let settings = settingsList.first else { return }
-                forceSyncFromICloud(
-                    settings,
-                    entries: entries,
-                    netWageConfigs: netWageConfigs,
-                    holidayDays: holidayDays
-                )
-            }
-        }
-        .onReceive(userDefaultsChangePublisher) { _ in
-            scheduleCloudExport()
         }
         .onChange(of: connectivityMonitor.isOnline) { _, isOnline in
-            guard !isOnline else {
-                guard hasSeenOfflineState else { return }
-                hasSeenOfflineState = false
-                Task { @MainActor in
-                    guard let settings = settingsList.first else { return }
-                    forceSyncFromICloud(
-                        settings,
-                        entries: entries,
-                        netWageConfigs: netWageConfigs,
-                        holidayDays: holidayDays
-                    )
-                }
+            guard isOnline else {
+                hasSeenOfflineState = true
                 return
             }
 
-            hasSeenOfflineState = true
+            guard hasSeenOfflineState else { return }
+            hasSeenOfflineState = false
+            Task { await refreshSettingsFromCloud(pushLocalIfMissing: true) }
         }
         .onDisappear {
             pendingLiveActivitySyncTask?.cancel()
-            pendingCloudExportTask?.cancel()
         }
     }
 
@@ -152,21 +136,9 @@ struct RootView: View {
         }
     }
 
-    private func scheduleCloudExport(
-        delayNanoseconds: UInt64 = 300_000_000,
-        requiresActiveScene: Bool = true
-    ) {
-        pendingCloudExportTask?.cancel()
-        pendingCloudExportTask = Task { @MainActor in
-            if delayNanoseconds > 0 {
-                try? await Task.sleep(nanoseconds: delayNanoseconds)
-            }
-            guard !Task.isCancelled else { return }
-            if requiresActiveScene && scenePhase != .active {
-                return
-            }
-            exportICloudSnapshotIfPossible()
-        }
+    private func liveActivitySyncInterval(reference: Date = .now) -> DateInterval {
+        let dayStart = reference.startOfDayLocal()
+        return DateInterval(start: dayStart.addingDays(-2), end: dayStart.addingDays(35))
     }
 
     @MainActor
@@ -179,85 +151,107 @@ struct RootView: View {
 
         await PayScopeLiveActivityManager.syncAtAppLaunch(
             settings: settings,
-            entries: entries
+            entries: mergedEntriesForLiveActivity()
         )
     }
 
-    private func scheduleLaunchICloudSyncIfNeeded(
-        _ settings: Settings,
-        entries: [DayEntry],
-        netWageConfigs: [NetWageMonthConfig],
-        holidayDays: [HolidayCalendarDay]
-    ) {
-        guard !didRunInitialICloudForceSync else { return }
-        didRunInitialICloudForceSync = true
-        Task { @MainActor in
-            // Avoid blocking the first render pass; run iCloud reconciliation shortly after launch.
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            guard scenePhase == .active else { return }
-            forceSyncFromICloud(
-                settings,
-                entries: entries,
-                netWageConfigs: netWageConfigs,
-                holidayDays: holidayDays
-            )
-        }
-    }
-
-    @MainActor
-    private func forceSyncFromICloud(
-        _ settings: Settings,
-        entries: [DayEntry],
-        netWageConfigs: [NetWageMonthConfig],
-        holidayDays: [HolidayCalendarDay]
-    ) {
-        isApplyingCloudSync = true
-        defer { isApplyingCloudSync = false }
-
-        guard ICloudSettingsSync.forceSyncDownIntoStore(
-            settings: settings,
-            localEntries: entries,
-            localNetWageConfigs: netWageConfigs,
-            localHolidayDays: holidayDays,
-            modelContext: modelContext
-        ) else { return }
-        modelContext.persistIfPossible()
-    }
-
-    @MainActor
-    private func exportICloudSnapshotIfPossible() {
-        guard !isApplyingCloudSync else { return }
-        guard let settings = settingsList.first else { return }
-        ICloudSettingsSync.export(
-            settings: settings,
-            entries: entries,
-            netWageConfigs: netWageConfigs,
-            holidayDays: holidayDays
-        )
-    }
-
-    @MainActor
-    private func bootstrapInitialData() async {
-        guard settingsList.isEmpty else { return }
-
-        let initialSettings = Settings()
-        modelContext.insert(initialSettings)
-
-        for attempt in 1...4 {
-            do {
-                try modelContext.save()
-                return
-            } catch {
-                #if DEBUG
-                print("Initial settings bootstrap save attempt \(attempt) failed: \(error)")
-                #endif
-                try? await Task.sleep(nanoseconds: UInt64(attempt) * 300_000_000)
+    private func mergedEntriesForLiveActivity() -> [DayEntry] {
+        let interval = liveActivitySyncInterval()
+        let localEntries = localStore.loadAll(in: interval)
+        let merged = Dictionary(
+            (localEntries + entries).map { ($0.date.startOfDayLocal(), $0) },
+            uniquingKeysWith: { existing, candidate in
+                candidate.updatedAt > existing.updatedAt ? candidate : existing
             }
+        )
+        return merged.values.sorted { $0.date < $1.date }
+    }
+
+    @MainActor
+    private func loadData() async {
+        guard !isLoadingData else { return }
+        isLoadingData = true
+        defer { isLoadingData = false }
+
+        let interval = liveActivitySyncInterval()
+        let localEntries = localStore.loadAll(in: interval)
+        if entries.isEmpty {
+            entries = localEntries.sorted { $0.date < $1.date }
         }
 
-        #if DEBUG
-        print("Initial settings bootstrap exhausted retries; pending unsaved state remains.")
-        #endif
+        do {
+            let cloudEntries = try await cloudKitService.fetchDayEntries(in: interval)
+            let merged = Dictionary(
+                (localEntries + cloudEntries).map { ($0.date.startOfDayLocal(), $0) },
+                uniquingKeysWith: { existing, candidate in
+                    candidate.updatedAt > existing.updatedAt ? candidate : existing
+                }
+            )
+            entries = merged.values.sorted { $0.date < $1.date }
+            localStore.upsertMany(cloudEntries, notify: false)
+        } catch {
+            #if DEBUG
+            print("Failed to load data from CloudKit: \(error)")
+            #endif
+        }
+    }
+
+    @MainActor
+    private func refreshSettingsFromCloud(pushLocalIfMissing: Bool) async {
+        guard let local = settingsList.first else { return }
+
+        if onboardingCompletionSticky && !local.hasCompletedOnboarding {
+            local.hasCompletedOnboarding = true
+            try? modelContext.save()
+            settingsList = [local]
+        }
+
+        do {
+            if let remote = try await cloudKitService.fetchSettingsSingleton() {
+                let keepCompletedOnboarding = local.hasCompletedOnboarding || onboardingCompletionSticky
+                let localLooksUnconfigured =
+                    !local.hasCompletedOnboarding &&
+                    local.hourlyRateCents == nil &&
+                    local.monthlySalaryCents == nil &&
+                    local.weeklyTargetSeconds == nil
+
+                // If local state is still a blank default, prefer remote regardless of timestamps.
+                if remote.updatedAt > local.updatedAt || localLooksUnconfigured {
+                    local.applyValues(from: remote)
+                    if keepCompletedOnboarding || remote.hasCompletedOnboarding {
+                        local.hasCompletedOnboarding = true
+                    }
+                    if local.hasCompletedOnboarding {
+                        onboardingCompletionSticky = true
+                    }
+                    try? modelContext.save()
+                    settingsList = [local]
+                } else if remote.hasCompletedOnboarding && !local.hasCompletedOnboarding {
+                    // Onboarding completion is monotonic: once completed on any device,
+                    // do not force onboarding again on this device.
+                    local.hasCompletedOnboarding = true
+                    local.updatedAt = max(local.updatedAt, remote.updatedAt)
+                    onboardingCompletionSticky = true
+                    try? modelContext.save()
+                    settingsList = [local]
+                } else if local.hasCompletedOnboarding && !remote.hasCompletedOnboarding {
+                    // Keep completion monotonic across devices even if the cloud copy is stale.
+                    try? modelContext.save()
+                    try await cloudKitService.saveSettings(local)
+                } else if pushLocalIfMissing && local.updatedAt > remote.updatedAt {
+                    try? modelContext.save()
+                    try await cloudKitService.saveSettings(local)
+                }
+                return
+            }
+
+            if pushLocalIfMissing || local.hasCompletedOnboarding {
+                try? modelContext.save()
+                try await cloudKitService.saveSettings(local)
+            }
+        } catch {
+            // Offline or CloudKit error: keep local settings.
+        }
     }
 }
 

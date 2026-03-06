@@ -52,6 +52,7 @@ private struct OnboardingSplashView: View {
 }
 
 private struct OnboardingFlowView: View {
+    @EnvironmentObject private var cloudKitService: CloudKitService
     @Environment(\.modelContext) private var modelContext
     @Bindable var settings: Settings
 
@@ -64,7 +65,7 @@ private struct OnboardingFlowView: View {
     @State private var timelineMinMinute = 6 * 60
     @State private var timelineMaxMinute = 22 * 60
 
-    private let pageCount = 6
+    private let pageCount = 7
 
     var body: some View {
         VStack(spacing: 12) {
@@ -72,9 +73,10 @@ private struct OnboardingFlowView: View {
                 overviewPage.tag(0)
                 paySetupPage.tag(1)
                 workweekPage.tag(2)
-                holidayRegionPage.tag(3)
-                rulesPage.tag(4)
-                captureAndThemePage.tag(5)
+                weeklyTargetPage.tag(3)
+                holidayRegionPage.tag(4)
+                rulesPage.tag(5)
+                captureAndThemePage.tag(6)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
 
@@ -92,13 +94,19 @@ private struct OnboardingFlowView: View {
                 Spacer()
 
                 Button(page == pageCount - 1 ? "Fertig" : "Weiter") {
-                    persistCurrentPage()
-                    if page == pageCount - 1 {
-                        settings.hasCompletedOnboarding = true
-                    } else {
-                        page += 1
-                    }
-                    modelContext.persistIfPossible()
+                        persistCurrentPage()
+                        if page == pageCount - 1 {
+                            settings.hasCompletedOnboarding = true
+                            settings.updatedAt = Date()
+                            UserDefaults.standard.set(true, forKey: "payscope.onboarding.completed.sticky")
+                            try? modelContext.save()
+
+                            Task {
+                                try? await cloudKitService.saveSettings(settings)
+                            }
+                        } else {
+                            page += 1
+                        }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!isPageValid)
@@ -108,6 +116,7 @@ private struct OnboardingFlowView: View {
             .padding(.bottom, 16)
         }
         .payScopeBackground(accent: settings.themeAccent.color)
+        .tint(settings.themeAccent.color)
         .onAppear {
             hourlyRate = settings.hourlyRateCents.map { String(format: "%.2f", Double($0) / 100) } ?? ""
             monthlySalary = settings.monthlySalaryCents.map { String(format: "%.2f", Double($0) / 100) } ?? ""
@@ -116,6 +125,7 @@ private struct OnboardingFlowView: View {
             holidaySubdivisionCode = settings.holidaySubdivisionCode ?? ""
             timelineMinMinute = settings.timelineMinMinute ?? 6 * 60
             timelineMaxMinute = settings.timelineMaxMinute ?? 22 * 60
+            settings.weekStart = .monday
         }
     }
 
@@ -130,7 +140,8 @@ private struct OnboardingFlowView: View {
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 bullet("Bezahlungsmodell und Betrag")
-                bullet("Arbeitswoche und Sollstunden")
+                bullet("Arbeitswoche und Arbeitstage")
+                bullet("Wöchentliche Sollstunden")
                 bullet("Land/Bundesland für Feiertage")
                 bullet("Regeln für 13-Wochen-Berechnung")
                 bullet("Timeline und Kalenderdarstellung")
@@ -148,7 +159,7 @@ private struct OnboardingFlowView: View {
             accent: settings.themeAccent.color
         ) {
             VStack(alignment: .leading, spacing: 14) {
-                Picker("Lohnmodus", selection: $settings.payMode) {
+                Picker("Lohnmodus", selection: Binding(get: { settings.payMode }, set: { settings.payMode = $0 })) {
                     ForEach(PayMode.allCases) { mode in
                         Text(mode.label).tag(mode)
                     }
@@ -181,33 +192,49 @@ private struct OnboardingFlowView: View {
     private var workweekPage: some View {
         OnboardingPageShell(
             title: "Arbeitswoche",
-            subtitle: "Basis für Sollzeit und Feiertagsgutschrift.",
+            subtitle: "Wochenstart ist fest auf Montag gesetzt.",
             step: page + 1,
             total: pageCount,
             icon: "calendar",
             accent: settings.themeAccent.color
         ) {
             VStack(alignment: .leading, spacing: 14) {
-                Picker("Wochenstart", selection: $settings.weekStart) {
-                    ForEach(WeekStart.allCases) { start in
-                        Text(start.label).tag(start)
-                    }
+                HStack {
+                    Text("Wochenbeginn")
+                    Spacer()
+                    Text("Montag")
+                        .foregroundStyle(.secondary)
                 }
-                .pickerStyle(.segmented)
 
+                Stepper(
+                    "Arbeitstage pro Woche: \(settings.scheduledWorkdaysCount)",
+                    value: Binding(
+                        get: { settings.scheduledWorkdaysCount },
+                        set: { settings.scheduledWorkdaysCount = $0 }
+                    ),
+                    in: 1...7
+                )
+
+                Text("Feiertage werden mit der Sollzeit pro Arbeitstag gutgeschrieben.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var weeklyTargetPage: some View {
+        OnboardingPageShell(
+            title: "Wochenstunden",
+            subtitle: "Diese Sollzeit wird für Zielwerte und Feiertage genutzt.",
+            step: page + 1,
+            total: pageCount,
+            icon: "clock",
+            accent: settings.themeAccent.color
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
                 TextField("Wöchentliche Sollstunden (optional)", text: $weeklyHours)
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.decimalPad)
-
-                Picker("Feiertagsmodus", selection: $settings.holidayCreditingMode) {
-                    ForEach(HolidayCreditingMode.allCases) { mode in
-                        Text(mode.label).tag(mode)
-                    }
-                }
-
-                if settings.holidayCreditingMode == .weeklyTargetDistributed {
-                    Stepper("Arbeitstage pro Woche: \(settings.scheduledWorkdaysCount)", value: $settings.scheduledWorkdaysCount, in: 1...7)
-                }
 
                 if !weeklyHours.isEmpty, parseHoursToSeconds(weeklyHours) == nil {
                     Text("Sollstunden müssen eine gültige Zahl sein.")
@@ -254,23 +281,26 @@ private struct OnboardingFlowView: View {
     private var rulesPage: some View {
         OnboardingPageShell(
             title: "13-Wochen-Regeln",
-            subtitle: "Steuert, wie Urlaub/Krank ohne Schätzungen berechnet wird.",
+            subtitle: "Steuert, wie Urlaub/Feiertag/Krank ohne Schätzungen berechnet wird.",
             step: page + 1,
             total: pageCount,
             icon: "checkmark.shield",
             accent: settings.themeAccent.color
         ) {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Für jeden Urlaubs- oder Krankheitstag werden die letzten 13 gleichen Wochentage geprüft.")
+                Text("Bei aktivierter Regel werden die letzten 13 gleichen Wochentage geprüft.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                Toggle("Fehlende Referenzen als 0 zählen", isOn: $settings.countMissingAsZero)
+                Toggle("Urlaub mit 13-Wochen-Regel", isOn: vacationLookbackBinding)
+                Toggle("Feiertag mit 13-Wochen-Regel", isOn: holidayLookbackBinding)
+
+                Toggle("Fehlende Referenzen als 0 zählen", isOn: Binding(get: { settings.countMissingAsZero }, set: { settings.countMissingAsZero = $0 }))
                 Text("Aus: fehlende Einträge bleiben offen, bis Daten vorhanden sind.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
-                Toggle("Strenge Historie erforderlich", isOn: $settings.strictHistoryRequired)
+                Toggle("Strenge Historie erforderlich", isOn: Binding(get: { settings.strictHistoryRequired }, set: { settings.strictHistoryRequired = $0 }))
                 Text("Ein: fehlende Rückblick-Tage erzeugen einen Fehler.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -314,29 +344,29 @@ private struct OnboardingFlowView: View {
                     .font(.subheadline.weight(.semibold))
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 80))], spacing: 12) {
-                ForEach(ThemeAccent.allCases) { accent in
-                    Button {
-                        settings.themeAccent = accent
-                    } label: {
-                        VStack(spacing: 8) {
-                            Circle()
-                                .fill(accent.color)
-                                .frame(width: 36, height: 36)
-                            Text(accent.label)
-                                .font(.footnote)
+                    ForEach(ThemeAccent.allCases) { accent in
+                        Button {
+                            settings.themeAccent = accent
+                        } label: {
+                            VStack(spacing: 8) {
+                                Circle()
+                                    .fill(accent.color)
+                                    .frame(width: 36, height: 36)
+                                Text(accent.label)
+                                    .font(.footnote)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(12)
+                            .payScopeSurface(
+                                accent: accent.color,
+                                cornerRadius: 14,
+                                emphasis: settings.themeAccent == accent ? 0.45 : 0.2
+                            )
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(12)
-                        .payScopeSurface(
-                            accent: accent.color,
-                            cornerRadius: 14,
-                            emphasis: settings.themeAccent == accent ? 0.45 : 0.2
-                        )
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
-        }
         }
     }
 
@@ -358,10 +388,10 @@ private struct OnboardingFlowView: View {
                 return parseMoneyToCents(hourlyRate).map { $0 > 0 } ?? false
             }
             return parseMoneyToCents(monthlySalary).map { $0 > 0 } ?? false
-        case 2:
+        case 3:
             if weeklyHours.isEmpty { return true }
             return parseHoursToSeconds(weeklyHours) != nil
-        case 3:
+        case 4:
             return isHolidayCountryCodeValid
         default:
             return true
@@ -377,11 +407,58 @@ private struct OnboardingFlowView: View {
             settings.monthlySalaryCents = value
             settings.hourlyRateCents = nil
         }
+        settings.weekStart = .monday
         settings.weeklyTargetSeconds = parseHoursToSeconds(weeklyHours)
         settings.holidayCountryCode = normalizedHolidayCountryCode
         settings.holidaySubdivisionCode = normalizedHolidaySubdivisionCode
         settings.timelineMinMinute = timelineMinMinute
         settings.timelineMaxMinute = timelineMaxMinute
+        persistSettingsLocally()
+    }
+
+    private var vacationLookbackBinding: Binding<Bool> {
+        Binding(
+            get: { settings.effectiveVacationCreditingMode == .lookback13Weeks },
+            set: { newValue in
+                settings.vacationCreditingMode = newValue ? .lookback13Weeks : .fixedValue
+                if !newValue, settings.vacationFixedSeconds == nil {
+                    settings.vacationFixedSeconds = suggestedFixedVacationSeconds
+                }
+                persistSettingsLocally()
+            }
+        )
+    }
+
+    private var holidayLookbackBinding: Binding<Bool> {
+        Binding(
+            get: { settings.effectiveHolidayCreditingMode == .lookback13Weeks },
+            set: { newValue in
+                settings.holidayCreditingMode = newValue ? .lookback13Weeks : .fixedValue
+                if !newValue, settings.holidayFixedSeconds == nil {
+                    settings.holidayFixedSeconds = suggestedFixedHolidaySeconds
+                }
+                persistSettingsLocally()
+            }
+        )
+    }
+
+    private func persistSettingsLocally() {
+        settings.updatedAt = Date()
+        try? modelContext.save()
+    }
+
+    private var suggestedFixedVacationSeconds: Int {
+        if let weeklyTargetSeconds = settings.weeklyTargetSeconds {
+            return max(0, weeklyTargetSeconds / max(1, min(7, settings.scheduledWorkdaysCount)))
+        }
+        return 8 * 3600
+    }
+
+    private var suggestedFixedHolidaySeconds: Int {
+        if let weeklyTargetSeconds = settings.weeklyTargetSeconds {
+            return max(0, weeklyTargetSeconds / max(1, min(7, settings.scheduledWorkdaysCount)))
+        }
+        return 8 * 3600
     }
 
     private func parseMoneyToCents(_ text: String) -> Int? {

@@ -18,9 +18,10 @@ struct CSVExporter {
             .filter { $0.date >= monthRange.start && $0.date < monthRange.end }
             .sorted { $0.date < $1.date }
 
-        var lines: [String] = ["date,type,workedHours,workedPay,creditedHours,creditedPay,notes"]
+        var lines: [String] = [ShiftCSVTransfer.exportHeader]
         for entry in filtered {
             let result = service.dayComputation(for: entry, allEntries: entries, settings: settings)
+            let shiftColumns = ShiftCSVTransfer.exportColumns(for: entry)
 
             let workedSeconds: Int
             let workedPay: Int
@@ -50,8 +51,12 @@ struct CSVExporter {
             }
 
             let row = [
-                PayScopeFormatters.isoDay.string(from: entry.date),
-                entry.type.rawValue,
+                shiftColumns.icon,
+                shiftColumns.date,
+                shiftColumns.start,
+                shiftColumns.end,
+                shiftColumns.breakMinutes,
+                shiftColumns.type,
                 String(format: "%.2f", Double(workedSeconds) / 3600),
                 String(format: "%.2f", Double(workedPay) / 100),
                 String(format: "%.2f", Double(creditedSeconds) / 3600),

@@ -302,7 +302,10 @@ private func liveAccentColor(from rawValue: String) -> Color {
     case "purple": return .purple
     case "orange": return .orange
     case "pink": return .pink
-    default: return .accentColor
+    case "teal": return .teal
+    case "red": return .red
+    case "indigo": return .indigo
+    default: return .blue
     }
 }
 
@@ -330,15 +333,22 @@ private func currencyString(cents: Int) -> String {
 
 private func timeString(_ date: Date) -> String {
     let formatter = DateFormatter()
-    formatter.timeStyle = .short
+    formatter.locale = Locale.current
+    formatter.timeZone = TimeZone.current
+    formatter.dateFormat = "HH:mm"
     return formatter.string(from: date)
 }
 
 private func nextShiftText(start: Date?, durationSeconds: Int) -> String {
     guard let start else { return "Nächste Schicht: noch nicht geplant" }
     let dayFormatter = DateFormatter()
+    dayFormatter.locale = Locale.current
+    dayFormatter.timeZone = TimeZone.current
     dayFormatter.dateFormat = "dd.MM."
+
     let timeFormatter = DateFormatter()
-    timeFormatter.timeStyle = .short
+    timeFormatter.locale = Locale.current
+    timeFormatter.timeZone = TimeZone.current
+    timeFormatter.dateFormat = "HH:mm"
     return "Nächste Schicht: \(dayFormatter.string(from: start)) ab \(timeFormatter.string(from: start)) für \(hhmmString(from: durationSeconds))"
 }

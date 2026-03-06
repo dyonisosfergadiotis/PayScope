@@ -64,17 +64,17 @@ struct TodayFocusView: View {
         if let manual = day.manualWorkedSeconds {
             return max(0, manual)
         }
-        return day.segments.reduce(0) { partial, segment in
-            let segmentSeconds = max(0, Int(segment.end.timeIntervalSince(segment.start)) - max(0, segment.breakSeconds))
-            return partial + segmentSeconds
+        if let start = day.shiftStart, let end = day.shiftEnd, end > start {
+            let gross = max(0, Int(end.timeIntervalSince(start)))
+            let breakSeconds = max(0, day.breakSeconds ?? 0)
+            return max(0, gross - breakSeconds)
         }
+        return 0
     }
 
     private var breakSeconds: Int {
         guard let day = todayEntry else { return 0 }
-        return day.segments.reduce(0) { partial, segment in
-            partial + max(0, segment.breakSeconds)
-        }
+        return max(0, day.breakSeconds ?? 0)
     }
 
     private var plannedDaySeconds: Int? {
@@ -110,14 +110,13 @@ struct TodayFocusView: View {
             return [start...(start + manualMinutes)]
         }
 
-        let raw = day.segments.compactMap { segment -> ClosedRange<Double>? in
-            let start = max(Double(timelineBounds.lowerBound), min(Double(timelineBounds.upperBound), minuteOfDay(from: segment.start)))
-            let end = max(Double(timelineBounds.lowerBound), min(Double(timelineBounds.upperBound), minuteOfDay(from: segment.end)))
-            guard end > start else { return nil }
-            return start...end
+        guard let startDate = day.shiftStart, let endDate = day.shiftEnd, endDate > startDate else {
+            return []
         }
-
-        return mergeIntervals(raw)
+        let start = max(Double(timelineBounds.lowerBound), min(Double(timelineBounds.upperBound), minuteOfDay(from: startDate)))
+        let end = max(Double(timelineBounds.lowerBound), min(Double(timelineBounds.upperBound), minuteOfDay(from: endDate)))
+        guard end > start else { return [] }
+        return [start...end]
     }
 
     private var timelineStartDate: Date {
@@ -215,7 +214,7 @@ struct TodayFocusView: View {
 
     private var todayTypeColor: Color {
         if let today = todayEntry {
-            return today.type.tint
+            return today.type.tint(for: settings.themeAccent)
         }
         return nextEntry != nil ? settings.themeAccent.color : .secondary
     }
@@ -226,7 +225,7 @@ struct TodayFocusView: View {
 
     private var pauseBlocksCount: Int {
         guard let day = todayEntry else { return 0 }
-        return day.segments.filter { $0.breakSeconds > 0 }.count
+        return max(0, day.breakSeconds ?? 0) > 0 ? 1 : 0
     }
 
     private var pauseInfoText: String {
@@ -244,14 +243,13 @@ struct TodayFocusView: View {
             return "Manuell erfasst"
         }
         guard
-            !day.segments.isEmpty,
-            let first = day.segments.map(\.start).min(),
-            let last = day.segments.map(\.end).max()
+            let first = day.shiftStart,
+            let last = day.shiftEnd,
+            last > first
         else {
-            return "Keine Segmente"
+            return "Keine Schichtzeit"
         }
-        let suffix = day.segments.count == 1 ? "Segment" : "Segmente"
-        return "\(PayScopeFormatters.time.string(from: first)) - \(PayScopeFormatters.time.string(from: last)) · \(day.segments.count) \(suffix)"
+        return "\(PayScopeFormatters.time.string(from: first)) - \(PayScopeFormatters.time.string(from: last))"
     }
 
     private var targetInfoTitle: String {
@@ -293,27 +291,6 @@ struct TodayFocusView: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .font(.subheadline)
-    }
-
-    private func mergeIntervals(_ intervals: [ClosedRange<Double>]) -> [ClosedRange<Double>] {
-        guard !intervals.isEmpty else { return [] }
-        let sorted = intervals.sorted { $0.lowerBound < $1.lowerBound }
-        var result: [ClosedRange<Double>] = [sorted[0]]
-
-        for interval in sorted.dropFirst() {
-            guard let last = result.last else {
-                result.append(interval)
-                continue
-            }
-
-            if interval.lowerBound <= last.upperBound {
-                result[result.count - 1] = last.lowerBound...max(last.upperBound, interval.upperBound)
-            } else {
-                result.append(interval)
-            }
-        }
-
-        return result
     }
 
     private func dateAtMinute(_ minute: Int, on dayStart: Date) -> Date {

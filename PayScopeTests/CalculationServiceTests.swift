@@ -87,6 +87,16 @@ final class CalculationServiceTests: XCTestCase {
         XCTAssertEqual(try? result.get(), 9 * 3600 + 15 * 60)
     }
 
+    func testNineHoursWithoutExplicitBreakOnlyAppliesThirtyMinutes() {
+        let start = dateFrom(year: 2026, month: 2, day: 17)
+        let end = start.addingTimeInterval(9 * 3600)
+        let segment = TimeSegment(start: start, end: end, breakSeconds: 0)
+        let entry = DayEntry(date: start, type: .work, segments: [segment])
+
+        let result = CalculationService().workedSeconds(for: entry)
+        XCTAssertEqual(try? result.get(), 8 * 3600 + 30 * 60)
+    }
+
     func testLookbackSufficientHistoryOK() {
         let settings = Settings(hasCompletedOnboarding: true, payMode: .hourly, hourlyRateCents: 2000, strictHistoryRequired: true)
         let target = DayEntry(date: date(daysBack: 0), type: .vacation)
@@ -161,7 +171,7 @@ final class CalculationServiceTests: XCTestCase {
     }
 
     func testHolidayUsesThirteenWeekRuleInStrictMode() {
-        let settings = Settings(strictHistoryRequired: true)
+        let settings = Settings(strictHistoryRequired: true, holidayCreditingMode: .lookback13Weeks)
         let holiday = DayEntry(date: date(daysBack: 0), type: .holiday)
         let result = CalculationService().dayComputation(for: holiday, allEntries: [holiday], settings: settings)
 

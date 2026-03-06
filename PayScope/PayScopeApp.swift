@@ -1,78 +1,91 @@
 import SwiftUI
-import SwiftData
 import ActivityKit
+import Combine
+import CloudKit
+import SwiftData
+import os
 
 @main
 struct PayScopeApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let fileManager = FileManager.default
-        do {
-            let applicationSupportURL = try fileManager.url(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask,
-                appropriateFor: nil,
-                create: true
-            )
-            try fileManager.createDirectory(at: applicationSupportURL, withIntermediateDirectories: true)
-        } catch {
-            #if DEBUG
-            print("Failed to ensure Application Support directory: \(error)")
-            #endif
-        }
+    @StateObject private var cloudKitService = CloudKitService.shared
 
-        let schema = Schema([
-            DayEntry.self,
-            TimeSegment.self,
-            Settings.self,
-            NetWageMonthConfig.self,
-            HolidayCalendarDay.self
-        ])
+    private static let startupLogger = Logger(
+        subsystem: "com.dyonisos.paysco",
+        category: String(describing: PayScopeApp.self)
+    )
 
-        let localFallbackConfiguration = ModelConfiguration(
-            "PayScope",
-            schema: schema,
-            isStoredInMemoryOnly: false,
-            cloudKitDatabase: .none
-        )
-        let isolatedLocalConfiguration = ModelConfiguration(
-            "PayScopeLocalFallback",
-            schema: schema,
-            isStoredInMemoryOnly: false,
-            cloudKitDatabase: .none
-        )
-        let inMemoryConfiguration = ModelConfiguration(
-            "PayScopeInMemoryFallback",
-            schema: schema,
-            isStoredInMemoryOnly: true,
-            cloudKitDatabase: .none
-        )
+    @MainActor
+    private static let localModelContainer: ModelContainer = {
+        let primaryStoreName = "LocalStore_v2"
+        let recoveryStoreName = "LocalStore_v3"
+        let recoveryFlagKey = "swiftdata.useRecoveryStore"
 
-        do {
-            return try ModelContainer(for: schema, configurations: [localFallbackConfiguration])
-        } catch {
-            #if DEBUG
-            print("Local ModelContainer failed, trying isolated local store: \(error)")
-            #endif
+        let useRecoveryStoreFirst = UserDefaults.standard.bool(forKey: recoveryFlagKey)
+        let orderedStoreNames = useRecoveryStoreFirst
+            ? [recoveryStoreName, primaryStoreName]
+            : [primaryStoreName, recoveryStoreName]
+
+        var loadErrors: [String] = []
+
+        for storeName in orderedStoreNames {
             do {
-                return try ModelContainer(for: schema, configurations: [isolatedLocalConfiguration])
-            } catch {
+                let container = try makeLocalModelContainer(storeName: storeName)
+                UserDefaults.standard.set(storeName == recoveryStoreName, forKey: recoveryFlagKey)
                 #if DEBUG
-                print("Isolated local ModelContainer failed, using in-memory fallback: \(error)")
-                #endif
-                do {
-                    return try ModelContainer(for: schema, configurations: [inMemoryConfiguration])
-                } catch {
-                    preconditionFailure("Could not create any ModelContainer configuration: \(error)")
+                if storeName == recoveryStoreName {
+                    print("SwiftData: using recovery store '\(recoveryStoreName)' after primary store load failure.")
                 }
+                #endif
+                return container
+            } catch {
+                loadErrors.append("\(storeName): \(error)")
             }
         }
+
+        startupLogger.fault("Failed to create persistent ModelContainer. Attempts: \(loadErrors.joined(separator: " | "), privacy: .public)")
+
+        do {
+            let fallback = try makeInMemoryModelContainer()
+            startupLogger.error("Using in-memory SwiftData fallback container after persistent init failure.")
+            return fallback
+        } catch {
+            fatalError("Failed to create fallback in-memory ModelContainer: \(error)")
+        }
     }()
+
+    @MainActor
+    private static func makeLocalModelContainer(storeName: String) throws -> ModelContainer {
+        // Local-only SwiftData store. Cloud sync is handled manually via CloudKitService.
+        let config = ModelConfiguration(storeName, cloudKitDatabase: .none)
+        return try ModelContainer(
+            for: Settings.self,
+                DayEntry.self,
+                HolidayCalendarDay.self,
+                NetWageMonthConfig.self,
+                TimeSegment.self,
+            configurations: config
+        )
+    }
+
+    @MainActor
+    private static func makeInMemoryModelContainer() throws -> ModelContainer {
+        let config = ModelConfiguration(isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        return try ModelContainer(
+            for: Settings.self,
+                DayEntry.self,
+                HolidayCalendarDay.self,
+                NetWageMonthConfig.self,
+                TimeSegment.self,
+            configurations: config
+        )
+    }
 
     var body: some Scene {
         WindowGroup {
             RootView()
+                .environmentObject(cloudKitService)
+                .modelContainer(Self.localModelContainer)
         }
-        .modelContainer(sharedModelContainer)
     }
 }
 
@@ -142,6 +155,11 @@ enum PayScopeLiveActivityManager {
                 return
             }
 
+            if existing.content.state == content.state,
+               existing.content.staleDate == content.staleDate {
+                return
+            }
+
             await existing.update(content)
             return
         }
@@ -167,7 +185,6 @@ enum PayScopeLiveActivityManager {
             case .vacation, .holiday, .sick:
                 return nil
             case .work, .manual:
-                guard hasTrackedWork(for: todayEntry) else { return nil }
                 break
             }
         } else if !isScheduledWorkday(now, settings: settings) {
@@ -181,11 +198,13 @@ enum PayScopeLiveActivityManager {
         let timelineEnd = shiftWindow.end
 
         guard timelineEnd > timelineStart else { return nil }
-        guard now >= timelineStart else { return nil }
 
-        let effectiveNow = min(now, timelineEnd)
+        let effectiveNow = min(max(now, timelineStart), timelineEnd)
         let workedTodaySeconds = workedSeconds(until: effectiveNow, for: todayEntry)
-        let workedReferenceStart = effectiveNow.addingTimeInterval(TimeInterval(-workedTodaySeconds))
+        let workedReferenceStart = max(
+            timelineStart,
+            effectiveNow.addingTimeInterval(TimeInterval(-workedTodaySeconds))
+        )
         let completedPayCents = service.payCents(for: workedTodaySeconds, settings: settings)
         let isCompleted = now >= timelineEnd
         let shiftCategoryIcon = shiftIcon(for: todayEntry?.type)
@@ -211,7 +230,7 @@ enum PayScopeLiveActivityManager {
 
     private static func isScheduledWorkday(_ date: Date, settings: Settings) -> Bool {
         let calendar = Calendar.current
-        let weekStartWeekday = settings.weekStart == .sunday ? 1 : 2
+        let weekStartWeekday = 2
         let currentWeekday = calendar.component(.weekday, from: date)
         let index = (currentWeekday - weekStartWeekday + 7) % 7
         return index < min(max(settings.scheduledWorkdaysCount, 1), 7)
@@ -228,16 +247,14 @@ enum PayScopeLiveActivityManager {
     }
 
     private static func shiftWindow(for day: DayEntry?, fallbackStart: Date, fallbackEnd: Date) -> (start: Date, end: Date) {
-        guard let day, !day.segments.isEmpty else {
-            return (fallbackStart, fallbackEnd)
+        guard let day else { return (fallbackStart, fallbackEnd) }
+
+        // New model: fixed shift times.
+        if let start = day.shiftStart, let end = day.shiftEnd, end > start {
+            return (start, end)
         }
 
-        let starts = day.segments.map(\.start)
-        let ends = day.segments.map(\.end)
-        guard let minStart = starts.min(), let maxEnd = ends.max(), maxEnd > minStart else {
-            return (fallbackStart, fallbackEnd)
-        }
-        return (minStart, maxEnd)
+        return (fallbackStart, fallbackEnd)
     }
 
     private static func nextShift(after dayStart: Date, entries: [DayEntry], settings: Settings) -> (start: Date, durationSeconds: Int)? {
@@ -256,45 +273,55 @@ enum PayScopeLiveActivityManager {
                 continue
             }
 
-            let fallbackStart = dateAtMinute(settings.timelineMinMinute ?? 8 * 60, on: candidateDay)
-            let fallbackEnd = dateAtMinute(settings.timelineMaxMinute ?? 17 * 60, on: candidateDay)
-            let window = shiftWindow(for: entry, fallbackStart: fallbackStart, fallbackEnd: fallbackEnd)
-            guard window.end > window.start else { continue }
-
-            let durationSeconds: Int
-            if let manual = entry?.manualWorkedSeconds {
-                durationSeconds = max(0, manual)
-            } else {
-                durationSeconds = max(0, Int(window.end.timeIntervalSince(window.start)))
+            guard let entry, hasTrackedWork(for: entry) else {
+                continue
             }
 
-            return (window.start, durationSeconds)
+            // We only show a next shift when fixed times exist.
+            guard let start = entry.shiftStart, let end = entry.shiftEnd, end > start else {
+                continue
+            }
+
+            let rawSeconds = Int(end.timeIntervalSince(start))
+            let breakSeconds = max(0, entry.breakSeconds ?? 0)
+            let durationSeconds = max(0, rawSeconds - breakSeconds)
+
+            return (start, durationSeconds)
         }
         return nil
     }
 
     private static func hasTrackedWork(for day: DayEntry) -> Bool {
+        // New model: fixed shift start/end.
+        if let start = day.shiftStart, let end = day.shiftEnd, end > start {
+            return true
+        }
+
+        // Manual days can still be valid if they have manual seconds.
         if let manualSeconds = day.manualWorkedSeconds {
             return manualSeconds > 0
         }
-        return !day.segments.isEmpty
+
+        return false
     }
 
     private static func workedSeconds(until now: Date, for day: DayEntry?) -> Int {
         guard let day else { return 0 }
+
+        // Manual override
         if let manual = day.manualWorkedSeconds {
             return max(0, manual)
         }
 
-        return day.segments.reduce(0) { partial, segment in
-            guard now > segment.start else { return partial }
-            let effectiveEnd = min(now, segment.end)
-            let elapsedSeconds = max(0, Int(effectiveEnd.timeIntervalSince(segment.start)))
-            let totalSegmentSeconds = max(1, Int(segment.end.timeIntervalSince(segment.start)))
-            let breakSeconds = max(0, segment.breakSeconds)
-            let elapsedBreak = Int((Double(breakSeconds) * Double(elapsedSeconds) / Double(totalSegmentSeconds)).rounded())
-            return partial + max(0, elapsedSeconds - elapsedBreak)
-        }
+        guard let start = day.shiftStart, let end = day.shiftEnd, end > start else { return 0 }
+
+        // Only count within the shift window
+        let effectiveNow = min(max(now, start), end)
+        let rawSeconds = max(0, Int(effectiveNow.timeIntervalSince(start)))
+        let breakSeconds = max(0, day.breakSeconds ?? 0)
+
+        // Simple model: break is subtracted from worked time.
+        return max(0, rawSeconds - breakSeconds)
     }
 
     private static func shiftIcon(for type: DayType?) -> String {

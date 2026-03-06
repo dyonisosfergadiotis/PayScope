@@ -11,6 +11,20 @@
 		E5ABAA5F2F458AC000031FB6 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5ABAA5E2F458AC000031FB6 /* SwiftUI.framework */; };
 		E5ABAA702F458AC100031FB6 /* PayScope WidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = E5ABAA5A2F458AC000031FB6 /* PayScope WidgetsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		E5ABAEA42F4DAA0100031FB6 /* CloudKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5ABAEA32F4DAA0100031FB6 /* CloudKit.framework */; };
+		E5ABAFD22F4F32DB00031FB6 /* CloudKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5ABAEA32F4DAA0100031FB6 /* CloudKit.framework */; };
+		E5AC7E3F2F59854A00DFE5DD /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E5AC7E312F59854A00DFE5DD /* Assets.xcassets */; };
+		E5AC7E402F59854A00DFE5DD /* CloudKitReadService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5AC7E342F59854A00DFE5DD /* CloudKitReadService.swift */; };
+		E5AC7E412F59854A00DFE5DD /* DayDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5AC7E362F59854A00DFE5DD /* DayDetailView.swift */; };
+		E5AC7E422F59854A00DFE5DD /* PayScope_for_MacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5AC7E3C2F59854A00DFE5DD /* PayScope_for_MacApp.swift */; };
+		E5AC7E432F59854A00DFE5DD /* MenuBarIconView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5AC7E392F59854A00DFE5DD /* MenuBarIconView.swift */; };
+		E5AC7E442F59854A00DFE5DD /* Item.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5AC7E382F59854A00DFE5DD /* Item.swift */; };
+		E5AC7E452F59854A00DFE5DD /* CalendarMonthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5AC7E322F59854A00DFE5DD /* CalendarMonthView.swift */; };
+		E5AC7E462F59854A00DFE5DD /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5AC7E3A2F59854A00DFE5DD /* Models.swift */; };
+		E5AC7E472F59854A00DFE5DD /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5AC7E352F59854A00DFE5DD /* ContentView.swift */; };
+		E5AC7E482F59854A00DFE5DD /* CalendarTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5AC7E332F59854A00DFE5DD /* CalendarTabView.swift */; };
+		E5AC7E492F59854A00DFE5DD /* Persistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5AC7E3D2F59854A00DFE5DD /* Persistence.swift */; };
+		E5AC7E4A2F59854A00DFE5DD /* Formatters.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5AC7E372F59854A00DFE5DD /* Formatters.swift */; };
+		E5AC7E4D2F59885600DFE5DD /* CloudKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5AC7E4B2F59885300DFE5DD /* CloudKit.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,6 +58,21 @@
 		E5ABAA5E2F458AC000031FB6 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		E5ABAEA32F4DAA0100031FB6 /* CloudKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CloudKit.framework; path = System/Library/Frameworks/CloudKit.framework; sourceTree = SDKROOT; };
 		E5ABAEA52F4DAAAF00031FB6 /* PayScope WidgetsExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "PayScope WidgetsExtension.entitlements"; sourceTree = "<group>"; };
+		E5AC7DD12F5984D800DFE5DD /* PayScope For Mac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "PayScope For Mac.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E5AC7E312F59854A00DFE5DD /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E5AC7E322F59854A00DFE5DD /* CalendarMonthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarMonthView.swift; sourceTree = "<group>"; };
+		E5AC7E332F59854A00DFE5DD /* CalendarTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarTabView.swift; sourceTree = "<group>"; };
+		E5AC7E342F59854A00DFE5DD /* CloudKitReadService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitReadService.swift; sourceTree = "<group>"; };
+		E5AC7E352F59854A00DFE5DD /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		E5AC7E362F59854A00DFE5DD /* DayDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DayDetailView.swift; sourceTree = "<group>"; };
+		E5AC7E372F59854A00DFE5DD /* Formatters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatters.swift; sourceTree = "<group>"; };
+		E5AC7E382F59854A00DFE5DD /* Item.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Item.swift; sourceTree = "<group>"; };
+		E5AC7E392F59854A00DFE5DD /* MenuBarIconView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarIconView.swift; sourceTree = "<group>"; };
+		E5AC7E3A2F59854A00DFE5DD /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		E5AC7E3B2F59854A00DFE5DD /* PayScope for Mac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "PayScope for Mac.entitlements"; sourceTree = "<group>"; };
+		E5AC7E3C2F59854A00DFE5DD /* PayScope_for_MacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PayScope_for_MacApp.swift; sourceTree = "<group>"; };
+		E5AC7E3D2F59854A00DFE5DD /* Persistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence.swift; sourceTree = "<group>"; };
+		E5AC7E4B2F59885300DFE5DD /* CloudKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CloudKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/Library/Frameworks/CloudKit.framework; sourceTree = DEVELOPER_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -77,6 +106,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E5ABAFD22F4F32DB00031FB6 /* CloudKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -87,6 +117,14 @@
 				E5ABAEA42F4DAA0100031FB6 /* CloudKit.framework in Frameworks */,
 				E5ABAA5F2F458AC000031FB6 /* SwiftUI.framework in Frameworks */,
 				E5ABAA5D2F458AC000031FB6 /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E5AC7DCE2F5984D800DFE5DD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E5AC7E4D2F59885600DFE5DD /* CloudKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -101,6 +139,7 @@
 				E5ABAA602F458AC000031FB6 /* PayScope Widgets */,
 				E5ABAA5B2F458AC000031FB6 /* Frameworks */,
 				E5ABA9C32F44731100031FB6 /* Products */,
+				E5AC7E3E2F59854A00DFE5DD /* PayScope for Mac */,
 			);
 			sourceTree = "<group>";
 		};
@@ -109,6 +148,7 @@
 			children = (
 				E5ABA9C22F44731100031FB6 /* PayScope.app */,
 				E5ABAA5A2F458AC000031FB6 /* PayScope WidgetsExtension.appex */,
+				E5AC7DD12F5984D800DFE5DD /* PayScope For Mac.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -117,10 +157,31 @@
 			isa = PBXGroup;
 			children = (
 				E5ABAEA32F4DAA0100031FB6 /* CloudKit.framework */,
+				E5AC7E4B2F59885300DFE5DD /* CloudKit.framework */,
 				E5ABAA5C2F458AC000031FB6 /* WidgetKit.framework */,
 				E5ABAA5E2F458AC000031FB6 /* SwiftUI.framework */,
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		E5AC7E3E2F59854A00DFE5DD /* PayScope for Mac */ = {
+			isa = PBXGroup;
+			children = (
+				E5AC7E312F59854A00DFE5DD /* Assets.xcassets */,
+				E5AC7E322F59854A00DFE5DD /* CalendarMonthView.swift */,
+				E5AC7E332F59854A00DFE5DD /* CalendarTabView.swift */,
+				E5AC7E342F59854A00DFE5DD /* CloudKitReadService.swift */,
+				E5AC7E352F59854A00DFE5DD /* ContentView.swift */,
+				E5AC7E362F59854A00DFE5DD /* DayDetailView.swift */,
+				E5AC7E372F59854A00DFE5DD /* Formatters.swift */,
+				E5AC7E382F59854A00DFE5DD /* Item.swift */,
+				E5AC7E392F59854A00DFE5DD /* MenuBarIconView.swift */,
+				E5AC7E3A2F59854A00DFE5DD /* Models.swift */,
+				E5AC7E3B2F59854A00DFE5DD /* PayScope for Mac.entitlements */,
+				E5AC7E3C2F59854A00DFE5DD /* PayScope_for_MacApp.swift */,
+				E5AC7E3D2F59854A00DFE5DD /* Persistence.swift */,
+			);
+			path = "PayScope for Mac";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -172,6 +233,25 @@
 			productReference = E5ABAA5A2F458AC000031FB6 /* PayScope WidgetsExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		E5AC7DD02F5984D800DFE5DD /* PayScope For Mac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E5AC7DDB2F5984D900DFE5DD /* Build configuration list for PBXNativeTarget "PayScope For Mac" */;
+			buildPhases = (
+				E5AC7DCD2F5984D800DFE5DD /* Sources */,
+				E5AC7DCE2F5984D800DFE5DD /* Frameworks */,
+				E5AC7DCF2F5984D800DFE5DD /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "PayScope For Mac";
+			packageProductDependencies = (
+			);
+			productName = "PayScope For Mac";
+			productReference = E5AC7DD12F5984D800DFE5DD /* PayScope For Mac.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -179,14 +259,17 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2620;
-				LastUpgradeCheck = 2620;
+				LastSwiftUpdateCheck = 2630;
+				LastUpgradeCheck = 2630;
 				TargetAttributes = {
 					E5ABA9C12F44731100031FB6 = {
 						CreatedOnToolsVersion = 26.2;
 					};
 					E5ABAA592F458AC000031FB6 = {
 						CreatedOnToolsVersion = 26.2;
+					};
+					E5AC7DD02F5984D800DFE5DD = {
+						CreatedOnToolsVersion = 26.3;
 					};
 				};
 			};
@@ -206,6 +289,7 @@
 			targets = (
 				E5ABA9C12F44731100031FB6 /* PayScope */,
 				E5ABAA592F458AC000031FB6 /* PayScope WidgetsExtension */,
+				E5AC7DD02F5984D800DFE5DD /* PayScope For Mac */,
 			);
 		};
 /* End PBXProject section */
@@ -225,6 +309,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E5AC7DCF2F5984D800DFE5DD /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E5AC7E3F2F59854A00DFE5DD /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -239,6 +331,24 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E5AC7DCD2F5984D800DFE5DD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E5AC7E402F59854A00DFE5DD /* CloudKitReadService.swift in Sources */,
+				E5AC7E412F59854A00DFE5DD /* DayDetailView.swift in Sources */,
+				E5AC7E422F59854A00DFE5DD /* PayScope_for_MacApp.swift in Sources */,
+				E5AC7E432F59854A00DFE5DD /* MenuBarIconView.swift in Sources */,
+				E5AC7E442F59854A00DFE5DD /* Item.swift in Sources */,
+				E5AC7E452F59854A00DFE5DD /* CalendarMonthView.swift in Sources */,
+				E5AC7E462F59854A00DFE5DD /* Models.swift in Sources */,
+				E5AC7E472F59854A00DFE5DD /* ContentView.swift in Sources */,
+				E5AC7E482F59854A00DFE5DD /* CalendarTabView.swift in Sources */,
+				E5AC7E492F59854A00DFE5DD /* Persistence.swift in Sources */,
+				E5AC7E4A2F59854A00DFE5DD /* Formatters.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -312,6 +422,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -369,6 +480,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
@@ -381,7 +493,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = PayScope/PayScope.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -398,7 +510,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.6;
 				PRODUCT_BUNDLE_IDENTIFIER = DyonisosFergadiotis.PayScope;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -418,7 +530,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = PayScope/PayScope.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -435,7 +547,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.6;
 				PRODUCT_BUNDLE_IDENTIFIER = DyonisosFergadiotis.PayScope;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -455,7 +567,7 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = "PayScope WidgetsExtension.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "PayScope Widgets/Info.plist";
@@ -466,7 +578,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "DyonisosFergadiotis.PayScope.PayScope-Widgets";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -486,7 +598,7 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = "PayScope WidgetsExtension.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "PayScope Widgets/Info.plist";
@@ -497,7 +609,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "DyonisosFergadiotis.PayScope.PayScope-Widgets";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -507,6 +619,82 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		E5AC7DDC2F5984D900DFE5DD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "PayScope For Mac/PayScope For Mac.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8W4U9DBYVS;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = PayScope;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.2;
+				PRODUCT_BUNDLE_IDENTIFIER = DyonisosFergadiotis.PayScope;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		E5AC7DDD2F5984D900DFE5DD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "PayScope For Mac/PayScope For Mac.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8W4U9DBYVS;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = PayScope;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.2;
+				PRODUCT_BUNDLE_IDENTIFIER = DyonisosFergadiotis.PayScope;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
 		};
@@ -536,6 +724,15 @@
 			buildConfigurations = (
 				E5ABAA732F458AC100031FB6 /* Debug */,
 				E5ABAA742F458AC100031FB6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E5AC7DDB2F5984D900DFE5DD /* Build configuration list for PBXNativeTarget "PayScope For Mac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E5AC7DDC2F5984D900DFE5DD /* Debug */,
+				E5AC7DDD2F5984D900DFE5DD /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

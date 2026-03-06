@@ -1,22 +1,28 @@
 import SwiftUI
-import SwiftData
 
 struct DayEditorView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
-    @Query(sort: \DayEntry.date) private var allEntries: [DayEntry]
-    @Query(sort: \NetWageMonthConfig.monthStart) private var netWageConfigs: [NetWageMonthConfig]
-    @Query(sort: \HolidayCalendarDay.date) private var holidayDays: [HolidayCalendarDay]
+    @EnvironmentObject private var cloudKitService: CloudKitService
+    private let localStore = LocalDayEntryStore.shared
+
+    @State private var allEntries: [DayEntry] = []
+    @State private var localEntries: [DayEntry] = []
+    @State private var netWageConfigs: [NetWageMonthConfig] = []
+    @State private var holidayDays: [HolidayCalendarDay] = []
 
     let date: Date
     @Bindable var settings: Settings
+    var onDaySaved: ((Date, DayEntry?) -> Void)? = nil
 
     @State private var selectedType: DayType = .work
     @State private var notes = ""
-    @State private var showNotesEditor = false
-    @State private var editSegments: [EditableSegment] = []
-    @State private var totalBreakMinutes = 0
-    @State private var isPauseCustom = false
+
+    @State private var startMinute: Int = 0
+    @State private var endMinute: Int = 0
+    @State private var hasStartMinute = false
+    @State private var hasEndMinute = false
+    @State private var manualBreakOverrideMinutes: Int?
+
     @State private var isApplyingLoad = false
     @State private var selectedDate = Date().startOfDayLocal()
     @State private var manualWorkedSeconds: Int = 0
@@ -24,18 +30,25 @@ struct DayEditorView: View {
     @State private var editingShortcutIndex: Int?
     @State private var shortcutDraftStartMinute: Int = 9 * 60
     @State private var shortcutDraftEndMinute: Int = 17 * 60
-    @State private var selectedSheetDetent: PresentationDetent = .fraction(0.55)
+    @State private var selectedSheetDetent: PresentationDetent = .fraction(0.72)
     @State private var hasAnimatedIn = false
     @State private var didRunEntryAnimation = false
+    @State private var showDeleteConfirm = false
+    @State private var isNotesEditorVisible = false
+    @State private var isBreakEditorVisible = false
 
-    @AppStorage("dayEditorShiftShortcut1") private var shiftShortcut1 = ""
-    @AppStorage("dayEditorShiftShortcut2") private var shiftShortcut2 = ""
-    @AppStorage("dayEditorShiftShortcut3") private var shiftShortcut3 = ""
-    @AppStorage("dayEditorShiftShortcutName1") private var shiftShortcutName1 = ""
-    @AppStorage("dayEditorShiftShortcutName2") private var shiftShortcutName2 = ""
-    @AppStorage("dayEditorShiftShortcutName3") private var shiftShortcutName3 = ""
+    private var settingsShortcut1: String { settings.shiftShortcut1 }
+    private var settingsShortcut2: String { settings.shiftShortcut2 }
+    private var settingsShortcut3: String { settings.shiftShortcut3 }
+    private var settingsShortcutName1: String { settings.shiftShortcutName1 ?? "" }
+    private var settingsShortcutName2: String { settings.shiftShortcutName2 ?? "" }
+    private var settingsShortcutName3: String { settings.shiftShortcutName3 ?? "" }
 
     private let service = CalculationService()
+
+    @State private var isLoading = false
+    @State private var pendingLoadAfterCurrentCycle = false
+    @State private var hasUnsavedUserChanges = false
 
     private var timelineBounds: ClosedRange<Int> {
         let minValue = max(0, min(settings.timelineMinMinute ?? 6 * 60, 23 * 60))
@@ -43,12 +56,41 @@ struct DayEditorView: View {
         return minValue...maxValue
     }
 
+    private var allEntriesEffective: [DayEntry] {
+        let merged = Dictionary(
+            (localEntries + allEntries).map { (dayKey($0.date), $0) },
+            uniquingKeysWith: { existing, candidate in
+                candidate.updatedAt > existing.updatedAt ? candidate : existing
+            }
+        )
+        return merged.values.sorted { $0.date > $1.date }
+    }
+    
+    private var hasExistingEntryForSelectedDate: Bool {
+        allEntriesEffective.contains { $0.date.isSameLocalDay(as: selectedDate) }
+    }
+
+    private func dayKey(_ date: Date) -> String {
+        let day = date.startOfDayLocal()
+        let year = Calendar.current.component(.year, from: day)
+        let month = Calendar.current.component(.month, from: day)
+        let dayOfMonth = Calendar.current.component(.day, from: day)
+        return String(format: "%04d-%02d-%02d", year, month, dayOfMonth)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    topTimeline
-                    segmentsPanel
+                    MultiSegmentTimelinePreview(
+                        segments: hasValidShiftRange ? [EditableSegment(startMinute: startMinute, endMinute: endMinute)] : [],
+                        accent: settings.themeAccent.color,
+                        bounds: timelineBounds
+                    )
+                    .padding(.vertical, 4)
+
+                    shiftPanel
+
                     notesButtonPanel
                 }
                 .padding(.horizontal, 16)
@@ -58,42 +100,18 @@ struct DayEditorView: View {
             .opacity(hasAnimatedIn ? 1 : 0)
             .offset(y: hasAnimatedIn ? 0 : 14)
             .animation(.spring(response: 0.34, dampingFraction: 0.9), value: hasAnimatedIn)
-            .navigationTitle(PayScopeFormatters.day.string(from: date))
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    HStack(spacing: 8) {
-                        DatePicker(
-                            "",
-                            selection: selectedDayBinding,
-                            displayedComponents: .date
-                        )
-                        .labelsHidden()
-                        .datePickerStyle(.compact)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-
-                        Menu {
-                            ForEach(DayType.allCases) { type in
-                                Button {
-                                    selectedType = type
-                                } label: {
-                                    Label {
-                                        Text(type.label)
-                                            .foregroundStyle(type.tint)
-                                    } icon: {
-                                        Image(systemName: type.icon)
-                                            .foregroundStyle(type.tint)
-                                    }
-                                }
-                            }
-                        } label: {
-                            Image(systemName: selectedType.icon)
-                                .foregroundStyle(selectedType.tint)
-                                .frame(width: 30, height: 30)
-                        }
-                        .accessibilityLabel("Tagestyp")
-                    }
+                    DatePicker(
+                        "",
+                        selection: selectedDayBinding,
+                        displayedComponents: .date
+                    )
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
+                    .accessibilityLabel("Datum auswählen")
                 }
 
                 ToolbarItem(placement: .topBarLeading) {
@@ -103,6 +121,16 @@ struct DayEditorView: View {
                         Image(systemName: "xmark")
                     }
                     .accessibilityLabel("Schließen")
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showDeleteConfirm = true
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .disabled(!hasExistingEntryForSelectedDate)
+                    .accessibilityLabel("Löschen")
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
@@ -119,7 +147,8 @@ struct DayEditorView: View {
             }
             .onAppear {
                 selectedDate = date.startOfDayLocal()
-                load(for: selectedDate)
+                hasUnsavedUserChanges = false
+                Task { await load(for: selectedDate) }
                 setEditorDetent(defaultEditorDetent(for: selectedType), animated: false)
                 if didRunEntryAnimation {
                     hasAnimatedIn = true
@@ -132,39 +161,68 @@ struct DayEditorView: View {
                 }
             }
             .onChange(of: selectedDate) { _, newValue in
-                load(for: newValue)
+                hasUnsavedUserChanges = false
+                Task { await load(for: newValue) }
             }
-            .onChange(of: selectedType) { oldType, _ in
+            .onChange(of: selectedType) { _, _ in
                 if isApplyingLoad { return }
-                setEditorDetent(defaultEditorDetent(for: selectedType), animated: true)
+                hasUnsavedUserChanges = true
                 if selectedType == .manual {
-                    if oldType != .manual {
-                        manualWorkedSeconds = max(0, totalNetSeconds)
-                    }
+                    manualWorkedSeconds = max(0, manualWorkedSeconds)
                     creditedOverrideSeconds = nil
-                    editSegments = []
-                    totalBreakMinutes = 0
-                    isPauseCustom = false
-                    return
-                }
-                if isCreditedType {
-                    totalBreakMinutes = 0
-                    isPauseCustom = false
-                    if !isCredited(oldType) {
-                        creditedOverrideSeconds = nil
-                    }
-                    applyAutoCreditedSegmentIfNeeded(force: true)
-                    return
-                }
-                if isCredited(oldType) {
+                    manualBreakOverrideMinutes = nil
+                    isBreakEditorVisible = false
+                } else if isCreditedType {
+                    manualWorkedSeconds = 0
+                    // keep creditedOverrideSeconds unchanged
+                    manualBreakOverrideMinutes = nil
+                    isBreakEditorVisible = false
+                } else {
+                    manualWorkedSeconds = 0
                     creditedOverrideSeconds = nil
+                    clampManualBreakOverride()
                 }
-                applyAutoCreditedSegmentIfNeeded()
+            }
+            .onChange(of: startMinute) { _, _ in
+                if !isApplyingLoad { hasUnsavedUserChanges = true }
+                clampManualBreakOverride()
+            }
+            .onChange(of: endMinute) { _, _ in
+                if !isApplyingLoad { hasUnsavedUserChanges = true }
+                clampManualBreakOverride()
+            }
+            .onChange(of: hasStartMinute) { _, _ in
+                if !isApplyingLoad { hasUnsavedUserChanges = true }
+                clampManualBreakOverride()
+            }
+            .onChange(of: hasEndMinute) { _, _ in
+                if !isApplyingLoad { hasUnsavedUserChanges = true }
+                clampManualBreakOverride()
+            }
+            .onChange(of: manualWorkedSeconds) { _, _ in
+                if !isApplyingLoad { hasUnsavedUserChanges = true }
+            }
+            .onChange(of: creditedOverrideSeconds) { _, _ in
+                if !isApplyingLoad { hasUnsavedUserChanges = true }
+            }
+            .onChange(of: notes) { _, _ in
+                if !isApplyingLoad { hasUnsavedUserChanges = true }
+            }
+            .onChange(of: manualBreakOverrideMinutes) { _, _ in
+                if !isApplyingLoad { hasUnsavedUserChanges = true }
             }
             .onChange(of: entriesSignature) { _, _ in
                 // Query results can arrive after .onAppear; only auto-reload while no local draft exists.
-                if isApplyingLoad || hasLocalDraftData { return }
-                load(for: selectedDate)
+                if isApplyingLoad || hasLocalDraftData || hasUnsavedUserChanges { return }
+                Task { await load(for: selectedDate) }
+            }
+            .alert("Tag löschen?", isPresented: $showDeleteConfirm) {
+                Button("Löschen", role: .destructive) {
+                    deleteCurrentDay()
+                }
+                Button("Abbrechen", role: .cancel) { }
+            } message: {
+                Text("Dieser Tag wird dauerhaft entfernt.")
             }
         }
         .payScopeSheetSurface(accent: settings.themeAccent.color)
@@ -176,13 +234,13 @@ struct DayEditorView: View {
 
     private var editorDetents: Set<PresentationDetent> {
         if selectedType == .work {
-            return [.fraction(0.55), .large]
+            return [.fraction(0.72), .large]
         }
-        return [.fraction(0.5), .large]
+        return [.fraction(0.66), .large]
     }
 
     private func defaultEditorDetent(for type: DayType) -> PresentationDetent {
-        type == .work ? .fraction(0.55) : .fraction(0.5)
+        type == .work ? .fraction(0.72) : .fraction(0.66)
     }
 
     private func setEditorDetent(_ detent: PresentationDetent, animated: Bool) {
@@ -221,7 +279,7 @@ struct DayEditorView: View {
         
         ToolbarItem(placement: .bottomBar) {
             HStack {
-                toolbarMetricPill(value: PayScopeFormatters.hhmmString(seconds: (usesManualDurationInput ? 0 : (selectedType == .work ? totalBreakMinutes * 60 : 0))), title: "Pause")
+                toolbarMetricPill(value: PayScopeFormatters.hhmmString(seconds: (usesManualDurationInput ? 0 : (selectedType == .work ? breakMinutes * 60 : 0))), title: "Pause")
             }
             .frame(maxWidth: .infinity)
         }
@@ -243,20 +301,23 @@ struct DayEditorView: View {
         .frame(minWidth: 86)
     }
 
-    private var topTimeline: some View {
-        MultiSegmentTimelinePreview(
-            segments: editSegments,
-            accent: settings.themeAccent.color,
-            bounds: timelineBounds
-        )
-        .padding(.vertical, 4)
-    }
-
-    private var segmentsPanel: some View {
+    private var shiftPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if selectedType == .manual {
-                Text("Manuell")
+            HStack(spacing: 10) {
+                Text(
+                    selectedType == .work
+                        ? (hasExistingEntryForSelectedDate ? "Schicht" : "Neue Schicht")
+                        : selectedType.label
+                )
                     .font(.headline.weight(.semibold))
+                Spacer()
+                shiftCategoryMenu
+            }
+
+            if selectedType == .manual {
+                Text("Dauer wird manuell erfasst.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             if usesManualDurationInput {
@@ -269,137 +330,12 @@ struct DayEditorView: View {
                 Text("Bei manueller Erfassung wird keine Pause abgezogen.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-            }
-
-            if !usesManualDurationInput && !isCreditedType {
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Segmente")
-                            .font(.headline.weight(.semibold))
-                        if !editSegments.isEmpty {
-                            Text(editSegments.count == 1 ? "1 Segment" : "\(editSegments.count) Segmente")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
-                    Button {
-                        addDefaultSegment()
-                    } label: {
-                        Label("Neu", systemImage: "plus")
-                            .font(.footnote.weight(.semibold))
-                    }
-                    .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
-                }
-
-                if editSegments.isEmpty {
-                    VStack(spacing: 8) {
-                        Button {
-                            addDefaultSegment()
-                        } label: {
-                            Label("Segment hinzufügen", systemImage: "plus")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.payScopePrimary(accent: settings.themeAccent.color))
-
-                        HStack(spacing: 8) {
-                            ForEach(0..<3, id: \.self) { index in
-                                Button {
-                                    onShortcutTap(index: index)
-                                } label: {
-                                    Text(shortcutButtonLabel(for: index))
-                                        .font(.footnote.weight(.semibold))
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.8)
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                }
-
-                VStack(spacing: 8) {
-                    ForEach($editSegments, id: \.id) { $segment in
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(spacing: 8) {
-                                Text("Segment")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Button(role: .destructive) {
-                                    removeSegment(segment.id)
-                                } label: {
-                                    Image(systemName: "trash")
-                                        .font(.caption.weight(.semibold))
-                                        .padding(6)
-                                        .foregroundStyle(.red)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Segment löschen")
-                            }
-
-                            HStack(spacing: 8) {
-                                HHMMMinuteInput(
-                                    minuteOfDay: minuteBinding(segment: $segment, isStart: true),
-                                    accent: settings.themeAccent.color
-                                )
-                                Spacer(minLength: 8)
-
-                                Text(segment.durationLabel)
-                                    .font(.caption.weight(.bold))
-                                    .foregroundStyle(settings.themeAccent.color)
-                                    .frame(minWidth: 72, alignment: .center)
-
-                                Spacer(minLength: 8)
-
-                                HHMMMinuteInput(
-                                    minuteOfDay: minuteBinding(segment: $segment, isStart: false),
-                                    accent: settings.themeAccent.color
-                                )
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 2)
-
-                            if let error = segment.validationMessage {
-                                Text(error)
-                                    .font(.footnote)
-                                    .foregroundStyle(.red)
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 14, emphasis: 0.2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-                }
-                .animation(.spring(response: 0.3, dampingFraction: 0.88), value: editSegments.map(\.id))
-
-                PauseInlineEditor(
-                    breakMinutes: $totalBreakMinutes,
-                    isPauseCustom: $isPauseCustom,
-                    suggestedBreakMinutes: automaticBreakMinutes(forDurationMinutes: totalGrossSeconds / 60),
-                    accent: settings.themeAccent.color
-                )
-
-                if let breakValidationMessage {
-                    Text(breakValidationMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
             } else if isCreditedType {
                 VStack(alignment: .center, spacing: 10) {
                     Text(creditedComputationDescription)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-
-                    Text("Schichtlänge: \(PayScopeFormatters.hhmmString(seconds: totalNetSeconds))")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(settings.themeAccent.color)
 
                     if creditedOverrideSeconds != nil {
                         HStack(spacing: 12) {
@@ -417,18 +353,95 @@ struct DayEditorView: View {
 
                         Button("Abweichung entfernen") {
                             creditedOverrideSeconds = nil
-                            applyAutoCreditedSegmentIfNeeded(force: true)
                         }
                         .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
                     } else {
                         Button("Abweichung angeben") {
                             creditedOverrideSeconds = creditedBaselineSeconds()
-                            applyAutoCreditedSegmentIfNeeded(force: true)
                         }
                         .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
+            } else {
+                // Work: start/end/break
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Text("Start")
+                            .font(.subheadline.weight(.semibold))
+                        HHMMMinuteInput(minuteOfDay: $startMinute, hasValue: $hasStartMinute, accent: settings.themeAccent.color)
+                        Spacer(minLength: 4)
+                        Text(grossDurationBadgeLabel)
+                            .font(.caption2.monospacedDigit().weight(.bold))
+                            .lineLimit(1)
+                            .foregroundStyle(settings.themeAccent.color.opacity(0.7))
+                            .frame(width: 52)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(settings.themeAccent.color.opacity(0.12))
+                            )
+                        Spacer(minLength: 4)
+                        HHMMMinuteInput(minuteOfDay: $endMinute, hasValue: $hasEndMinute, accent: settings.themeAccent.color)
+                        Text("Ende")
+                            .font(.subheadline.weight(.semibold))
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 12) {
+                            Text("Pause")
+                                .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Text("\(breakMinutes) min")
+                                .font(.subheadline.weight(.semibold))
+                            Button {
+                                openBreakEditor()
+                            } label: {
+                                Image(systemName: isBreakEditorVisible ? "xmark" : "pencil")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        if isBreakEditorVisible {
+                            HStack(spacing: 8) {
+                                breakAdjustmentButton(title: "-10", delta: -10)
+                                    .frame(maxWidth: .infinity)
+                                breakAdjustmentButton(title: "-5", delta: -5)
+                                    .frame(maxWidth: .infinity)
+                                breakAdjustmentButton(title: "-1", delta: -1)
+                                    .frame(maxWidth: .infinity)
+                                Button("Auto") {
+                                    manualBreakOverrideMinutes = nil
+                                }
+                                .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
+                                .frame(maxWidth: .infinity)
+                                breakAdjustmentButton(title: "+1", delta: 1)
+                                    .frame(maxWidth: .infinity)
+                                breakAdjustmentButton(title: "+5", delta: 5)
+                                    .frame(maxWidth: .infinity)
+                                breakAdjustmentButton(title: "+10", delta: 10)
+                                    .frame(maxWidth: .infinity)
+                            }
+                        } else {
+                            HStack(spacing: 8) {
+                                ForEach(0..<3, id: \.self) { index in
+                                    Button(shortcutButtonLabel(for: index)) {
+                                        onShortcutTap(index: index)
+                                    }
+                                    .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
+                                    .frame(maxWidth: .infinity)
+                                }
+                            }
+                        }
+                    }
+
+                    if let error = shiftValidationMessage {
+                        Text(error)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                }
             }
         }
         .neoPanel(accent: settings.themeAccent.color)
@@ -436,53 +449,88 @@ struct DayEditorView: View {
 
     private var notesButtonPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if showNotesEditor {
+            let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if !isNotesEditorVisible && trimmedNotes.isEmpty {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isNotesEditorVisible = true
+                    }
+                } label: {
+                    Label("Notizen", systemImage: "plus")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .tint(settings.themeAccent.color)
+                }
+                //.buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
+            } else {
                 HStack {
                     Text("Notizen")
                         .font(.headline.weight(.semibold))
                     Spacer()
-                    Button {
-                        notes = ""
-                        showNotesEditor = false
-                    } label: {
-                        Image(systemName: "xmark")
+                    if !trimmedNotes.isEmpty {
+                        Button("Leeren") {
+                            notes = ""
+                        }
+                        .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
+                    } else {
+                        Button("Ausblenden") {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isNotesEditorVisible = false
+                            }
+                        }
+                        //.buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
                     }
-                    .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
-                    .accessibilityLabel("Notizen ausblenden")
                 }
 
-                TextEditor(text: $notes)
-                    .frame(minHeight: 84)
-                    .padding(10)
-                    .scrollContentBackground(.hidden)
-                    .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 12, emphasis: 0.16)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            } else {
-                Button {
-                    showNotesEditor = true
-                } label: {
-                    Label("Notizen", systemImage: "plus")
-                        .font(.subheadline.weight(.semibold))
+                ZStack(alignment: .topLeading) {
+                    if trimmedNotes.isEmpty {
+                        Text("Optional: Kontext, Besonderheiten, Hinweise ...")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 16)
+                            .padding(.top, 14)
+                            .allowsHitTesting(false)
+                    }
+                    TextEditor(text: $notes)
+                        .frame(minHeight: 120)
+                        .padding(10)
+                        .scrollContentBackground(.hidden)
+                        .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 12, emphasis: 0.16)
                 }
-                .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: showNotesEditor)
+        .neoPanel(accent: settings.themeAccent.color)
     }
 
     private var totalNetSeconds: Int {
-        if usesManualDurationInput {
-            return max(0, manualWorkedSeconds)
-        }
-        if selectedType == .work {
-            return max(0, totalGrossSeconds - (totalBreakMinutes * 60))
-        } else {
-            return totalGrossSeconds
+        switch previewComputation {
+        case let .ok(valueSeconds, _), let .warning(valueSeconds, _, _):
+            return valueSeconds
+        case .error:
+            return 0
         }
     }
 
     private var totalGrossSeconds: Int {
-        editSegments.reduce(0) { $0 + (max(0, $1.grossDurationMinutes) * 60) }
+        guard hasCompleteShiftTime else { return 0 }
+        return max(0, (endMinute - startMinute) * 60)
+    }
+
+    private var grossDurationBadgeLabel: String {
+        guard hasCompleteShiftTime else { return "--:--" }
+        let minutes = max(0, endMinute - startMinute)
+        let hoursPart = minutes / 60
+        let minutePart = minutes % 60
+        return String(format: "%02d:%02d", hoursPart, minutePart)
+    }
+
+    private var hasCompleteShiftTime: Bool {
+        hasStartMinute && hasEndMinute
+    }
+
+    private var hasValidShiftRange: Bool {
+        hasCompleteShiftTime && endMinute > startMinute
     }
 
     private var isCreditedType: Bool {
@@ -492,6 +540,9 @@ struct DayEditorView: View {
     private var creditedComputationDescription: String {
         if selectedType == .vacation, settings.effectiveVacationCreditingMode == .fixedValue {
             return "Dieser Urlaubstag nutzt den festen Wert aus den Einstellungen."
+        }
+        if selectedType == .holiday, settings.effectiveHolidayCreditingMode == .fixedValue {
+            return "Dieser Feiertag nutzt den festen Wert aus den Einstellungen."
         }
         return "Dieser Typ wird automatisch mit der 13-Wochen-Regel berechnet."
     }
@@ -506,24 +557,20 @@ struct DayEditorView: View {
         if usesManualDurationInput {
             return manualWorkedSeconds > 0 || !trimmedNotes.isEmpty
         }
-        return !editSegments.isEmpty || totalBreakMinutes > 0 || isPauseCustom || !trimmedNotes.isEmpty
+        return hasStartMinute || hasEndMinute || breakMinutes > 0 || !trimmedNotes.isEmpty
     }
 
     private var entriesSignature: Int {
         var hasher = Hasher()
-        for day in allEntries {
+        for day in allEntriesEffective {
             hasher.combine(day.date.timeIntervalSinceReferenceDate)
             hasher.combine(day.type.rawValue)
             hasher.combine(day.manualWorkedSeconds ?? -1)
             hasher.combine(day.creditedOverrideSeconds ?? -1)
             hasher.combine(day.notes)
-            hasher.combine(day.segments.count)
-
-            for segment in day.segments {
-                hasher.combine(segment.start.timeIntervalSinceReferenceDate)
-                hasher.combine(segment.end.timeIntervalSinceReferenceDate)
-                hasher.combine(segment.breakSeconds)
-            }
+            hasher.combine(day.shiftStart?.timeIntervalSinceReferenceDate ?? 0)
+            hasher.combine(day.shiftEnd?.timeIntervalSinceReferenceDate ?? 0)
+            hasher.combine(day.breakSeconds ?? -1)
         }
         return hasher.finalize()
     }
@@ -533,20 +580,15 @@ struct DayEditorView: View {
         preview.creditedOverrideSeconds = isCreditedType ? creditedOverrideSeconds.map { max(0, $0) } : nil
         if usesManualDurationInput {
             preview.manualWorkedSeconds = max(0, manualWorkedSeconds)
-            preview.segments = []
-            return service.dayComputation(for: preview, allEntries: allEntries, settings: settings)
+            return service.dayComputation(for: preview, allEntries: allEntriesEffective, settings: settings)
         }
-        let clampedBreakSeconds = (selectedType == .work) ? max(0, min(totalBreakMinutes * 60, totalGrossSeconds)) : 0
-        var didAssignBreak = false
-
-        preview.segments = editSegments.compactMap { segment in
-            guard let start = dateAtMinute(segment.startMinute), let end = dateAtMinute(segment.endMinute) else { return nil }
-            let breakSeconds = didAssignBreak ? 0 : clampedBreakSeconds
-            didAssignBreak = true
-            return TimeSegment(start: start, end: end, breakSeconds: breakSeconds)
+        let clampedBreakSeconds = (selectedType == .work) ? max(0, min(breakMinutes * 60, totalGrossSeconds)) : 0
+        if hasValidShiftRange, let start = dateAtMinute(startMinute), let end = dateAtMinute(endMinute), end > start {
+            preview.shiftStart = start
+            preview.shiftEnd = end
+            preview.breakSeconds = clampedBreakSeconds
         }
-
-        return service.dayComputation(for: preview, allEntries: allEntries, settings: settings)
+        return service.dayComputation(for: preview, allEntries: allEntriesEffective, settings: settings)
     }
 
     private var totalGrossPayCents: Int {
@@ -588,22 +630,466 @@ struct DayEditorView: View {
         )
     }
 
-    private func addDefaultSegment() {
-        let start = max(timelineBounds.lowerBound, 9 * 60)
-        let end = max(start + 60, min(timelineBounds.upperBound, 17 * 60))
-        withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
-            editSegments.append(EditableSegment(startMinute: start, endMinute: end))
+    private var isSaveValid: Bool {
+        if isCreditedType { return true }
+        if usesManualDurationInput { return manualWorkedSeconds > 0 }
+        // Work
+        return hasValidShiftRange && breakMinutes * 60 <= totalGrossSeconds
+    }
+
+    private var shiftValidationMessage: String? {
+        guard selectedType == .work else { return nil }
+        guard hasCompleteShiftTime else { return nil }
+        if endMinute <= startMinute { return "Ende muss nach Start liegen." }
+        let gross = totalGrossSeconds
+        if breakMinutes * 60 > gross { return "Pause ist länger als die gesamte Dauer." }
+        return nil
+    }
+
+    private var selectedDayBinding: Binding<Date> {
+        Binding(
+            get: { selectedDate },
+            set: { selectedDate = $0.startOfDayLocal() }
+        )
+    }
+
+    private func isImportedHoliday(_ date: Date) -> Bool {
+        let country = normalizedHolidayCode(settings.holidayCountryCode) ?? "DE"
+        let subdivision = normalizedHolidayCode(settings.holidaySubdivisionCode)
+
+        return holidayDays.contains { day in
+            normalizedHolidayCode(day.countryCode) == country &&
+            normalizedHolidayCode(day.subdivisionCode) == subdivision &&
+            day.date.isSameLocalDay(as: date)
         }
     }
 
-    private func removeSegment(_ id: UUID) {
-        withAnimation(.easeInOut(duration: 0.18)) {
-            editSegments.removeAll { $0.id == id }
+    private func normalizedHolidayCode(_ code: String?) -> String? {
+        guard let code else { return nil }
+        let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private func applyLoadedEntries(_ entries: [DayEntry], for dayDate: Date) {
+        isApplyingLoad = true
+        defer {
+            isApplyingLoad = false
+            hasUnsavedUserChanges = false
         }
-        if editSegments.isEmpty {
-            totalBreakMinutes = 0
-            isPauseCustom = false
+
+        if let existing = entries.first(where: { $0.date.isSameLocalDay(as: dayDate) }) {
+            selectedType = existing.type
+            notes = existing.notes
+            isNotesEditorVisible = !existing.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+            if selectedType == .manual {
+                manualWorkedSeconds = max(0, existing.manualWorkedSeconds ?? 0)
+                manualBreakOverrideMinutes = nil
+                if let s = existing.shiftStart {
+                    startMinute = minuteOfDay(from: s)
+                    hasStartMinute = true
+                } else {
+                    hasStartMinute = false
+                }
+                if let e = existing.shiftEnd {
+                    endMinute = minuteOfDay(from: e)
+                    hasEndMinute = true
+                } else {
+                    hasEndMinute = false
+                }
+            } else if isCreditedType {
+                manualWorkedSeconds = 0
+                creditedOverrideSeconds = existing.creditedOverrideSeconds.map { max(0, $0) }
+                manualBreakOverrideMinutes = nil
+                hasStartMinute = false
+                hasEndMinute = false
+            } else {
+                manualWorkedSeconds = 0
+                creditedOverrideSeconds = nil
+                if let s = existing.shiftStart {
+                    startMinute = minuteOfDay(from: s)
+                    hasStartMinute = true
+                } else {
+                    hasStartMinute = false
+                }
+                if let e = existing.shiftEnd {
+                    endMinute = minuteOfDay(from: e)
+                    hasEndMinute = true
+                } else {
+                    hasEndMinute = false
+                }
+                let storedBreakMinutes = max(0, existing.breakSeconds ?? 0) / 60
+                inferManualBreakOverride(fromStoredBreakMinutes: storedBreakMinutes)
+            }
+        } else {
+            selectedType = (isImportedHoliday(dayDate) && settings.isPaidHolidayWeekday(dayDate)) ? .holiday : .work
+            notes = ""
+            isNotesEditorVisible = false
+            manualWorkedSeconds = 0
+            creditedOverrideSeconds = nil
+            hasStartMinute = false
+            hasEndMinute = false
+            manualBreakOverrideMinutes = nil
         }
+    }
+
+    private func reconcileLocalWithCloud(for day: Date) {
+        // Merge cloud into local cache (LWW) without writing to cloud.
+        let start = day.addingDays(-365)
+        let end = day.addingDays(365)
+        let cloudEntriesInRange = allEntries.filter { $0.date >= start && $0.date <= end }
+        let localEntriesInRange = localEntries.filter { $0.date >= start && $0.date <= end }
+
+        // Dictionary by day string for easy lookup
+        func dayKeyForEntry(_ entry: DayEntry) -> String {
+            PayScopeFormatters.day.string(from: entry.date)
+        }
+
+        var localDict: [String: DayEntry] = [:]
+        for e in localEntriesInRange {
+            let key = dayKeyForEntry(e)
+            if let existing = localDict[key] {
+                localDict[key] = e.updatedAt > existing.updatedAt ? e : existing
+            } else {
+                localDict[key] = e
+            }
+        }
+        var cloudDict: [String: DayEntry] = [:]
+        for e in cloudEntriesInRange {
+            let key = dayKeyForEntry(e)
+            if let existing = cloudDict[key] {
+                cloudDict[key] = e.updatedAt > existing.updatedAt ? e : existing
+            } else {
+                cloudDict[key] = e
+            }
+        }
+
+        let tombstonesByDay = Dictionary(
+            localStore.loadDeletionTombstones().map { (dayKey($0.date), $0.lastModified) },
+            uniquingKeysWith: { current, incoming in
+                incoming > current ? incoming : current
+            }
+        )
+
+        // Merge entries with latest-change-wins while respecting local delete tombstones.
+        for key in Set(localDict.keys).union(cloudDict.keys) {
+            let localEntry = localDict[key]
+            let cloudEntry = cloudDict[key]
+
+            if let cloudEntry = cloudEntry,
+               let deletedAt = tombstonesByDay[key],
+               deletedAt >= cloudEntry.updatedAt {
+                continue
+            }
+
+            if localEntry == nil, let cloudEntry = cloudEntry {
+                localStore.save(cloudEntry)
+            } else if let localEntry = localEntry, let cloudEntry = cloudEntry {
+                if cloudEntry.updatedAt > localEntry.updatedAt {
+                    localStore.save(cloudEntry)
+                }
+            }
+        }
+
+        // Reload local entries after reconcile
+        let localInterval = DateInterval(start: start, end: end)
+        localEntries = localStore.loadAll(in: localInterval)
+    }
+
+    private func load(for dayDate: Date) async {
+        if isLoading {
+            pendingLoadAfterCurrentCycle = true
+            return
+        }
+        isLoading = true
+        defer {
+            isLoading = false
+            if pendingLoadAfterCurrentCycle {
+                pendingLoadAfterCurrentCycle = false
+                Task { await load(for: selectedDate) }
+            }
+        }
+
+        // Load local entries synchronously first
+        let start = dayDate.addingDays(-365)
+        let end = dayDate.addingDays(365)
+        let localInterval = DateInterval(start: start, end: end)
+        localEntries = localStore.loadAll(in: localInterval)
+
+        // Use local entries to populate UI initially
+        applyLoadedEntries(localEntries, for: dayDate)
+
+        // Then fetch from cloud and reconcile
+        do {
+            let fetchedEntries = try await cloudKitService.fetchDayEntries(in: localInterval)
+            let tombstonesByDay = Dictionary(
+                localStore.loadDeletionTombstones().map { (dayKey($0.date), $0.lastModified) },
+                uniquingKeysWith: { current, incoming in
+                    incoming > current ? incoming : current
+                }
+            )
+            allEntries = fetchedEntries.filter { cloudEntry in
+                guard let deletedAt = tombstonesByDay[dayKey(cloudEntry.date)] else { return true }
+                return deletedAt < cloudEntry.updatedAt
+            }
+            let year = Calendar.current.component(.year, from: dayDate)
+            holidayDays = (try? await cloudKitService.fetchHolidayDays(
+                countryCode: normalizedHolidayCode(settings.holidayCountryCode) ?? "DE",
+                subdivisionCode: normalizedHolidayCode(settings.holidaySubdivisionCode),
+                year: year
+            )) ?? []
+            reconcileLocalWithCloud(for: dayDate)
+            if !hasUnsavedUserChanges {
+                applyLoadedEntries(allEntriesEffective, for: dayDate)
+            }
+        } catch {
+            #if DEBUG
+            print("Failed to load day data: \(error)")
+            #endif
+        }
+    }
+
+    private func save() {
+        let dayDate = selectedDate.startOfDayLocal()
+        // Compute UTC midnight for the same local civil day to avoid timezone shifts
+        let utcDayDate: Date = {
+            var utc = Calendar(identifier: .gregorian)
+            utc.timeZone = TimeZone(secondsFromGMT: 0)!
+            let comps = Calendar.current.dateComponents([.year, .month, .day], from: dayDate)
+            return utc.date(from: comps) ?? dayDate
+        }()
+
+        let isTodaySave = dayDate.isSameLocalDay(as: Date().startOfDayLocal())
+        let existing = allEntriesEffective.first(where: { $0.date.isSameLocalDay(as: dayDate) })
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // If work but invalid shift and no notes, treat as delete
+        if selectedType == .work, (!hasValidShiftRange) && trimmedNotes.isEmpty {
+            if existing != nil {
+                let entriesAfterDelete = allEntriesEffective.filter { !$0.date.isSameLocalDay(as: dayDate) }
+                hasUnsavedUserChanges = false
+                onDaySaved?(dayDate, nil)
+                dismiss()
+
+                localStore.delete(on: dayDate)
+                refreshFollowingAutoCreditedEntries(changedFrom: dayDate)
+
+                if isTodaySave {
+                    Task { @MainActor in
+                        await PayScopeLiveActivityManager.syncAtAppLaunch(
+                            settings: settings,
+                            entries: entriesAfterDelete
+                        )
+                    }
+                }
+
+                Task {
+                    do {
+                        try await cloudKitService.deleteDayEntry(on: dayDate)
+                    } catch {
+                    }
+                    await load(for: dayDate)
+                }
+            } else {
+                hasUnsavedUserChanges = false
+                onDaySaved?(dayDate, nil)
+                dismiss()
+            }
+            return
+        }
+
+        let target = existing ?? DayEntry(date: utcDayDate)
+        target.date = utcDayDate
+        target.updatedAt = Date()
+        target.type = selectedType
+        target.notes = notes
+
+        // Reset fields
+        target.shiftStart = nil
+        target.shiftEnd = nil
+        target.breakSeconds = 0
+        target.manualWorkedSeconds = nil
+        target.creditedOverrideSeconds = nil
+
+        if isCreditedType {
+            // Credited: store override if provided; shift times remain empty
+            target.creditedOverrideSeconds = creditedOverrideSeconds.map { max(0, $0) }
+        } else if usesManualDurationInput {
+            target.manualWorkedSeconds = max(0, manualWorkedSeconds)
+        } else {
+            // Work: whole shift
+            if hasValidShiftRange, let start = dateAtMinute(startMinute), let end = dateAtMinute(endMinute), end > start {
+                target.shiftStart = start
+                target.shiftEnd = end
+                target.breakSeconds = max(0, breakMinutes * 60)
+            }
+        }
+
+        hasUnsavedUserChanges = false
+        onDaySaved?(dayDate, target)
+        dismiss()
+
+        Task {
+            refreshFollowingAutoCreditedEntries(changedFrom: dayDate)
+            let mergedEntriesAfterSave = mergedEntriesReplacingDay(on: dayDate, with: target)
+
+            do {
+                // Cloud-first: iCloud is the primary source of truth.
+                try await cloudKitService.saveDayEntry(target)
+                localStore.save(target)
+                await load(for: dayDate)
+                if isTodaySave {
+                    await PayScopeLiveActivityManager.syncAtAppLaunch(
+                        settings: settings,
+                        entries: mergedEntriesAfterSave
+                    )
+                }
+            } catch {
+                // Fallback for offline/unreachable CloudKit.
+                localStore.save(target)
+                if isTodaySave {
+                    await PayScopeLiveActivityManager.syncAtAppLaunch(
+                        settings: settings,
+                        entries: mergedEntriesAfterSave
+                    )
+                }
+                #if DEBUG
+                print("CloudKit save failed, persisted locally as fallback: \(error)")
+                #endif
+            }
+        }
+    }
+
+    private func deleteCurrentDay() {
+        let dayDate = selectedDate.startOfDayLocal()
+        let entriesAfterDelete = allEntriesEffective.filter { !$0.date.isSameLocalDay(as: dayDate) }
+        hasUnsavedUserChanges = false
+        onDaySaved?(dayDate, nil)
+
+        // Delete from CloudKit
+        Task {
+            do {
+                try await cloudKitService.deleteDayEntry(on: dayDate)
+            } catch {
+            }
+            await load(for: selectedDate)
+        }
+        // Delete from local cache
+        localStore.delete(on: dayDate)
+        allEntries.removeAll { $0.date.isSameLocalDay(as: dayDate) }
+        localEntries.removeAll { $0.date.isSameLocalDay(as: dayDate) }
+        refreshFollowingAutoCreditedEntries(changedFrom: dayDate)
+
+        // Update live activity if today
+        if dayDate.isSameLocalDay(as: Date().startOfDayLocal()) {
+            Task { @MainActor in
+                await PayScopeLiveActivityManager.syncAtAppLaunch(
+                    settings: settings,
+                    entries: entriesAfterDelete
+                )
+            }
+        }
+        dismiss()
+    }
+
+    private func refreshFollowingAutoCreditedEntries(changedFrom changedDate: Date) {
+        let candidates = allEntriesEffective
+            .filter {
+                $0.date > changedDate &&
+                ($0.type == .vacation || $0.type == .holiday || $0.type == .sick) &&
+                isAutoManagedCreditedEntry($0)
+            }
+            .sorted { $0.date < $1.date }
+
+        for day in candidates {
+            let seconds = resolvedCreditedSeconds(for: day)
+            applyAutoCreditedSegment(for: day, seconds: seconds)
+        }
+    }
+
+    private func isAutoManagedCreditedEntry(_ day: DayEntry) -> Bool {
+        guard day.manualWorkedSeconds == nil else { return false }
+        guard day.creditedOverrideSeconds == nil else { return false }
+        guard day.type == .vacation || day.type == .holiday || day.type == .sick else { return false }
+        return day.shiftStart == nil && day.shiftEnd == nil
+    }
+
+    private func applyAutoCreditedSegment(for day: DayEntry, seconds: Int) {
+        _ = seconds
+        day.manualWorkedSeconds = nil
+        day.shiftStart = nil
+        day.shiftEnd = nil
+        day.breakSeconds = 0
+    }
+
+    private var creditedOverrideBinding: Binding<Int> {
+        Binding(
+            get: { max(0, creditedOverrideSeconds ?? 0) },
+            set: { creditedOverrideSeconds = max(0, $0) }
+        )
+    }
+
+    private func creditedBaselineSeconds() -> Int {
+        let probe = DayEntry(date: selectedDate.startOfDayLocal(), type: selectedType)
+        let result = service.dayComputation(for: probe, allEntries: allEntriesEffective, settings: settings)
+        switch result {
+        case let .ok(valueSeconds, _), let .warning(valueSeconds, _, _):
+            return valueSeconds
+        case .error:
+            return 0
+        }
+    }
+
+    private func resolvedCreditedSeconds(for day: DayEntry) -> Int {
+        if let override = day.creditedOverrideSeconds {
+            return max(0, override)
+        }
+        let result = service.dayComputation(for: day, allEntries: allEntriesEffective, settings: settings)
+        switch result {
+        case let .ok(valueSeconds, _), let .warning(valueSeconds, _, _):
+            return valueSeconds
+        case .error:
+            return 0
+        }
+    }
+
+    private func isEquivalentEntry(_ lhs: DayEntry, _ rhs: DayEntry) -> Bool {
+        lhs.type == rhs.type &&
+        lhs.notes == rhs.notes &&
+        lhs.breakSeconds == rhs.breakSeconds &&
+        lhs.manualWorkedSeconds == rhs.manualWorkedSeconds &&
+        lhs.creditedOverrideSeconds == rhs.creditedOverrideSeconds &&
+        lhs.shiftStart == rhs.shiftStart &&
+        lhs.shiftEnd == rhs.shiftEnd
+    }
+
+    private func mergedEntriesReplacingDay(on dayDate: Date, with entry: DayEntry) -> [DayEntry] {
+        var merged = allEntriesEffective.filter { !$0.date.isSameLocalDay(as: dayDate) }
+        merged.append(entry)
+        return merged.sorted { $0.date < $1.date }
+    }
+
+    private func isCredited(_ type: DayType) -> Bool {
+        type == .vacation || type == .holiday || type == .sick
+    }
+
+    private func minuteOfDay(from date: Date) -> Int {
+        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
+    }
+
+    private func dateAtMinute(_ minute: Int) -> Date? {
+        dateAtMinute(minute, on: selectedDate)
+    }
+
+    private func dateAtMinute(_ minute: Int, on baseDate: Date) -> Date? {
+        let dayStart = baseDate.startOfDayLocal()
+        if minute >= 24 * 60 {
+            return Calendar.current.date(byAdding: .day, value: 1, to: dayStart)
+        }
+        let h = max(0, minute / 60)
+        let m = max(0, minute % 60)
+        return Calendar.current.date(bySettingHour: h, minute: m, second: 0, of: dayStart)
     }
 
     private var isEditingShortcutBinding: Binding<Bool> {
@@ -673,7 +1159,11 @@ struct DayEditorView: View {
         }
 
         withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
-            editSegments.append(EditableSegment(startMinute: clamped.startMinute, endMinute: clamped.endMinute))
+            startMinute = clamped.startMinute
+            endMinute = clamped.endMinute
+            hasStartMinute = true
+            hasEndMinute = true
+            manualBreakOverrideMinutes = nil
         }
     }
 
@@ -701,9 +1191,9 @@ struct DayEditorView: View {
 
     private func shortcutName(for index: Int) -> String {
         switch index {
-        case 0: return shiftShortcutName1
-        case 1: return shiftShortcutName2
-        case 2: return shiftShortcutName3
+        case 0: return settingsShortcutName1
+        case 1: return settingsShortcutName2
+        case 2: return settingsShortcutName3
         default: return ""
         }
     }
@@ -711,9 +1201,9 @@ struct DayEditorView: View {
     private func shiftShortcut(at index: Int) -> ShiftShortcut? {
         let raw: String
         switch index {
-        case 0: raw = shiftShortcut1
-        case 1: raw = shiftShortcut2
-        case 2: raw = shiftShortcut3
+        case 0: raw = settingsShortcut1
+        case 1: raw = settingsShortcut2
+        case 2: raw = settingsShortcut3
         default: return nil
         }
         return ShiftShortcut(rawValue: raw)
@@ -721,36 +1211,22 @@ struct DayEditorView: View {
 
     private func setShortcut(_ shortcut: ShiftShortcut, at index: Int) {
         switch index {
-        case 0: shiftShortcut1 = shortcut.rawValue
-        case 1: shiftShortcut2 = shortcut.rawValue
-        case 2: shiftShortcut3 = shortcut.rawValue
+        case 0: settings.shiftShortcut1 = shortcut.rawValue
+        case 1: settings.shiftShortcut2 = shortcut.rawValue
+        case 2: settings.shiftShortcut3 = shortcut.rawValue
         default: return
         }
+        Task { try? await cloudKitService.saveSettings(settings) }
     }
 
     private func shortcutForCurrentDraft(fallback: ShiftShortcut) -> ShiftShortcut {
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        let draftSegments = normalizedShortcutSegmentsFromDraft()
-        let effectiveSegments = draftSegments.isEmpty
-            ? [ShiftShortcutSegment(startMinute: fallback.startMinute, endMinute: fallback.endMinute)]
-            : draftSegments
+        let earliestStart = fallback.startMinute
+        let latestEnd = fallback.endMinute
+        let grossMinutes = max(0, latestEnd - earliestStart)
+        let clampedBreakMinutes = selectedType == .work ? max(0, min(breakMinutes, grossMinutes)) : 0
 
-        let earliestStart = effectiveSegments.map(\.startMinute).min() ?? fallback.startMinute
-        let latestEnd = effectiveSegments.map(\.endMinute).max() ?? fallback.endMinute
-        let grossMinutes = max(
-            0,
-            effectiveSegments.reduce(0) { partial, segment in
-                partial + max(0, segment.endMinute - segment.startMinute)
-            }
-        )
-        let clampedBreakMinutes = selectedType == .work
-            ? max(0, min(totalBreakMinutes, grossMinutes))
-            : 0
-
-        let shouldStoreRichTemplate = selectedType != .work ||
-            !trimmedNotes.isEmpty ||
-            effectiveSegments.count > 1 ||
-            clampedBreakMinutes > 0
+        let shouldStoreRichTemplate = selectedType != .work || !trimmedNotes.isEmpty || clampedBreakMinutes > 0
 
         guard shouldStoreRichTemplate else {
             return ShiftShortcut(startMinute: earliestStart, endMinute: latestEnd)
@@ -759,9 +1235,9 @@ struct DayEditorView: View {
         let payload = ShiftShortcutPayload(
             startMinute: earliestStart,
             endMinute: latestEnd,
-            dayType: selectedType,
+            dayTypeRaw: selectedType.rawValue,
             notes: notes,
-            segments: effectiveSegments,
+            segments: [],
             breakMinutes: clampedBreakMinutes,
             manualWorkedSeconds: selectedType == .manual ? max(0, manualWorkedSeconds) : nil,
             creditedOverrideSeconds: isCredited(selectedType) ? creditedOverrideSeconds.map { max(0, $0) } : nil
@@ -769,69 +1245,39 @@ struct DayEditorView: View {
         return ShiftShortcut(startMinute: earliestStart, endMinute: latestEnd, payload: payload)
     }
 
-    private func normalizedShortcutSegmentsFromDraft() -> [ShiftShortcutSegment] {
-        editSegments
-            .map {
-                ShiftShortcutSegment(
-                    startMinute: $0.startMinute,
-                    endMinute: $0.endMinute
-                )
-            }
-            .filter { $0.endMinute > $0.startMinute }
-            .sorted(by: { lhs, rhs in
-                if lhs.startMinute != rhs.startMinute { return lhs.startMinute < rhs.startMinute }
-                return lhs.endMinute < rhs.endMinute
-            })
-    }
-
     private func applyShortcutTemplate(_ shortcut: ShiftShortcut) {
         let targetType = shortcut.dayType ?? .work
-        let templateSegments = shortcut.segments.isEmpty
-            ? [ShiftShortcutSegment(startMinute: shortcut.startMinute, endMinute: shortcut.endMinute)]
-            : shortcut.segments
 
         isApplyingLoad = true
         defer { isApplyingLoad = false }
 
         selectedType = targetType
         notes = shortcut.notes
-        showNotesEditor = !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         manualWorkedSeconds = 0
         creditedOverrideSeconds = nil
-        editSegments = []
-        totalBreakMinutes = 0
-        isPauseCustom = false
 
         if targetType == .manual {
-            let fallbackSeconds = max(
-                0,
-                templateSegments.reduce(0) { partial, segment in
-                    partial + max(0, segment.endMinute - segment.startMinute) * 60
-                }
-            )
-            manualWorkedSeconds = max(0, shortcut.manualWorkedSeconds ?? fallbackSeconds)
+            manualWorkedSeconds = max(0, shortcut.manualWorkedSeconds ?? 0)
+            manualBreakOverrideMinutes = nil
+            hasStartMinute = false
+            hasEndMinute = false
             return
-        }
-
-        let editableSegments = templateSegments.map {
-            EditableSegment(startMinute: $0.startMinute, endMinute: $0.endMinute)
         }
 
         if isCredited(targetType) {
-            editSegments = editableSegments
             creditedOverrideSeconds = shortcut.creditedOverrideSeconds.map { max(0, $0) }
-            if editSegments.isEmpty {
-                applyAutoCreditedSegmentIfNeeded(force: true)
-            }
+            manualBreakOverrideMinutes = nil
+            hasStartMinute = false
+            hasEndMinute = false
             return
         }
 
-        editSegments = editableSegments
-        let grossMinutes = max(0, editSegments.reduce(0) { $0 + max(0, $1.grossDurationMinutes) })
-        let clampedBreakMinutes = max(0, min(shortcut.breakMinutes, grossMinutes))
-        totalBreakMinutes = clampedBreakMinutes
-        isPauseCustom = clampedBreakMinutes != automaticBreakMinutes(forDurationMinutes: grossMinutes)
+        startMinute = shortcut.startMinute
+        endMinute = shortcut.endMinute
+        hasStartMinute = true
+        hasEndMinute = true
+        inferManualBreakOverride(fromStoredBreakMinutes: max(0, min(shortcut.breakMinutes, endMinute - startMinute)))
     }
 
     private func clampedShortcut(_ shortcut: ShiftShortcut) -> ShiftShortcut {
@@ -846,40 +1292,17 @@ struct DayEditorView: View {
             return ShiftShortcut(startMinute: fallbackRange.start, endMinute: fallbackRange.end)
         }
 
-        let sourceSegments = payload.segments.isEmpty
-            ? [ShiftShortcutSegment(startMinute: fallbackRange.start, endMinute: fallbackRange.end)]
-            : payload.segments
-
-        let clampedSegments = sourceSegments
-            .map {
-                let range = clampedRange(start: $0.startMinute, end: $0.endMinute)
-                return ShiftShortcutSegment(startMinute: range.start, endMinute: range.end)
-            }
-            .sorted(by: { lhs, rhs in
-                if lhs.startMinute != rhs.startMinute { return lhs.startMinute < rhs.startMinute }
-                return lhs.endMinute < rhs.endMinute
-            })
-
-        let normalizedSegments = clampedSegments.isEmpty
-            ? [ShiftShortcutSegment(startMinute: fallbackRange.start, endMinute: fallbackRange.end)]
-            : clampedSegments
-
-        let earliestStart = normalizedSegments.map(\.startMinute).min() ?? fallbackRange.start
-        let latestEnd = normalizedSegments.map(\.endMinute).max() ?? fallbackRange.end
-        let dayType = payload.dayType ?? .work
-        let grossMinutes = max(
-            0,
-            normalizedSegments.reduce(0) { partial, segment in
-                partial + max(0, segment.endMinute - segment.startMinute)
-            }
-        )
+        let earliestStart = fallbackRange.start
+        let latestEnd = fallbackRange.end
+        let dayType = (payload.dayTypeRaw.flatMap { DayType(rawValue: $0) }) ?? .work
+        let grossMinutes = max(0, latestEnd - earliestStart)
 
         let normalizedPayload = ShiftShortcutPayload(
             startMinute: earliestStart,
             endMinute: latestEnd,
-            dayType: dayType,
+            dayTypeRaw: dayType.rawValue,
             notes: payload.notes,
-            segments: normalizedSegments,
+            segments: [],
             breakMinutes: dayType == .work ? max(0, min(payload.breakMinutes, grossMinutes)) : 0,
             manualWorkedSeconds: dayType == .manual ? max(0, payload.manualWorkedSeconds ?? 0) : nil,
             creditedOverrideSeconds: isCredited(dayType) ? payload.creditedOverrideSeconds.map { max(0, $0) } : nil
@@ -908,333 +1331,81 @@ struct DayEditorView: View {
         return String(format: "%02d:%02d", h, m)
     }
 
-    private var isSaveValid: Bool {
-        if isCreditedType {
-            return true
-        }
-        if usesManualDurationInput {
-            return manualWorkedSeconds > 0
-        }
-        return editSegments.allSatisfy { $0.validationMessage == nil } && breakValidationMessage == nil
-    }
-
-    private var breakValidationMessage: String? {
-        // Only validate breaks for work days
-        guard selectedType == .work else { return nil }
-        guard totalGrossSeconds > 0 else { return nil }
-        if totalBreakMinutes < 0 {
-            return "Pause darf nicht negativ sein."
-        }
-        if totalBreakMinutes * 60 > totalGrossSeconds {
-            return "Pause ist länger als die gesamte Dauer."
-        }
-        return nil
-    }
-
-    private var selectedDayBinding: Binding<Date> {
-        Binding(
-            get: { selectedDate },
-            set: { selectedDate = $0.startOfDayLocal() }
-        )
-    }
-
-    private func load(for dayDate: Date) {
-        isApplyingLoad = true
-        defer { isApplyingLoad = false }
-
-        if let existing = allEntries.first(where: { $0.date.isSameLocalDay(as: dayDate) }) {
-            selectedType = existing.type
-            notes = existing.notes
-            showNotesEditor = !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            let fallbackManualFromSegments = max(
-                0,
-                existing.segments.reduce(0) { partial, segment in
-                    let duration = max(0, Int(segment.end.timeIntervalSince(segment.start)))
-                    return partial + max(0, duration - max(0, segment.breakSeconds))
-                }
-            )
-            if selectedType == .manual {
-                manualWorkedSeconds = max(0, existing.manualWorkedSeconds ?? fallbackManualFromSegments)
-            } else if isCreditedType {
-                manualWorkedSeconds = 0
-                creditedOverrideSeconds = existing.creditedOverrideSeconds.map { max(0, $0) }
-            } else {
-                manualWorkedSeconds = 0
-                creditedOverrideSeconds = nil
-            }
-            if usesManualDurationInput {
-                editSegments = []
-                totalBreakMinutes = 0
-                isPauseCustom = false
-            } else {
-                if selectedType == .work, existing.segments.isEmpty, let legacyManualSeconds = existing.manualWorkedSeconds, legacyManualSeconds > 0 {
-                    let startMinute = timelineBounds.lowerBound
-                    let roundedMinutes = max(0, Int((Double(legacyManualSeconds) / 60.0).rounded()))
-                    let endMinute = min(24 * 60, startMinute + roundedMinutes)
-                    editSegments = [EditableSegment(startMinute: startMinute, endMinute: endMinute)]
-                } else {
-                    editSegments = existing.segments.map {
-                        let rawStart = minuteOfDay(from: $0.start)
-                        let rawEnd = minuteOfDay(from: $0.end)
-                        let clampedStart = max(timelineBounds.lowerBound, min(timelineBounds.upperBound - 1, rawStart))
-                        let clampedEnd = min(timelineBounds.upperBound, max(clampedStart, rawEnd))
-                        return EditableSegment(startMinute: clampedStart, endMinute: clampedEnd)
+    private var shiftCategoryMenu: some View {
+        Menu {
+            ForEach(DayType.allCases) { type in
+                Button {
+                    selectedType = type
+                } label: {
+                    HStack {
+                        Label(type.label, systemImage: type.icon)
+                        Spacer()
+                        if type == selectedType {
+                            Image(systemName: "checkmark")
+                        }
                     }
                 }
-                totalBreakMinutes = max(0, existing.segments.reduce(0) { $0 + max(0, $1.breakSeconds) } / 60)
-                isPauseCustom = totalBreakMinutes != automaticBreakMinutes(forDurationMinutes: totalGrossSeconds / 60)
-                applyAutoCreditedSegmentIfNeeded(force: false)
             }
-            if isCreditedType {
-                applyAutoCreditedSegmentIfNeeded(force: true)
-            }
+        } label: {
+            Label(selectedType.label, systemImage: selectedType.icon)
+                .font(.subheadline.weight(.semibold))
+                .frame(minWidth: 118, alignment: .trailing)
+        }
+        .foregroundStyle(selectedType.tint(for: settings.themeAccent))
+    }
+
+    private func automaticBreakBaseMinutes(for grossMinutes: Int) -> Int {
+        let sixHoursWithTolerance = 6 * 60 + 15
+        let nineHoursWithTolerance = 9 * 60 + 15
+
+        if grossMinutes <= sixHoursWithTolerance { return 0 }
+        if grossMinutes <= nineHoursWithTolerance { return 30 }
+        return 45
+    }
+
+    private func inferManualBreakOverride(fromStoredBreakMinutes storedBreakMinutes: Int) {
+        let grossMinutes = hasCompleteShiftTime ? max(0, endMinute - startMinute) : 0
+        let clampedStoredBreak = max(0, min(storedBreakMinutes, grossMinutes))
+        let auto = automaticBreakBaseMinutes(for: grossMinutes)
+        if clampedStoredBreak == auto {
+            manualBreakOverrideMinutes = nil
         } else {
-            selectedType = .work
-            notes = ""
-            showNotesEditor = false
-            editSegments = []
-            totalBreakMinutes = 0
-            isPauseCustom = false
-            manualWorkedSeconds = 0
-            creditedOverrideSeconds = nil
+            manualBreakOverrideMinutes = clampedStoredBreak
         }
     }
 
-    private func applyAutoCreditedSegmentIfNeeded(force: Bool = true) {
-        guard isCreditedType else { return }
-        guard force || editSegments.isEmpty else { return }
-        let seconds = max(0, creditedOverrideSeconds ?? creditedBaselineSeconds())
-
-        let startMinute = timelineBounds.lowerBound
-        let roundedMinutes = max(0, Int((Double(seconds) / 60.0).rounded()))
-        let endMinute = min(24 * 60, startMinute + roundedMinutes)
-        totalBreakMinutes = 0
-        isPauseCustom = false
-        editSegments = [EditableSegment(startMinute: startMinute, endMinute: endMinute)]
+    private func clampManualBreakOverride() {
+        guard let manualBreakOverrideMinutes else { return }
+        let grossMinutes = hasCompleteShiftTime ? max(0, endMinute - startMinute) : 0
+        self.manualBreakOverrideMinutes = max(0, min(manualBreakOverrideMinutes, grossMinutes))
     }
 
-    private func save() {
-        let dayDate = selectedDate.startOfDayLocal()
-        let isTodaySave = dayDate.isSameLocalDay(as: Date().startOfDayLocal())
-        let existing = allEntries.first(where: { $0.date.isSameLocalDay(as: dayDate) })
-        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func openBreakEditor() {
+        isBreakEditorVisible.toggle()
+    }
 
-        if selectedType == .work, editSegments.isEmpty, trimmedNotes.isEmpty {
-            if let existing {
-                modelContext.delete(existing)
-                refreshFollowingAutoCreditedEntries(changedFrom: dayDate)
-                modelContext.persistIfPossible()
-                let entriesAfterDelete = allEntries.filter { $0 !== existing }
-                exportICloudSnapshot(entries: entriesAfterDelete)
+    private func adjustBreak(by deltaMinutes: Int) {
+        let targetValue = breakMinutes + deltaMinutes
+        let grossMinutes = hasCompleteShiftTime ? max(0, endMinute - startMinute) : 0
+        let clampedValue = max(0, min(targetValue, grossMinutes))
+        let autoValue = automaticBreakBaseMinutes(for: grossMinutes)
+        manualBreakOverrideMinutes = (clampedValue == autoValue) ? nil : clampedValue
+    }
 
-                if isTodaySave {
-                    Task { @MainActor in
-                        await PayScopeLiveActivityManager.syncAtAppLaunch(
-                            settings: settings,
-                            entries: entriesAfterDelete
-                        )
-                    }
-                }
-            } else {
-                exportICloudSnapshot(entries: allEntries)
-            }
-
-            dismiss()
-            return
+    private func breakAdjustmentButton(title: String, delta: Int) -> some View {
+        Button(title) {
+            adjustBreak(by: delta)
         }
+        .buttonStyle(.payScopeSecondary(accent: settings.themeAccent.color))
+    }
 
-        let target = existing ?? {
-            let newEntry = DayEntry(date: dayDate)
-            modelContext.insert(newEntry)
-            return newEntry
-        }()
-
-        target.date = dayDate
-        target.type = selectedType
-        target.notes = notes
-
-        target.segments.removeAll()
-        if isCreditedType {
-            target.manualWorkedSeconds = nil
-            target.creditedOverrideSeconds = creditedOverrideSeconds.map { max(0, $0) }
-            let seconds = resolvedCreditedSeconds(for: target)
-            applyAutoCreditedSegment(for: target, seconds: seconds)
-        } else if usesManualDurationInput {
-            target.creditedOverrideSeconds = nil
-            target.manualWorkedSeconds = max(0, manualWorkedSeconds)
-        } else {
-            target.creditedOverrideSeconds = nil
-            target.manualWorkedSeconds = nil
-            let clampedBreakSeconds = (selectedType == .work) ? max(0, min(totalBreakMinutes * 60, totalGrossSeconds)) : 0
-            var didAssignBreak = false
-            for segment in editSegments {
-                guard let start = dateAtMinute(segment.startMinute), let end = dateAtMinute(segment.endMinute) else { continue }
-                let breakSeconds = didAssignBreak ? 0 : clampedBreakSeconds
-                target.segments.append(TimeSegment(start: start, end: end, breakSeconds: breakSeconds))
-                didAssignBreak = true
-            }
+    private var breakMinutes: Int {
+        guard selectedType == .work else { return 0 }
+        let grossMinutes = hasCompleteShiftTime ? max(0, endMinute - startMinute) : 0
+        if let manualBreakOverrideMinutes {
+            return max(0, min(manualBreakOverrideMinutes, grossMinutes))
         }
-
-        // Recompute following auto-managed credited days (vacation/holiday/sick) when history changed.
-        refreshFollowingAutoCreditedEntries(changedFrom: dayDate)
-
-        modelContext.persistIfPossible()
-
-        var entriesForSync = allEntries
-        if !entriesForSync.contains(where: { $0 === target }) {
-            entriesForSync.append(target)
-        }
-        exportICloudSnapshot(entries: entriesForSync)
-
-        if isTodaySave {
-            Task { @MainActor in
-                await PayScopeLiveActivityManager.syncAtAppLaunch(
-                    settings: settings,
-                    entries: entriesForSync
-                )
-            }
-        }
-
-        dismiss()
-    }
-
-    private func exportICloudSnapshot(entries dayEntries: [DayEntry]) {
-        ICloudSettingsSync.export(
-            settings: settings,
-            entries: dayEntries,
-            netWageConfigs: netWageConfigs,
-            holidayDays: holidayDays
-        )
-    }
-
-    private func refreshFollowingAutoCreditedEntries(changedFrom changedDate: Date) {
-        let candidates = allEntries
-            .filter {
-                $0.date > changedDate &&
-                ($0.type == .vacation || $0.type == .holiday || $0.type == .sick) &&
-                isAutoManagedCreditedEntry($0)
-            }
-            .sorted { $0.date < $1.date }
-
-        for day in candidates {
-            let seconds = resolvedCreditedSeconds(for: day)
-            applyAutoCreditedSegment(for: day, seconds: seconds)
-        }
-    }
-
-    private func isAutoManagedCreditedEntry(_ day: DayEntry) -> Bool {
-        guard day.manualWorkedSeconds == nil else { return false }
-        guard day.creditedOverrideSeconds == nil else { return false }
-        guard day.type == .vacation || day.type == .holiday || day.type == .sick else { return false }
-        guard !day.segments.isEmpty else { return true }
-        guard day.segments.count == 1, let only = day.segments.first else { return false }
-        guard only.breakSeconds == 0 else { return false }
-        guard only.start.isSameLocalDay(as: day.date.startOfDayLocal()) else { return false }
-        return minuteOfDay(from: only.start) == timelineBounds.lowerBound
-    }
-
-    private func applyAutoCreditedSegment(for day: DayEntry, seconds: Int) {
-        day.segments.removeAll()
-        let startMinute = timelineBounds.lowerBound
-        let roundedMinutes = max(0, Int((Double(seconds) / 60.0).rounded()))
-        let endMinute = min(24 * 60, startMinute + roundedMinutes)
-        guard
-            let start = dateAtMinute(startMinute, on: day.date),
-            let end = dateAtMinute(endMinute, on: day.date)
-        else { return }
-        day.segments.append(TimeSegment(start: start, end: end, breakSeconds: 0))
-    }
-
-    private func automaticBreakMinutes(forDurationMinutes minutes: Int) -> Int {
-        if minutes > (9 * 60) + 15 { return 45 }
-        if minutes > (6 * 60) + 15 { return 30 }
-        return 0
-    }
-
-    private var creditedOverrideBinding: Binding<Int> {
-        Binding(
-            get: { max(0, creditedOverrideSeconds ?? 0) },
-            set: { creditedOverrideSeconds = max(0, $0) }
-        )
-    }
-
-    private func creditedBaselineSeconds() -> Int {
-        let probe = DayEntry(date: selectedDate.startOfDayLocal(), type: selectedType)
-        let result = service.dayComputation(for: probe, allEntries: allEntries, settings: settings)
-        switch result {
-        case let .ok(valueSeconds, _), let .warning(valueSeconds, _, _):
-            return valueSeconds
-        case .error:
-            return 0
-        }
-    }
-
-    private func resolvedCreditedSeconds(for day: DayEntry) -> Int {
-        if let override = day.creditedOverrideSeconds {
-            return max(0, override)
-        }
-        let result = service.dayComputation(for: day, allEntries: allEntries, settings: settings)
-        switch result {
-        case let .ok(valueSeconds, _), let .warning(valueSeconds, _, _):
-            return valueSeconds
-        case .error:
-            return 0
-        }
-    }
-
-    private func isCredited(_ type: DayType) -> Bool {
-        type == .vacation || type == .holiday || type == .sick
-    }
-
-    private func minuteBinding(segment: Binding<EditableSegment>, isStart: Bool) -> Binding<Int> {
-        Binding(
-            get: {
-                isStart ? segment.wrappedValue.startMinute : segment.wrappedValue.endMinute
-            },
-            set: { newMinute in
-                var value = segment.wrappedValue
-                if isStart {
-                    value.startMinute = max(timelineBounds.lowerBound, min(value.endMinute - 1, newMinute))
-                } else {
-                    value.endMinute = min(timelineBounds.upperBound, max(value.startMinute + 1, newMinute))
-                }
-                if isCreditedType {
-                    totalBreakMinutes = 0
-                    isPauseCustom = false
-                    segment.wrappedValue = value
-                    return
-                }
-                let projectedGrossMinutes = editSegments.reduce(0) { partial, current in
-                    let next = current.id == value.id ? value : current
-                    return partial + max(0, next.grossDurationMinutes)
-                }
-                if !isPauseCustom {
-                    totalBreakMinutes = automaticBreakMinutes(forDurationMinutes: projectedGrossMinutes)
-                } else {
-                    totalBreakMinutes = min(totalBreakMinutes, projectedGrossMinutes)
-                }
-                segment.wrappedValue = value
-            }
-        )
-    }
-
-    private func minuteOfDay(from date: Date) -> Int {
-        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
-        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
-    }
-
-    private func dateAtMinute(_ minute: Int) -> Date? {
-        dateAtMinute(minute, on: selectedDate)
-    }
-
-    private func dateAtMinute(_ minute: Int, on baseDate: Date) -> Date? {
-        let dayStart = baseDate.startOfDayLocal()
-        if minute >= 24 * 60 {
-            return Calendar.current.date(byAdding: .day, value: 1, to: dayStart)
-        }
-        let h = max(0, minute / 60)
-        let m = max(0, minute % 60)
-        return Calendar.current.date(bySettingHour: h, minute: m, second: 0, of: dayStart)
+        return min(grossMinutes, automaticBreakBaseMinutes(for: grossMinutes))
     }
 }
 
@@ -1324,7 +1495,8 @@ private struct ShiftShortcut {
     }
 
     var dayType: DayType? {
-        payload?.dayType
+        guard let raw = payload?.dayTypeRaw else { return nil }
+        return DayType(rawValue: raw)
     }
 
     var notes: String {
@@ -1351,7 +1523,7 @@ private struct ShiftShortcut {
 private struct ShiftShortcutPayload: Codable, Equatable {
     let startMinute: Int
     let endMinute: Int
-    let dayType: DayType?
+    let dayTypeRaw: String?
     let notes: String
     let segments: [ShiftShortcutSegment]
     let breakMinutes: Int
@@ -1544,78 +1716,6 @@ private struct MultiSegmentTimelinePreview: View {
     }
 }
 
-private struct PauseInlineEditor: View {
-    @Binding var breakMinutes: Int
-    @Binding var isPauseCustom: Bool
-    let suggestedBreakMinutes: Int
-    let accent: Color
-
-    @State private var isEditing = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                isEditing.toggle()
-            } label: {
-                HStack(spacing: 8) {
-                    Text("Pause")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Text("\(breakMinutes) min")
-                        .font(.subheadline.bold())
-                    Image(systemName: "pencil")
-                        .font(.caption.weight(.bold))
-                }
-            }
-            .buttonStyle(.plain)
-
-            if isEditing {
-                HStack(spacing: 10) {
-                    pauseStepButton(label: "-5", delta: -5)
-                    pauseStepButton(label: "-1", delta: -1)
-                    pauseStepButton(label: "+1", delta: 1)
-                    pauseStepButton(label: "+5", delta: 5)
-                }
-
-                Button {
-                    breakMinutes = suggestedBreakMinutes
-                    isPauseCustom = false
-                    isEditing = false
-                } label: {
-                    Label("Auto (\(suggestedBreakMinutes) min)", systemImage: "wand.and.stars")
-                        .font(.footnote.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.payScopeSecondary(accent: accent))
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func pauseStepButton(label: String, delta: Int) -> some View {
-        Button {
-            breakMinutes = max(0, min(180, breakMinutes + delta))
-            isPauseCustom = true
-        } label: {
-            Text(label)
-                .font(.caption.weight(.bold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .padding(.horizontal, 8)
-                .foregroundStyle(delta > 0 ? .white : accent)
-                .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(delta > 0 ? accent.opacity(0.9) : accent.opacity(0.1))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(accent.opacity(delta > 0 ? 0.2 : 0.3), lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 private struct ManualDurationEditor: View {
     @Binding var seconds: Int
     let accent: Color
@@ -1652,16 +1752,36 @@ private struct ManualDurationEditor: View {
 
 private struct HHMMMinuteInput: View {
     @Binding var minuteOfDay: Int
+    private var hasValue: Binding<Bool>?
     let accent: Color
 
-    @State private var hourText = "00"
-    @State private var minuteText = "00"
+    @State private var hourText = ""
+    @State private var minuteText = ""
+    @FocusState private var focusedField: Field?
+
+    private enum Field {
+        case hour
+        case minute
+    }
+
+    init(minuteOfDay: Binding<Int>, accent: Color) {
+        self._minuteOfDay = minuteOfDay
+        self.hasValue = nil
+        self.accent = accent
+    }
+
+    init(minuteOfDay: Binding<Int>, hasValue: Binding<Bool>, accent: Color) {
+        self._minuteOfDay = minuteOfDay
+        self.hasValue = hasValue
+        self.accent = accent
+    }
 
     var body: some View {
         HStack(spacing: 4) {
             TextField("hh", text: $hourText)
                 .keyboardType(.numberPad)
                 .multilineTextAlignment(.center)
+                .focused($focusedField, equals: .hour)
                 .frame(width: 38)
                 .padding(.vertical, 6)
                 .background(
@@ -1678,6 +1798,9 @@ private struct HHMMMinuteInput: View {
                         hourText = digits
                         return
                     }
+                    if hasValue != nil {
+                        hasValue?.wrappedValue = !(hourText.isEmpty && minuteText.isEmpty)
+                    }
                     sync()
                 }
 
@@ -1688,6 +1811,7 @@ private struct HHMMMinuteInput: View {
             TextField("mm", text: $minuteText)
                 .keyboardType(.numberPad)
                 .multilineTextAlignment(.center)
+                .focused($focusedField, equals: .minute)
                 .frame(width: 38)
                 .padding(.vertical, 6)
                 .background(
@@ -1704,18 +1828,35 @@ private struct HHMMMinuteInput: View {
                         minuteText = digits
                         return
                     }
+                    if hasValue != nil {
+                        hasValue?.wrappedValue = !(hourText.isEmpty && minuteText.isEmpty)
+                    }
                     sync()
                 }
         }
         .onAppear { split() }
-        .onChange(of: minuteOfDay) { _, _ in split() }
+        .onChange(of: minuteOfDay) { _, _ in
+            guard focusedField == nil else { return }
+            split()
+        }
+        .onChange(of: focusedField) { _, newValue in
+            if newValue == nil {
+                if hasValue != nil {
+                    hasValue?.wrappedValue = !(hourText.isEmpty && minuteText.isEmpty)
+                }
+                split()
+            }
+        }
     }
 
     private func sanitizeDigits(_ value: String, maxLength: Int) -> String {
-        String(value.filter(\.isNumber).suffix(maxLength))
+        String(value.filter(\.isNumber).prefix(maxLength))
     }
 
     private func sync() {
+        if let hasValue, !hasValue.wrappedValue {
+            return
+        }
         var hours = min(24, Int(hourText) ?? 0)
         var minutes = min(59, Int(minuteText) ?? 0)
         if hours == 24 {
@@ -1731,6 +1872,11 @@ private struct HHMMMinuteInput: View {
     }
 
     private func split() {
+        if let hasValue, !hasValue.wrappedValue {
+            hourText = ""
+            minuteText = ""
+            return
+        }
         let clamped = max(0, min(24 * 60, minuteOfDay))
         let hours = min(24, clamped / 60)
         let minutes = (hours == 24) ? 0 : min(59, clamped % 60)
@@ -1745,12 +1891,19 @@ private struct HHMMInputDurationEditor: View {
 
     @State private var hourText = "00"
     @State private var minuteText = "00"
+    @FocusState private var focusedField: Field?
+
+    private enum Field {
+        case hour
+        case minute
+    }
 
     var body: some View {
         HStack(spacing: 6) {
             TextField("hh", text: $hourText)
                 .keyboardType(.numberPad)
                 .multilineTextAlignment(.center)
+                .focused($focusedField, equals: .hour)
                 .frame(width: 42)
                 .padding(.vertical, 6)
                 .background(
@@ -1777,6 +1930,7 @@ private struct HHMMInputDurationEditor: View {
             TextField("mm", text: $minuteText)
                 .keyboardType(.numberPad)
                 .multilineTextAlignment(.center)
+                .focused($focusedField, equals: .minute)
                 .frame(width: 42)
                 .padding(.vertical, 6)
                 .background(
@@ -1797,11 +1951,19 @@ private struct HHMMInputDurationEditor: View {
                 }
         }
         .onAppear { split() }
-        .onChange(of: seconds) { _, _ in split() }
+        .onChange(of: seconds) { _, _ in
+            guard focusedField == nil else { return }
+            split()
+        }
+        .onChange(of: focusedField) { _, newValue in
+            if newValue == nil {
+                split()
+            }
+        }
     }
 
     private func sanitizeDigits(_ value: String, maxLength: Int) -> String {
-        String(value.filter(\.isNumber).suffix(maxLength))
+        String(value.filter(\.isNumber).prefix(maxLength))
     }
 
     private func sync() {
@@ -1818,29 +1980,10 @@ private struct HHMMInputDurationEditor: View {
         minuteText = String(format: "%02d", minutes)
     }
 }
+
 #Preview("Day Editor") {
-    // Provide a temporary in-memory model container so @Query can resolve
-    let config = ModelConfiguration(isStoredInMemoryOnly: true)
-    let container = try! ModelContainer(for: DayEntry.self, configurations: config)
-
-    // Seed with a couple of example entries if desired
-    let context = container.mainContext
+    // Preview using minimal static data (SwiftData previews removed)
     let today = Date().startOfDayLocal()
-    let sample = DayEntry(date: today, type: .work)
-    // Minimal segment so pay/preview has data
-    if let start = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: today),
-       let end = Calendar.current.date(bySettingHour: 17, minute: 0, second: 0, of: today) {
-        sample.segments = [TimeSegment(start: start, end: end, breakSeconds: 30 * 60)]
-    }
-    context.insert(sample)
-
-    // Basic settings instance
-    var settings = Settings()
-    settings.themeAccent = .blue
-
-    return DayEditorView(
-        date: today,
-        settings: settings
-    )
-    .modelContainer(container)
+    let settings = Settings()
+    return DayEditorView(date: today, settings: settings, onDaySaved: nil)
 }
