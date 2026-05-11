@@ -3,47 +3,45 @@ import SwiftData
 import Combine
 
 struct TodayFocusView: View {
-    @Query(sort: \DayEntry.date) private var entries: [DayEntry]
+    @Query(sort: \DayEntry.date) private var queryEntries: [DayEntry]
     @Bindable var settings: Settings
+    let entriesOverride: [DayEntry]?
 
     @State private var now = Date()
 
     private let refreshTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+    private let service = CalculationService()
+
+    init(settings: Settings, entriesOverride: [DayEntry]? = nil) {
+        self.settings = settings
+        self.entriesOverride = entriesOverride
+    }
 
     var body: some View {
         GeometryReader { geometry in
-            let width = geometry.size.width - 36
-            let ringSize = max(190, min(width * 0.96, geometry.size.height * 0.62))
+            let isCompactSheet = geometry.size.height < 700
+            let isNarrow = geometry.size.width < 390
+            let horizontalPadding: CGFloat = isNarrow ? 14 : 20
+            let cardSpacing: CGFloat = isCompactSheet || isNarrow ? 10 : 14
 
-            VStack(spacing: 12) {
-                header
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: isCompactSheet ? 12 : 18) {
+                    header(isCompact: isCompactSheet)
 
-                VStack(spacing: 8) {
-                    TodayFocusRingChart(
-                        bounds: timelineBounds,
-                        workedIntervals: workedIntervals,
-                        nowMinuteOfDay: nowMinuteOfDay,
-                        workedLabel: workedDisplayLabel,
-                        breakSeconds: breakSeconds,
-                        accent: settings.themeAccent.color
-                    )
-                    .frame(width: ringSize, height: ringSize)
+                    shiftCard(isCompact: isCompactSheet || isNarrow)
+
+                    metricsGrid(spacing: cardSpacing, isCompact: isCompactSheet || isNarrow)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 4)
-
-                Spacer(minLength: 0)
+                .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .top)
+                .padding(.horizontal, horizontalPadding)
+                .padding(.top, isCompactSheet ? 10 : 18)
+                .padding(.bottom, isCompactSheet ? 18 : 26)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.horizontal, 18)
-            .padding(.top, 16)
-            .padding(.bottom, 12)
         }
         .onReceive(refreshTimer) { value in
             now = value
         }
-        .animation(.snappy(duration: 0.35), value: settings.timelineMinMinute)
-        .animation(.snappy(duration: 0.35), value: settings.timelineMaxMinute)
         .animation(.snappy(duration: 0.35), value: settings.themeAccent)
     }
 
@@ -51,8 +49,17 @@ struct TodayFocusView: View {
         now.startOfDayLocal()
     }
 
+    private var timelineAnchorStart: Date {
+        todayEntry?.date.startOfDayLocal() ?? todayStart
+    }
+
+    private var entries: [DayEntry] {
+        entriesOverride ?? queryEntries
+    }
+
     private var todayEntry: DayEntry? {
-        entries.first(where: { $0.date.isSameLocalDay(as: todayStart) })
+        service.activeShiftEntry(at: now, entries: entries) ??
+            entries.first(where: { $0.date.isSameLocalDay(as: todayStart) })
     }
 
     private var nextEntry: DayEntry? {
@@ -77,6 +84,50 @@ struct TodayFocusView: View {
         return max(0, day.breakSeconds ?? 0)
     }
 
+    private var displayWorkedSeconds: Int {
+        guard let todayEntry else { return 0 }
+
+        if todayEntry.type == .work,
+           todayEntry.manualWorkedSeconds == nil,
+           let start = todayEntry.shiftStart,
+           let end = todayEntry.shiftEnd,
+           end > start {
+            return workedSeconds(until: now, for: todayEntry)
+        }
+
+        return service.dayComputation(for: todayEntry, allEntries: entries, settings: settings).valueSecondsOrZero
+    }
+
+    private var displayPayCents: Int {
+        service.payCents(for: displayWorkedSeconds, settings: settings)
+    }
+
+    private var totalShiftSeconds: Int {
+        guard let day = todayEntry else {
+            return plannedDaySeconds ?? 0
+        }
+
+        if let manual = day.manualWorkedSeconds {
+            return max(0, manual)
+        }
+
+        if let start = day.shiftStart, let end = day.shiftEnd, end > start {
+            let gross = max(0, Int(end.timeIntervalSince(start)))
+            return max(0, gross - breakSeconds)
+        }
+
+        return service.dayComputation(for: day, allEntries: entries, settings: settings).valueSecondsOrZero
+    }
+
+    private var shiftProgress: Double {
+        guard totalShiftSeconds > 0 else { return 0 }
+        return min(max(Double(displayWorkedSeconds) / Double(totalShiftSeconds), 0), 1)
+    }
+
+    private var shiftRemainingSeconds: Int {
+        max(0, totalShiftSeconds - displayWorkedSeconds)
+    }
+
     private var plannedDaySeconds: Int? {
         guard let weekly = settings.weeklyTargetSeconds else { return nil }
         let days = max(1, settings.scheduledWorkdaysCount)
@@ -88,111 +139,204 @@ struct TodayFocusView: View {
         return max(0, planned - workedSeconds)
     }
 
-    private var timelineBounds: ClosedRange<Int> {
-        let fallbackStart = 6 * 60
-        let fallbackEnd = 22 * 60
-        let rawStart = settings.timelineMinMinute ?? fallbackStart
-        let rawEnd = settings.timelineMaxMinute ?? fallbackEnd
+    private var dayBounds: ClosedRange<Int> {
+        guard
+            let day = todayEntry,
+            let start = day.shiftStart,
+            let end = day.shiftEnd,
+            let range = ShiftTimeRange(anchorDate: day.date, start: start, end: end),
+            range.crossesMidnight
+        else {
+            return 0...(24 * 60)
+        }
 
-        let start = max(0, min(rawStart, 23 * 60))
-        let end = min(24 * 60, max(rawEnd, start + 60))
-        return start...end
+        let lower = min(18 * 60, max(0, range.startMinute - 60))
+        let upper = max(30 * 60, min(ShiftTimeRange.maxEndMinuteOffset, range.endMinuteOffset + 60))
+        return lower...upper
+    }
+
+    private var shiftTimeRange: ShiftTimeRange? {
+        guard
+            let day = todayEntry,
+            let start = day.shiftStart,
+            let end = day.shiftEnd
+        else {
+            return nil
+        }
+        return ShiftTimeRange(anchorDate: day.date, start: start, end: end)
     }
 
     private var workedIntervals: [ClosedRange<Double>] {
         guard let day = todayEntry else { return [] }
 
         if let manual = day.manualWorkedSeconds {
-            let span = Double(max(1, timelineBounds.upperBound - timelineBounds.lowerBound))
+            let span = Double(max(1, dayBounds.upperBound - dayBounds.lowerBound))
             let manualMinutes = min(span, Double(max(0, manual)) / 60.0)
             guard manualMinutes > 0 else { return [] }
-            let start = Double(timelineBounds.lowerBound)
+            let start = Double(dayBounds.lowerBound)
             return [start...(start + manualMinutes)]
         }
 
         guard let startDate = day.shiftStart, let endDate = day.shiftEnd, endDate > startDate else {
             return []
         }
-        let start = max(Double(timelineBounds.lowerBound), min(Double(timelineBounds.upperBound), minuteOfDay(from: startDate)))
-        let end = max(Double(timelineBounds.lowerBound), min(Double(timelineBounds.upperBound), minuteOfDay(from: endDate)))
+        let start = max(Double(dayBounds.lowerBound), min(Double(dayBounds.upperBound), minuteOffset(from: timelineAnchorStart, to: startDate)))
+        let end = max(Double(dayBounds.lowerBound), min(Double(dayBounds.upperBound), minuteOffset(from: timelineAnchorStart, to: endDate)))
         guard end > start else { return [] }
         return [start...end]
     }
 
-    private var timelineStartDate: Date {
-        dateAtMinute(timelineBounds.lowerBound, on: todayStart)
+    private var dayStartDate: Date {
+        dateAtMinute(dayBounds.lowerBound, on: timelineAnchorStart)
     }
 
-    private var timelineEndDate: Date {
-        dateAtMinute(timelineBounds.upperBound, on: todayStart)
+    private var dayEndDate: Date {
+        dateAtMinute(dayBounds.upperBound, on: timelineAnchorStart)
     }
 
-    private var timelineProgress: Double {
-        let total = timelineEndDate.timeIntervalSince(timelineStartDate)
+    private var dayProgress: Double {
+        let total = dayEndDate.timeIntervalSince(dayStartDate)
         guard total > 0 else { return 0 }
-        let elapsed = now.timeIntervalSince(timelineStartDate)
+        let elapsed = now.timeIntervalSince(dayStartDate)
         return min(max(elapsed / total, 0), 1)
     }
 
     private var nowMinuteOfDay: Double {
-        minuteOfDay(from: now)
+        minuteOffset(from: timelineAnchorStart, to: now)
     }
 
     private var workedDisplayLabel: String {
-        "\(PayScopeFormatters.hhmmString(seconds: workedSeconds)) h"
+        "\(PayScopeFormatters.hhmmString(seconds: displayWorkedSeconds)) h"
     }
 
-    private var header: some View {
+    private func header(isCompact: Bool) -> some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(PayScopeFormatters.day.string(from: todayStart))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text("Heute im Fokus")
-                    .font(.system(.title3, design: .rounded).weight(.bold))
+                Text(PayScopeFormatters.day.string(from: timelineAnchorStart))
+                    .font(.system(.caption, design: .serif).weight(.bold))
+                    .textCase(.uppercase)
+                    .tracking(1.4)
+                    .foregroundStyle(.secondary.opacity(0.82))
+                Text(timelineAnchorStart.isSameLocalDay(as: todayStart) ? "Heute" : "Läuft weiter")
+                    .font(.system(isCompact ? .title : .largeTitle, design: .serif).weight(.black))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
             }
             Spacer()
-            HStack(spacing: 5) {
-                Image(systemName: todayTypeIcon)
-                if todayHasShiftDeviation {
-                    Image(systemName: "pencil")
-                        .font(.caption2.weight(.bold))
-                }
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(todayTypeColor)
+                    .frame(width: 11, height: 11)
                 Text(todayTypeLabel)
             }
-                .font(.caption.weight(.semibold))
+                .font(.system(isCompact ? .caption : .callout, design: .serif).weight(.bold))
                 .foregroundStyle(todayTypeColor)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(todayTypeColor.opacity(0.14), in: Capsule())
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .padding(.horizontal, isCompact ? 12 : 18)
+                .padding(.vertical, isCompact ? 8 : 11)
+                .background(todayTypeColor.opacity(0.18), in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(todayTypeColor.opacity(0.32), lineWidth: 1.4)
+                )
         }
     }
 
-    private var detailPanel: some View {
-        VStack(spacing: 10) {
-            detailRow(
-                title: "Pausenblöcke",
-                value: pauseInfoText,
-                systemImage: "cup.and.saucer.fill"
+    private func shiftCard(isCompact: Bool) -> some View {
+        let cornerRadius: CGFloat = isCompact ? 30 : 42
+
+        return VStack(spacing: isCompact ? 18 : 26) {
+            HStack(alignment: .firstTextBaseline) {
+                timeBlock(title: "Start", value: shiftStartLabel, isCompact: isCompact)
+
+                VStack(spacing: isCompact ? 6 : 9) {
+                    Rectangle()
+                        .fill(settings.themeAccent.color.opacity(0.18))
+                        .frame(height: 1)
+                    Text(compactDurationString(seconds: totalShiftSeconds))
+                        .font(.system(isCompact ? .callout : .title3, design: .serif).weight(.black))
+                        .foregroundStyle(settings.themeAccent.color)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    Rectangle()
+                        .fill(settings.themeAccent.color.opacity(0.18))
+                        .frame(height: 1)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, isCompact ? 8 : 12)
+
+                timeBlock(title: "Ende", value: shiftEndLabel, alignment: .trailing, isCompact: isCompact)
+            }
+
+            VStack(spacing: isCompact ? 10 : 14) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(workedDisplayLabel)
+                        .font(.system(isCompact ? .title : .largeTitle, design: .serif).weight(.black))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    Text("erfasst")
+                        .font(.system(isCompact ? .caption : .body, design: .serif).weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Spacer(minLength: 12)
+
+                    Text(shiftRemainingText)
+                        .font(.system(isCompact ? .caption : .callout, design: .serif).weight(.bold))
+                        .foregroundStyle(settings.themeAccent.color)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+
+                progressTrack
+
+                timelineLabels
+            }
+        }
+        .padding(.horizontal, isCompact ? 18 : 28)
+        .padding(.vertical, isCompact ? 20 : 30)
+        .frame(maxWidth: .infinity)
+        .background(todayCardBackground(cornerRadius: cornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(settings.themeAccent.color.opacity(0.35), lineWidth: 1.5)
+        )
+    }
+
+    private func metricsGrid(spacing: CGFloat, isCompact: Bool) -> some View {
+        let columns = [
+            GridItem(.flexible(), spacing: spacing),
+            GridItem(.flexible(), spacing: spacing),
+            GridItem(.flexible(), spacing: spacing)
+        ]
+
+        return LazyVGrid(columns: columns, spacing: spacing) {
+            metricCard(
+                icon: "stopwatch.fill",
+                iconTint: settings.themeAccent.color,
+                value: workedDisplayLabel,
+                label: "Erfasst",
+                isCompact: isCompact
             )
-            detailRow(
-                title: "Erfasst",
-                value: trackedInfoText,
-                systemImage: "clock.arrow.circlepath"
+            metricCard(
+                icon: "cup.and.saucer.fill",
+                iconTint: .orange,
+                value: breakSeconds > 0 ? "\(PayScopeFormatters.hhmmString(seconds: breakSeconds)) h" : "-",
+                label: "Pausen",
+                isCompact: isCompact
             )
-            detailRow(
-                title: targetInfoTitle,
-                value: targetInfoText,
-                systemImage: targetInfoIcon
-            )
-            detailRow(
-                title: "Jetzt",
-                value: nowInfoText,
-                systemImage: "gauge.with.needle"
+            metricCard(
+                icon: "eurosign",
+                iconTint: .green,
+                value: PayScopeFormatters.currencyString(cents: displayPayCents),
+                label: "Verdienst",
+                valueTint: settings.themeAccent.color,
+                isCompact: isCompact
             )
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .payScopeCard(accent: settings.themeAccent.color)
     }
 
     private var todayTypeLabel: String {
@@ -223,6 +367,83 @@ struct TodayFocusView: View {
         todayEntry?.creditedOverrideSeconds != nil
     }
 
+    private var shiftStartLabel: String {
+        guard let range = shiftTimeRange else {
+            guard let start = todayEntry?.shiftStart else { return "-" }
+            return PayScopeFormatters.time.string(from: start)
+        }
+        return ShiftTimeRange.displayMinute(range.startMinute)
+    }
+
+    private var shiftEndLabel: String {
+        guard let range = shiftTimeRange else {
+            guard let end = todayEntry?.shiftEnd else { return "-" }
+            return PayScopeFormatters.time.string(from: end)
+        }
+        return ShiftTimeRange.displayMinute(range.endMinuteOffset)
+    }
+
+    private var shiftRemainingText: String {
+        if totalShiftSeconds <= 0 {
+            return "noch -"
+        }
+
+        return "noch \(compactDurationString(seconds: shiftRemainingSeconds))"
+    }
+
+    private var timelineLabelValues: [String] {
+        guard let range = shiftTimeRange else {
+            return ["Start", "25%", "50%", "75%", "Ende"]
+        }
+
+        return (0...4).map { index in
+            let minute = range.startMinute + Int((Double(range.durationMinutes) * Double(index) / 4.0).rounded())
+            return ShiftTimeRange.displayMinute(minute)
+        }
+    }
+
+    private var progressTrack: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let markerX = min(max(width * shiftProgress, 0), width)
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(settings.themeAccent.color.opacity(0.18))
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                settings.themeAccent.color.opacity(0.55),
+                                settings.themeAccent.color
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: markerX)
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(.white)
+                    .frame(width: 4, height: 18)
+                    .shadow(color: settings.themeAccent.color.opacity(0.45), radius: 4)
+                    .offset(x: max(0, markerX - 2))
+            }
+        }
+        .frame(height: 18)
+    }
+
+    private var timelineLabels: some View {
+        HStack {
+            ForEach(Array(timelineLabelValues.enumerated()), id: \.offset) { _, label in
+                Text(label)
+                    .font(.system(.caption, design: .serif).weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary.opacity(0.72))
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
     private var pauseBlocksCount: Int {
         guard let day = todayEntry else { return 0 }
         return max(0, day.breakSeconds ?? 0) > 0 ? 1 : 0
@@ -249,7 +470,7 @@ struct TodayFocusView: View {
         else {
             return "Keine Schichtzeit"
         }
-        return "\(PayScopeFormatters.time.string(from: first)) - \(PayScopeFormatters.time.string(from: last))"
+        return ShiftTimeRange.displayRange(start: first, end: last)
     }
 
     private var targetInfoTitle: String {
@@ -268,8 +489,8 @@ struct TodayFocusView: View {
     }
 
     private var nowInfoText: String {
-        let percent = Int((timelineProgress * 100).rounded())
-        return "\(PayScopeFormatters.time.string(from: now)) · \(percent)% im Fenster"
+        let percent = Int((dayProgress * 100).rounded())
+        return "\(PayScopeFormatters.time.string(from: now)) · \(percent)% des Tages"
     }
 
     private func detailRow(title: String, value: String, systemImage: String) -> some View {
@@ -293,18 +514,126 @@ struct TodayFocusView: View {
         .font(.subheadline)
     }
 
-    private func dateAtMinute(_ minute: Int, on dayStart: Date) -> Date {
-        if minute >= 24 * 60 {
-            return dayStart.addingTimeInterval(24 * 3600)
+    private func timeBlock(
+        title: String,
+        value: String,
+        alignment: HorizontalAlignment = .leading,
+        isCompact: Bool
+    ) -> some View {
+        VStack(alignment: alignment, spacing: isCompact ? 5 : 7) {
+            Text(title)
+                .font(.system(.caption, design: .serif).weight(.black))
+                .textCase(.uppercase)
+                .tracking(1)
+                .foregroundStyle(.secondary.opacity(0.78))
+            Text(value)
+                .font(.system(size: isCompact ? 32 : 42, weight: .black, design: .serif))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.58)
         }
-        let hour = max(0, minute / 60)
-        let minPart = max(0, minute % 60)
-        return Calendar.current.date(bySettingHour: hour, minute: minPart, second: 0, of: dayStart) ?? dayStart
+        .frame(minWidth: isCompact ? 76 : 98, alignment: alignment == .trailing ? .trailing : .leading)
     }
 
-    private func minuteOfDay(from date: Date) -> Double {
-        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
-        return Double((components.hour ?? 0) * 60 + (components.minute ?? 0))
+    private func metricCard(
+        icon: String,
+        iconTint: Color,
+        value: String,
+        label: String,
+        valueTint: Color = .primary,
+        isCompact: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: isCompact ? 10 : 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: isCompact ? 11 : 14, style: .continuous)
+                    .fill(iconTint.opacity(0.16))
+                Image(systemName: icon)
+                    .font(.system(isCompact ? .subheadline : .headline, design: .rounded).weight(.black))
+                    .foregroundStyle(iconTint)
+            }
+            .frame(width: isCompact ? 38 : 48, height: isCompact ? 38 : 48)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(value)
+                    .font(.system(isCompact ? .headline : .title2, design: .serif).weight(.black))
+                    .foregroundStyle(valueTint)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.58)
+                Text(label)
+                    .font(.system(.caption, design: .serif).weight(.black))
+                    .textCase(.uppercase)
+                    .tracking(0.8)
+                    .foregroundStyle(.secondary.opacity(0.78))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+        }
+        .padding(isCompact ? 12 : 18)
+        .frame(maxWidth: .infinity, minHeight: isCompact ? 120 : 172, alignment: .topLeading)
+        .background(todayCardBackground(cornerRadius: isCompact ? 22 : 28))
+        .overlay(
+            RoundedRectangle(cornerRadius: isCompact ? 22 : 28, style: .continuous)
+                .stroke(.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func todayCardBackground(cornerRadius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color(.secondarySystemBackground).opacity(0.68),
+                        Color(.systemBackground).opacity(0.92)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 8)
+    }
+
+    private func compactDurationString(seconds: Int) -> String {
+        let clamped = max(0, seconds)
+        let hours = clamped / 3600
+        let minutes = (clamped % 3600) / 60
+
+        if minutes == 0 {
+            return "\(hours) h"
+        }
+        if hours == 0 {
+            return "\(minutes) min"
+        }
+        return String(format: "%d:%02d h", hours, minutes)
+    }
+
+    private func workedSeconds(until now: Date, for day: DayEntry?) -> Int {
+        guard let day else { return 0 }
+        if let manual = day.manualWorkedSeconds {
+            return max(0, manual)
+        }
+
+        if let start = day.shiftStart, let end = day.shiftEnd, end > start {
+            guard now > start else { return 0 }
+            let effectiveEnd = min(now, end)
+            let elapsedSeconds = max(0, Int(effectiveEnd.timeIntervalSince(start)))
+            let totalShiftSeconds = max(1, Int(end.timeIntervalSince(start)))
+            let breakSeconds = max(0, day.breakSeconds ?? 0)
+            let elapsedBreak = Int((Double(breakSeconds) * Double(elapsedSeconds) / Double(totalShiftSeconds)).rounded())
+            return max(0, elapsedSeconds - elapsedBreak)
+        }
+
+        return 0
+    }
+
+    private func dateAtMinute(_ minute: Int, on dayStart: Date) -> Date {
+        Calendar.current.date(byAdding: .minute, value: minute, to: dayStart.startOfDayLocal()) ?? dayStart
+    }
+
+    private func minuteOffset(from start: Date, to end: Date) -> Double {
+        let minutes = Calendar.current.dateComponents([.minute], from: start.startOfDayLocal(), to: end).minute
+            ?? Int(end.timeIntervalSince(start.startOfDayLocal()) / 60)
+        return Double(minutes)
     }
 }
 
@@ -662,14 +991,12 @@ private struct TodayFocusRingChart: View {
     }
 
     private func hourLabel(for minute: Int) -> String {
-        String(format: "%02d", (minute / 60) % 24)
+        let suffix = minute >= 24 * 60 ? " +1" : ""
+        return String(format: "%02d%@", (minute / 60) % 24, suffix)
     }
 
     private func formatTimeLabel(_ minute: Double) -> String {
-        let clamped = max(0, min(24 * 60, Int(minute.rounded())))
-        let hour = clamped / 60
-        let mins = clamped % 60
-        return String(format: "%02d:%02d", hour, mins)
+        ShiftTimeRange.displayMinute(Int(minute.rounded()))
     }
 }
 

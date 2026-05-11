@@ -34,8 +34,8 @@ struct CalendarMonthView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            if let settings {
-                monthSummaryBar(for: summaryReferenceDate, settings: settings)
+            if false {//let settings  {
+                monthSummaryBar(for: summaryReferenceDate, settings: settings!)
             }
 
             VStack(spacing: 8) {
@@ -354,14 +354,37 @@ struct CalendarMonthView: View {
             let referenceKey = referenceDate.localDayKey(calendar: calendar)
 
             guard let refEntry = entriesByDate[referenceKey] else {
-                if settings.strictHistoryRequired && !settings.countMissingAsZero {
+                if settings.countMissingAsZero {
+                    values.append(0)
+                } else {
                     return .error(message: "Fehlende Referenztage für Lookback-Berechnung")
                 }
-                values.append(0)
                 continue
             }
 
-            values.append(referenceSeconds(for: refEntry, settings: settings))
+            let hasExplicitReferenceValue = refEntry.creditedOverrideSeconds != nil ||
+                (refEntry.type == .vacation && settings.effectiveVacationCreditingMode == .fixedValue) ||
+                (refEntry.type == .holiday && settings.effectiveHolidayCreditingMode == .fixedValue)
+            let canDeriveReferenceValue = canDeriveCreditedReferenceValue(for: refEntry, settings: settings)
+
+            if refEntry.isEmptyTrackedDay && !hasExplicitReferenceValue && !canDeriveReferenceValue {
+                if settings.countMissingAsZero {
+                    values.append(0)
+                } else {
+                    return .error(message: "Fehlende Referenzwerte für Lookback-Berechnung")
+                }
+                continue
+            }
+
+            guard let referenceValue = referenceSeconds(
+                for: refEntry,
+                entriesByDate: entriesByDate,
+                settings: settings
+            ) else {
+                return .error(message: "Ungültige Referenzwerte für Lookback-Berechnung")
+            }
+
+            values.append(referenceValue)
         }
 
         guard !values.isEmpty else {
@@ -380,7 +403,11 @@ struct CalendarMonthView: View {
         return .ok(seconds: seconds, cents: cents)
     }
 
-    private func referenceSeconds(for day: DayEntry, settings: Settings) -> Int {
+    private func referenceSeconds(
+        for day: DayEntry,
+        entriesByDate: [String: DayEntry],
+        settings: Settings
+    ) -> Int? {
         if let overrideSeconds = day.creditedOverrideSeconds {
             return max(0, overrideSeconds)
         }
@@ -393,7 +420,30 @@ struct CalendarMonthView: View {
             return settings.effectiveHolidayFixedSeconds
         }
 
+        if canDeriveCreditedReferenceValue(for: day, settings: settings) {
+            let result = dayComputation(for: day, entriesByDate: entriesByDate, settings: settings)
+            switch result {
+            case let .ok(seconds, _), let .warning(seconds, _, _):
+                return seconds
+            case .error:
+                return nil
+            }
+        }
+
         return workedSeconds(for: day)
+    }
+
+    private func canDeriveCreditedReferenceValue(for day: DayEntry, settings: Settings) -> Bool {
+        switch day.type {
+        case .vacation:
+            return settings.effectiveVacationCreditingMode == .lookback13Weeks
+        case .holiday:
+            return settings.effectiveHolidayCreditingMode == .lookback13Weeks
+        case .sick:
+            return true
+        case .work, .manual:
+            return false
+        }
     }
 
     private func workedSeconds(for entry: DayEntry) -> Int {
@@ -500,8 +550,15 @@ struct CalendarMonthView: View {
         let result = dayComputation(for: entry, entriesByDate: entriesByDate, settings: settings)
         switch result {
         case let .ok(seconds, _), let .warning(seconds, _, _):
+            if entry.type == .vacation || entry.type == .holiday || entry.type == .sick {
+                return max(0, seconds)
+            }
             return seconds > 0 ? seconds : nil
         case .error:
+            if entry.type == .vacation || entry.type == .holiday || entry.type == .sick,
+               let cached = entry.manualWorkedSeconds {
+                return max(0, cached)
+            }
             return nil
         }
     }

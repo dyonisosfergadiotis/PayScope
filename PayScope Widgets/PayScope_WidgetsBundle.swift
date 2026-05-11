@@ -13,5 +13,7 @@ struct PayScope_WidgetsBundle: WidgetBundle {
     var body: some Widget {
         PayScope_WidgetsControl()
         PayScope_WidgetsLiveActivity()
+        PayScope_WidgetsRectangularLockScreen()
+        PayScope_WidgetsInlineLockScreen()
     }
 }

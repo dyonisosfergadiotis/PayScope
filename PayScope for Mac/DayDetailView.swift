@@ -97,28 +97,52 @@ struct DayDetailView: View {
     }
 
     private func startTimeString() -> String {
-        guard let entry, let start = entry.segments.map(\.start).min() else { return "-" }
+        guard let entry else { return "-" }
+        let start = entry.shiftStart ?? entry.segments.map(\.start).min()
+        guard let start else { return "-" }
         return timeString(start)
     }
 
     private func endTimeString() -> String {
-        guard let entry, let end = entry.segments.map(\.end).max() else { return "-" }
-        return timeString(end)
+        guard let entry else { return "-" }
+        let end = entry.shiftEnd ?? entry.segments.map(\.end).max()
+        guard let end else { return "-" }
+        let suffix = entry.shiftStart.map { Calendar.current.isDate($0, inSameDayAs: end) ? "" : " +1" } ?? ""
+        return "\(timeString(end))\(suffix)"
     }
 
     private func pauseString() -> String {
         guard let entry else { return "-" }
-        let breakSeconds = entry.segments.reduce(0) { $0 + $1.breakSeconds }
+        let breakSeconds = entry.breakSeconds ?? entry.segments.reduce(0) { $0 + $1.breakSeconds }
         return Formatters.hhmmString(seconds: max(0, breakSeconds))
     }
 
     private func totalValueString() -> String {
         if let entry {
+            if entry.type == .vacation || entry.type == .holiday || entry.type == .sick {
+                if let overrideSeconds = entry.creditedOverrideSeconds {
+                    return Formatters.hhmmString(seconds: max(0, overrideSeconds))
+                }
+                if let computedSeconds {
+                    return Formatters.hhmmString(seconds: max(0, computedSeconds))
+                }
+                if let cached = entry.manualWorkedSeconds {
+                    return Formatters.hhmmString(seconds: max(0, cached))
+                }
+                return "-"
+            }
+
             if let overrideSeconds = entry.creditedOverrideSeconds, overrideSeconds > 0 {
                 return Formatters.hhmmString(seconds: overrideSeconds)
             }
             if let manual = entry.manualWorkedSeconds, manual > 0 {
                 return Formatters.hhmmString(seconds: manual)
+            }
+
+            if let start = entry.shiftStart, let end = entry.shiftEnd, end > start {
+                let raw = Int(end.timeIntervalSince(start))
+                let breakSeconds = max(0, entry.breakSeconds ?? 0)
+                return Formatters.hhmmString(seconds: max(0, raw - breakSeconds))
             }
 
             let segmentSeconds = entry.segments.reduce(0) { sum, segment in
@@ -137,6 +161,7 @@ struct DayDetailView: View {
 
     private func timeString(_ date: Date) -> String {
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
         formatter.timeStyle = .short
         return formatter.string(from: date)
     }

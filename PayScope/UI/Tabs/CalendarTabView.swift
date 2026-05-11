@@ -12,6 +12,7 @@ struct CalendarTabView: View {
     @Environment(\.scenePhase) private var scenePhase
     private let localStore = LocalDayEntryStore.shared
     @State private var entries: [DayEntry] = []
+    @State private var tipEntries: [TipEntry] = []
     @State private var netConfigs: [NetWageMonthConfig] = []
     @State private var importedHolidays: [HolidayCalendarDay] = []
     @Bindable var settings: Settings
@@ -28,7 +29,6 @@ struct CalendarTabView: View {
     @State private var dayColumnsVisible = true
     @State private var dayFlipDirection: DayFlipDirection = .fromRightToLeft
     @State private var toolbarContainerWidth: CGFloat = 0
-    @State private var isRefreshingCloud = false
     @State private var isLoadingData = false
     @State private var pendingLoadAfterCurrentCycle = false
     @State private var showUnsyncedIndicator = false
@@ -68,7 +68,6 @@ struct CalendarTabView: View {
         return formatter
     }()
     private let dayColumnFlipDuration: Double = 0.3
-    private let dayColumnFlipStagger: Double = 0.03
     private let unsyncedIndicatorDebounce = RunLoop.SchedulerTimeType.Stride.milliseconds(900)
 
     var body: some View {
@@ -111,22 +110,17 @@ struct CalendarTabView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    if isRefreshingCloud {
-                        Button(action: {}) {
-                            ProgressView()
-                                .progressViewStyle(.circular)
-                        }
-                        .disabled(true)
-                        .accessibilityLabel("iCloud lädt…")
-                    } else {
+                    if settings.effectiveShowTipsButton {
                         Button {
-                            Task {
-                                await refreshCloudWithMinimumDelay()
-                            }
+                            activeSheet = .tips(displayedMonth.startOfMonthLocal())
                         } label: {
-                            Image(systemName: "icloud.and.arrow.down")
+                            if settings.effectiveShowTipsButtonAmount {
+                                Label(displayedMonthTipTotalText, systemImage: "eurosign.circle")
+                            } else {
+                                Image(systemName: "eurosign.circle")
+                            }
                         }
-                        .accessibilityLabel("iCloud neu laden")
+                        .accessibilityLabel("Trinkgeld öffnen")
                     }
                 }
 
@@ -155,6 +149,9 @@ struct CalendarTabView: View {
             }
             .task(id: holidayImportTaskKey) {
                 await importHolidaysIfNeededForDisplayedMonth()
+            }
+            .task(id: displayedMonth.startOfMonthLocal()) {
+                await loadTipsForDisplayedMonth()
             }
             .task {
                 await runInitialLoadingSequence()
@@ -187,24 +184,31 @@ struct CalendarTabView: View {
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase == .active else { return }
                 guard activeSheet == nil else { return }
-                guard !isRefreshingCloud else { return }
                 Task { await loadData(mode: .fullSync) }
             }
             .sheet(item: $activeSheet) { sheet in
                 switch sheet {
                 case let .day(date):
-                    DayEditorView(
+                    ShiftViewSheet(
                         date: date.startOfDayLocal(),
+                        entry: entry(for: date),
+                        entries: entries,
                         settings: settings,
                         onDaySaved: applyDayEditorChange
                     )
                 case .today:
                     TodayFocusView(settings: settings)
-                        .presentationDetents([.fraction(0.65)])
+                        .presentationDetents([.fraction(0.68), .large])
                         .presentationDragIndicator(.visible)
                         .payScopeSheetSurface(accent: settings.themeAccent.color)
                 case .settings:
                     SettingsTabView(settings: settings)
+                case let .tips(month):
+                    TipEntrySheet(month: month, settings: settings) {
+                        Task { await loadTipsForDisplayedMonth() }
+                    }
+                    .environmentObject(cloudKitService)
+                    .payScopeSheetSurface(accent: settings.themeAccent.color)
                 }
             }
             .sheet(isPresented: $showNetWageConfig) {
@@ -286,20 +290,6 @@ struct CalendarTabView: View {
         initialLoadTask = cloudLoadTask
     }
 
-    private func refreshCloudWithMinimumDelay() async {
-        await MainActor.run { isRefreshingCloud = true }
-        let start = Date()
-
-        await loadData()
-
-        let elapsed = Date().timeIntervalSince(start)
-        let remaining = max(0, 2.0 - elapsed)
-        if remaining > 0 {
-            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-        }
-        await MainActor.run { isRefreshingCloud = false }
-    }
-
     private var monthHeader: some View {
         ZStack {
             VStack(spacing: 2) {
@@ -342,6 +332,15 @@ struct CalendarTabView: View {
             return (now, now)
         }
         return (interval.start, interval.end.addingTimeInterval(-1))
+    }
+
+    private var displayedMonthTipInterval: DateInterval {
+        let bounds = displayedMonthBounds
+        return DateInterval(start: bounds.0, end: bounds.1)
+    }
+
+    private var displayedMonthTipTotalText: String {
+        PayScopeFormatters.currencyString(cents: tipEntries.reduce(0) { $0 + $1.amountCents })
     }
 
     private var displayedMonthSummary: TotalsSummary {
@@ -480,6 +479,39 @@ struct CalendarTabView: View {
         }
     }
 
+    @MainActor
+    private func loadTipsForDisplayedMonth() async {
+        let interval = displayedMonthTipInterval
+        let localTips = LocalTipEntryStore.shared.loadAll(in: interval)
+        let deletedTipsByID = Dictionary(
+            LocalTipEntryStore.shared.loadDeletionTombstones().map { ($0.id, $0.lastModified) },
+            uniquingKeysWith: max
+        )
+        let remoteTips = ((try? await cloudKitService.fetchTipEntries(in: interval)) ?? []).filter { tip in
+            guard let deletedAt = deletedTipsByID[tip.id] else { return true }
+            return deletedAt < tip.updatedAt
+        }
+
+        if !remoteTips.isEmpty {
+            LocalTipEntryStore.shared.upsertMany(remoteTips)
+        }
+
+        tipEntries = mergeTipEntriesKeepingNewest(local: localTips, remote: remoteTips)
+    }
+
+    private func mergeTipEntriesKeepingNewest(local: [TipEntry], remote: [TipEntry]) -> [TipEntry] {
+        var merged: [String: TipEntry] = [:]
+
+        for tip in local + remote {
+            if let existing = merged[tip.id], existing.updatedAt >= tip.updatedAt {
+                continue
+            }
+            merged[tip.id] = tip
+        }
+
+        return merged.values.sorted { $0.date > $1.date }
+    }
+
     private func monthMetricChip(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
@@ -536,8 +568,6 @@ struct CalendarTabView: View {
                     let weekBadgeData = shouldShowWeekBadge && index % 7 == 0
                         ? weekBadgesByDate[dayDate]
                         : nil
-                    let column = index % 7
-                    let delayRank = dayFlipDirection.delayRank(for: column)
                     let hiddenAngle = dayFlipDirection.hiddenAngle
 
                     Group {
@@ -562,10 +592,10 @@ struct CalendarTabView: View {
                         anchor: dayFlipDirection.flipAnchor,
                         perspective: 0.72
                     )
+                    .offset(x: dayColumnsVisible ? 0 : dayFlipDirection.hiddenOffset)
                     .opacity(dayColumnsVisible ? 1 : 0)
                     .animation(
-                        .easeOut(duration: dayColumnFlipDuration)
-                            .delay(Double(delayRank) * dayColumnFlipStagger),
+                        .easeOut(duration: dayColumnFlipDuration),
                         value: dayColumnsVisible
                     )
                 }
@@ -1141,14 +1171,10 @@ struct CalendarTabView: View {
         Task { @MainActor in
             do {
                 try await cloudKitService.deleteDayEntry(on: date)
-                // Refresh entries to ensure local state matches the server
-                await loadData()
             } catch {
                 #if DEBUG
-                print("Failed to delete day entry for \(date): \(error)")
+                print("Failed to delete day entry for \(date), local tombstone kept for retry: \(error)")
                 #endif
-                // In case of failure, reload to restore previous state if needed
-                await loadData()
             }
         }
     }
@@ -1574,11 +1600,6 @@ struct CalendarTabView: View {
         return min(max(scaledHeight, 54), 68)
     }
 
-    private var todayBottomBarRingSize: CGFloat {
-        let scaledRing = todayBottomBarHeight * 0.52
-        return min(max(scaledRing, 30), 40)
-    }
-
     private var todayBottomBarPill: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
@@ -1598,21 +1619,6 @@ struct CalendarTabView: View {
             }
 
             Spacer(minLength: 6)
-
-            CompletionRing(
-                progress: todayShiftCompletionFraction,
-                accent: settings.themeAccent.color
-            )
-            .frame(width: todayBottomBarRingSize, height: todayBottomBarRingSize)
-            .padding(4)
-            .background(
-                Circle()
-                    .fill(settings.themeAccent.color.opacity(0.1))
-            )
-            .overlay(
-                Circle()
-                    .stroke(.white.opacity(0.08), lineWidth: 0.8)
-            )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 13)
@@ -1642,7 +1648,7 @@ struct CalendarTabView: View {
         //.shadow(color: .black.opacity(0.28), radius: 9, x: 0, y: 5)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Heute Vorschau")
-        .accessibilityValue("\(todayWorkedDisplay), \(todayShiftCompletionPercent)% der Schichtlänge")
+        .accessibilityValue(todayWorkedDisplay)
     }
 
     private var todayStart: Date {
@@ -1653,49 +1659,16 @@ struct CalendarTabView: View {
         entries.first(where: { $0.date.isSameLocalDay(as: todayStart) })
     }
 
+    private func entry(for date: Date) -> DayEntry? {
+        entries.first { $0.date.isSameLocalDay(as: date) }
+    }
+
     private var todayWorkedDisplay: String {
         "\(PayScopeFormatters.hhmmString(seconds: todayWorkedSeconds)) h"
     }
 
     private var todayWorkedSeconds: Int {
         workedSeconds(until: now, for: todayEntry)
-    }
-
-    private var todayShiftCompletionFraction: Double {
-        guard todayShiftLengthSeconds > 0 else { return 0 }
-        let fraction = Double(todayWorkedSeconds) / Double(todayShiftLengthSeconds)
-        return min(max(fraction, 0), 1)
-    }
-
-    private var todayShiftCompletionPercent: Int {
-        Int((todayShiftCompletionFraction * 100).rounded())
-    }
-
-    private var todayShiftLengthSeconds: Int {
-        shiftLengthSeconds(for: todayEntry)
-    }
-
-    private var plannedDaySeconds: Int? {
-        guard let weeklyTarget = settings.weeklyTargetSeconds else { return nil }
-        let days = max(1, settings.scheduledWorkdaysCount)
-        return max(0, Int((Double(weeklyTarget) / Double(days)).rounded()))
-    }
-
-    private func shiftLengthSeconds(for day: DayEntry?) -> Int {
-        guard let day else {
-            return max(0, plannedDaySeconds ?? 0)
-        }
-        if let manual = day.manualWorkedSeconds {
-            return max(0, manual)
-        }
-
-        if let start = day.shiftStart, let end = day.shiftEnd, end > start {
-            let gross = max(0, Int(end.timeIntervalSince(start)))
-            let breakSeconds = max(0, day.breakSeconds ?? 0)
-            return max(0, gross - breakSeconds)
-        }
-
-        return max(0, plannedDaySeconds ?? 0)
     }
 
     private func workedSeconds(until now: Date, for day: DayEntry?) -> Int {
@@ -1758,15 +1731,6 @@ private enum DayFlipDirection {
     case fromRightToLeft
     case fromLeftToRight
 
-    func delayRank(for column: Int) -> Int {
-        switch self {
-        case .fromRightToLeft:
-            return max(0, 6 - column)
-        case .fromLeftToRight:
-            return column
-        }
-    }
-
     var hiddenAngle: Double {
         switch self {
         case .fromRightToLeft:
@@ -1784,12 +1748,22 @@ private enum DayFlipDirection {
             return .leading
         }
     }
+
+    var hiddenOffset: CGFloat {
+        switch self {
+        case .fromRightToLeft:
+            return 22
+        case .fromLeftToRight:
+            return -22
+        }
+    }
 }
 
 private enum CalendarSheet: Identifiable {
     case day(Date)
     case today
     case settings
+    case tips(Date)
 
     var id: String {
         switch self {
@@ -1799,6 +1773,8 @@ private enum CalendarSheet: Identifiable {
             return "today"
         case .settings:
             return "settings"
+        case let .tips(month):
+            return "tips-\(month.timeIntervalSinceReferenceDate)"
         }
     }
 }
@@ -1811,82 +1787,572 @@ private struct CalendarTabToolbarWidthPreferenceKey: PreferenceKey {
     }
 }
 
-private struct CompletionRing: View {
-    let progress: Double
-    let accent: Color
+private struct ShiftViewSheet: View {
+    @Environment(\.dismiss) private var dismiss
 
-    private var clampedProgress: Double {
-        min(max(progress, 0), 1)
+    let date: Date
+    let entry: DayEntry?
+    let entries: [DayEntry]
+    @Bindable var settings: Settings
+    let onDaySaved: (Date, DayEntry?) -> Void
+
+    @State private var showEditor = false
+
+    private let service = CalculationService()
+    private static let weekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "EEEE"
+        return formatter
+    }()
+
+    private var dayStart: Date {
+        date.startOfDayLocal()
+    }
+
+    private var accent: Color {
+        entry?.type.tint(for: settings.themeAccent) ?? settings.themeAccent.color
+    }
+
+    private var computation: ComputationResult? {
+        guard let entry else { return nil }
+        return service.dayComputation(for: entry, allEntries: entries, settings: settings)
+    }
+
+    private var workedSeconds: Int {
+        computation?.valueSecondsOrZero ?? 0
+    }
+
+    private var payCents: Int {
+        computation?.valueCentsOrZero ?? 0
+    }
+
+    private var bodyTitle: String {
+        entry?.type.label ?? "Kein Eintrag"
+    }
+
+    private var dateText: String {
+        PayScopeFormatters.day.string(from: dayStart)
+    }
+
+    private var weekdayText: String {
+        Self.weekdayFormatter.string(from: dayStart)
+    }
+
+    private var notesText: String? {
+        let trimmed = entry?.notes.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     var body: some View {
-        ZStack {
-            Circle()
-                .stroke(
-                    accent.opacity(0.2),
-                    lineWidth: 6
-                )
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    header
 
-            Circle()
-                .trim(from: 0, to: clampedProgress)
-                .stroke(
-                    accent,
-                    style: StrokeStyle(
-                        lineWidth: 6,
-                        lineCap: .round
-                    )
+                    if let entry {
+                        if hasFocusedMetrics(for: entry) {
+                            focusedMetrics(for: entry)
+                        }
+
+                        if let status = statusMessage {
+                            infoPanel(systemImage: status.icon, title: status.title, text: status.text, tint: status.tint)
+                        }
+
+                        if let notesText {
+                            infoPanel(systemImage: "note.text", title: "Notizen", text: notesText, tint: .secondary)
+                        }
+                    } else {
+                        emptyPanel
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 24)
+            }
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Schließen")
+                }
+
+                ToolbarItem(placement: .principal) {
+                    Text(dateText)
+                        .font(.headline.weight(.semibold))
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showEditor = true
+                    } label: {
+                        Image(systemName: "pencil")
+                    }
+                    .accessibilityLabel("Bearbeiten")
+                }
+            }
+            .sheet(isPresented: $showEditor) {
+                DayEditorView(
+                    date: dayStart,
+                    settings: settings,
+                    onDaySaved: onDaySaved
                 )
-                .rotationEffect(.degrees(-90))
+            }
         }
-        .shadow(color: .black.opacity(0.18), radius: 2, x: 0, y: 1)
-        .accessibilityHidden(true)
+        .presentationDetents([.fraction(entry == nil ? 0.38 : 0.58), .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(accent.opacity(0.14))
+                Image(systemName: entry?.type.icon ?? "calendar")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(accent)
+            }
+            .frame(width: 52, height: 52)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(bodyTitle)
+                    .font(.title2.weight(.bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                Text(weekdayText)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .shiftViewPanel(accent: accent)
+    }
+
+    @ViewBuilder
+    private func focusedMetrics(for entry: DayEntry) -> some View {
+        VStack(spacing: 10) {
+            if let timeText = timeRangeText(for: entry) {
+                metricRow(icon: "clock.fill", title: "Schicht", value: timeText, tint: accent)
+            }
+
+            if shouldShowBreak(for: entry) {
+                metricRow(
+                    icon: "cup.and.saucer.fill",
+                    title: "Pause",
+                    value: PayScopeFormatters.hhmmString(seconds: max(0, entry.breakSeconds ?? 0)),
+                    tint: .secondary
+                )
+            }
+
+            if workedSeconds > 0 || entry.manualWorkedSeconds != nil || entry.type != .work {
+                metricRow(
+                    icon: "timer",
+                    title: durationTitle(for: entry),
+                    value: "\(PayScopeFormatters.hhmmString(seconds: workedSeconds)) h",
+                    tint: accent
+                )
+            }
+
+            if payCents > 0 {
+                metricRow(
+                    icon: "banknote.fill",
+                    title: "Lohn",
+                    value: PayScopeFormatters.currencyString(cents: payCents),
+                    tint: .green
+                )
+            }
+
+            if entry.creditedOverrideSeconds != nil {
+                metricRow(
+                    icon: "pencil.line",
+                    title: "Wert",
+                    value: "Manuell überschrieben",
+                    tint: .secondary
+                )
+            }
+        }
+        .padding(14)
+        .shiftViewPanel(accent: accent)
+    }
+
+    private var emptyPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Kein Eintrag")
+                .font(.headline.weight(.semibold))
+            Text("Für diesen Tag sind noch keine Schichtdaten gespeichert.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .shiftViewPanel(accent: settings.themeAccent.color)
+    }
+
+    private func metricRow(icon: String, title: String, value: String, tint: Color) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(tint)
+                .frame(width: 24)
+
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 12)
+
+            Text(value)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+                .minimumScaleFactor(0.78)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func infoPanel(systemImage: String, title: String, text: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(tint)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .shiftViewPanel(accent: accent)
+    }
+
+    private var statusMessage: (icon: String, title: String, text: String, tint: Color)? {
+        guard let computation else { return nil }
+        switch computation {
+        case .ok:
+            return nil
+        case let .warning(_, _, message):
+            return ("exclamationmark.triangle.fill", "Hinweis", localizedComputationMessage(message), .orange)
+        case let .error(message, missingDates):
+            let details = missingDates.isEmpty
+                ? localizedComputationMessage(message)
+                : "\(localizedComputationMessage(message)) \(missingDatesText(missingDates))"
+            return ("xmark.octagon.fill", "Fehlt", details, .red)
+        }
+    }
+
+    private func timeRangeText(for entry: DayEntry) -> String? {
+        guard let start = entry.shiftStart, let end = entry.shiftEnd, end > start else { return nil }
+        return ShiftTimeRange.displayRange(start: start, end: end)
+    }
+
+    private func shouldShowBreak(for entry: DayEntry) -> Bool {
+        guard entry.type == .work else { return false }
+        return (entry.breakSeconds ?? 0) > 0
+    }
+
+    private func hasFocusedMetrics(for entry: DayEntry) -> Bool {
+        timeRangeText(for: entry) != nil ||
+        shouldShowBreak(for: entry) ||
+        workedSeconds > 0 ||
+        entry.manualWorkedSeconds != nil ||
+        entry.type != .work ||
+        payCents > 0 ||
+        entry.creditedOverrideSeconds != nil
+    }
+
+    private func durationTitle(for entry: DayEntry) -> String {
+        if entry.type == .work, shouldShowBreak(for: entry) {
+            return "Netto"
+        }
+        if entry.type == .manual {
+            return "Dauer"
+        }
+        if entry.type == .vacation || entry.type == .holiday || entry.type == .sick {
+            return "Anrechnung"
+        }
+        return "Dauer"
+    }
+
+    private func missingDatesText(_ dates: [Date]) -> String {
+        let formatted = dates
+            .prefix(3)
+            .map { PayScopeFormatters.day.string(from: $0) }
+            .joined(separator: ", ")
+        if dates.count > 3 {
+            return "Referenzen: \(formatted) +\(dates.count - 3)."
+        }
+        return "Referenzen: \(formatted)."
+    }
+
+    private func localizedComputationMessage(_ message: String) -> String {
+        if message.contains("Not enough history") {
+            return "Nicht genug Verlauf für die Berechnung."
+        }
+        if message.contains("All") && message.contains("lookback values are 0") {
+            return "Alle Referenzwerte sind 0."
+        }
+        if message.contains("Reference day has invalid data") {
+            return "Ein Referenztag enthält ungültige Daten."
+        }
+        return message
     }
 }
 
-private struct TodayCompletionPieIcon: View {
-    let progress: Double
+private struct ShiftViewPanelStyle: ViewModifier {
     let accent: Color
 
-    private var clampedProgress: Double {
-        min(max(progress, 0), 1)
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(.secondarySystemGroupedBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(accent.opacity(0.14), lineWidth: 1)
+                    .allowsHitTesting(false)
+            )
+    }
+}
+
+private extension View {
+    func shiftViewPanel(accent: Color) -> some View {
+        modifier(ShiftViewPanelStyle(accent: accent))
+    }
+}
+
+private struct TipEntrySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var cloudKitService: CloudKitService
+
+    let month: Date
+    let settings: Settings
+    let onTipsChanged: () -> Void
+
+    @State private var tips: [TipEntry] = []
+    @State private var selectedDate: Date
+    @State private var amountText = ""
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    private static let monthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "MMMM yyyy"
+        return formatter
+    }()
+
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateStyle = .medium
+        return formatter
+    }()
+
+    init(month: Date, settings: Settings, onTipsChanged: @escaping () -> Void) {
+        let normalizedMonth = month.startOfMonthLocal()
+        self.month = normalizedMonth
+        self.settings = settings
+        self.onTipsChanged = onTipsChanged
+        _selectedDate = State(initialValue: normalizedMonth)
+    }
+
+    private var monthInterval: DateInterval {
+        Calendar.current.dateInterval(of: .month, for: month)
+            ?? DateInterval(start: month, duration: 24 * 60 * 60)
+    }
+
+    private var dateRange: ClosedRange<Date> {
+        monthInterval.start...monthInterval.end.addingTimeInterval(-1)
+    }
+
+    private var totalCents: Int {
+        tips.reduce(0) { $0 + $1.amountCents }
+    }
+
+    private var sortedTips: [TipEntry] {
+        tips.sorted {
+            if $0.date == $1.date {
+                return $0.updatedAt > $1.updatedAt
+            }
+            return $0.date > $1.date
+        }
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            let side = min(geometry.size.width, geometry.size.height)
-            let center = CGPoint(x: side / 2, y: side / 2)
-            let radius = side / 2
-
-            ZStack {
-                Circle()
-                    .fill(.white.opacity(0.15))
-
-                if clampedProgress > 0 {
-                    Path { path in
-                        path.move(to: center)
-                        path.addArc(
-                            center: center,
-                            radius: radius,
-                            startAngle: .degrees(-90),
-                            endAngle: .degrees(-90 + (clampedProgress * 360)),
-                            clockwise: false
-                        )
-                        path.closeSubpath()
-                    }
-                    .fill(.white.opacity(0.9))
+        NavigationStack {
+            Form {
+                Section {
+                    LabeledContent("Monat", value: Self.monthFormatter.string(from: month))
+                    LabeledContent("Summe", value: PayScopeFormatters.currencyString(cents: totalCents))
                 }
 
-                Circle()
-                    .fill(accent.opacity(0.56))
-                    .padding(side * 0.26)
+                Section("Eintragen") {
+                    DatePicker("Datum", selection: $selectedDate, in: dateRange, displayedComponents: .date)
 
-                Circle()
-                    .stroke(.white.opacity(0.32), lineWidth: 1)
+                    HStack {
+                        TextField("Betrag", text: $amountText)
+                            .keyboardType(.decimalPad)
+                        Text("EUR")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button {
+                        addTip()
+                    } label: {
+                        Label("Trinkgeld hinzufügen", systemImage: "plus.circle.fill")
+                    }
+                    .disabled(parsedAmountCents() == nil)
+                }
+
+                Section("Einträge") {
+                    if isLoading && tips.isEmpty {
+                        ProgressView("Trinkgeld wird geladen...")
+                    } else if sortedTips.isEmpty {
+                        Text("Noch kein Trinkgeld in diesem Monat.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(sortedTips) { tip in
+                            HStack {
+                                Text(Self.dayFormatter.string(from: tip.date))
+                                Spacer(minLength: 12)
+                                Text(PayScopeFormatters.currencyString(cents: tip.amountCents))
+                                    .fontWeight(.semibold)
+                            }
+                        }
+                        .onDelete(perform: deleteTips)
+                    }
+                }
+
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage)
+                            .foregroundStyle(.red)
+                    }
+                }
             }
-            .frame(width: side, height: side)
+            .navigationTitle("Trinkgeld")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Schließen")
+                }
+            }
+            .task {
+                await loadTips()
+            }
         }
-        .aspectRatio(1, contentMode: .fit)
-        .accessibilityHidden(true)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    @MainActor
+    private func loadTips() async {
+        isLoading = true
+        errorMessage = nil
+
+        let localTips = LocalTipEntryStore.shared.loadAll(in: monthInterval)
+        let deletedTipsByID = Dictionary(
+            LocalTipEntryStore.shared.loadDeletionTombstones().map { ($0.id, $0.lastModified) },
+            uniquingKeysWith: max
+        )
+
+        do {
+            let remoteTips = try await cloudKitService.fetchTipEntries(in: monthInterval).filter { tip in
+                guard let deletedAt = deletedTipsByID[tip.id] else { return true }
+                return deletedAt < tip.updatedAt
+            }
+            if !remoteTips.isEmpty {
+                LocalTipEntryStore.shared.upsertMany(remoteTips)
+            }
+            tips = mergeTipEntriesKeepingNewest(local: localTips, remote: remoteTips)
+        } catch {
+            tips = localTips
+            errorMessage = "iCloud konnte nicht geladen werden. Lokale Einträge bleiben verfügbar."
+        }
+
+        isLoading = false
+        onTipsChanged()
+    }
+
+    private func addTip() {
+        guard let amountCents = parsedAmountCents() else { return }
+
+        let tip = TipEntry(
+            date: selectedDate.startOfDayLocal(),
+            amountCents: amountCents,
+            updatedAt: Date()
+        )
+        LocalTipEntryStore.shared.save(tip)
+        tips = mergeTipEntriesKeepingNewest(local: tips + [tip], remote: [])
+        amountText = ""
+        errorMessage = nil
+        onTipsChanged()
+
+        Task {
+            do {
+                try await cloudKitService.saveTipEntry(tip)
+                LocalTipEntryStore.shared.markSynced(tip)
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Trinkgeld wurde lokal gespeichert und später synchronisiert."
+                }
+            }
+        }
+    }
+
+    private func deleteTips(at offsets: IndexSet) {
+        let visibleTips = sortedTips
+        for offset in offsets {
+            let tip = visibleTips[offset]
+            LocalTipEntryStore.shared.delete(tip)
+            tips.removeAll { $0.id == tip.id }
+            Task {
+                do {
+                    try await cloudKitService.deleteTipEntry(tip)
+                } catch {
+                    await MainActor.run {
+                        errorMessage = "Eintrag wurde lokal gelöscht und später synchronisiert."
+                    }
+                }
+            }
+        }
+        onTipsChanged()
+    }
+
+    private func parsedAmountCents() -> Int? {
+        let normalized = amountText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")
+        guard let amount = Double(normalized), amount > 0 else { return nil }
+        return Int((amount * 100).rounded())
+    }
+
+    private func mergeTipEntriesKeepingNewest(local: [TipEntry], remote: [TipEntry]) -> [TipEntry] {
+        var merged: [String: TipEntry] = [:]
+
+        for tip in local + remote {
+            if let existing = merged[tip.id], existing.updatedAt >= tip.updatedAt {
+                continue
+            }
+            merged[tip.id] = tip
+        }
+
+        return Array(merged.values)
     }
 }
 

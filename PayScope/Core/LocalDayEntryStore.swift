@@ -22,6 +22,7 @@ fileprivate struct CachedEntry: Codable, Equatable {
     var breakSeconds: Int?
     var manualWorkedSeconds: Int?
     var creditedOverrideSeconds: Int?
+    var alwaysApplyFifteenMinuteBuffer: Bool?
     var lastModified: Date
 }
 
@@ -34,12 +35,23 @@ fileprivate struct LegacyCachedEntry: Codable, Equatable {
     var breakSeconds: Int?
     var manualWorkedSeconds: Int?
     var creditedOverrideSeconds: Int?
+    var alwaysApplyFifteenMinuteBuffer: Bool?
     var lastModified: Date?
 }
 
 struct LocalDeletionTombstone: Codable, Equatable {
     var date: Date
     var lastModified: Date
+}
+
+struct DayEntriesChangePayload {
+    let changedDays: Set<Date>
+    let invalidatesAllEntries: Bool
+
+    init(changedDays: [Date] = [], invalidatesAllEntries: Bool = false) {
+        self.changedDays = Set(changedDays.map { $0.startOfDayLocal() })
+        self.invalidatesAllEntries = invalidatesAllEntries
+    }
 }
 
 // MARK: - Store
@@ -76,10 +88,14 @@ final class LocalDayEntryStore: ObservableObject {
         ensureDirectory()
     }
 
-    private func notifyChange() {
+    private func notifyChange(changedDays: [Date] = [], invalidatesAllEntries: Bool = false) {
+        let payload = DayEntriesChangePayload(
+            changedDays: changedDays,
+            invalidatesAllEntries: invalidatesAllEntries
+        )
         let send: () -> Void = { [weak self] in
             self?.objectWillChange.send()
-            NotificationCenter.default.post(name: .dayEntriesDidChange, object: nil)
+            NotificationCenter.default.post(name: .dayEntriesDidChange, object: payload)
         }
         if Thread.isMainThread {
             send()
@@ -128,70 +144,88 @@ final class LocalDayEntryStore: ObservableObject {
             return didUpsert || didClearTombstone
         }
         if didChange {
-            notifyChange()
+            notifyChange(changedDays: [cached.date])
         }
     }
 
-    func save(date: Date, shiftStart: Date?, shiftEnd: Date?, type: DayType, notes: String = "", breakSeconds: Int? = nil, manualWorkedSeconds: Int? = nil, creditedOverrideSeconds: Int? = nil) {
+    func save(
+        date: Date,
+        shiftStart: Date?,
+        shiftEnd: Date?,
+        type: DayType,
+        notes: String = "",
+        breakSeconds: Int? = nil,
+        manualWorkedSeconds: Int? = nil,
+        creditedOverrideSeconds: Int? = nil,
+        alwaysApplyFifteenMinuteBuffer: Bool? = nil
+    ) {
         let entry = DayEntry(date: date, type: type, notes: notes)
         entry.shiftStart = shiftStart
         entry.shiftEnd = shiftEnd
         entry.breakSeconds = breakSeconds ?? 0
         entry.manualWorkedSeconds = manualWorkedSeconds
         entry.creditedOverrideSeconds = creditedOverrideSeconds
+        entry.alwaysApplyFifteenMinuteBuffer = alwaysApplyFifteenMinuteBuffer
         save(entry)
     }
 
     func upsertMany(_ entries: [DayEntry], notify: Bool = true) {
         guard !entries.isEmpty else { return }
         let cached = entries.map(Self.toCached)
-        let changedAny = queue.sync {
-            var changed = false
+        let changedDays = queue.sync {
+            var changedDays: [Date] = []
             for e in cached {
                 if upsertCached(e) {
-                    changed = true
+                    changedDays.append(e.date)
                 }
             }
-            return changed
+            return changedDays
         }
-        if notify && changedAny {
-            notifyChange()
+        if notify && !changedDays.isEmpty {
+            notifyChange(changedDays: changedDays)
         }
     }
 
     func delete(on day: Date, markTombstone: Bool = true, deletedAt: Date = Date()) {
-        let localKey = Self.keyFromLocalDay(day)
-        let utcKey = Self.key(for: day)
+        let localDay = day.startOfDayLocal()
+        let canonicalDate = Self.utcDateForLocalCivilDay(localDay)
+        let localKey = Self.keyFromLocalDay(localDay)
+        let canonicalKey = Self.key(for: canonicalDate)
+        let legacyUTCKey = Self.legacyUTCKey(for: localDay)
+        var seenKeys = Set<String>()
+        let candidateKeys = [localKey, canonicalKey, legacyUTCKey].filter { seenKeys.insert($0).inserted }
+
         let didChange = queue.sync {
             var changed = false
-            let localURL = fileURL(forKey: localKey)
-            let utcURL = fileURL(forKey: utcKey)
-            if fileManager.fileExists(atPath: localURL.path) {
-                try? fileManager.removeItem(at: localURL)
-                changed = true
+
+            for key in candidateKeys {
+                let url = fileURL(forKey: key)
+                let forceRemovalWhenUndecodable = key == localKey || key == canonicalKey
+                if removeCachedEntryIfMatchesLocalDay(
+                    at: url,
+                    localDay: localDay,
+                    forceRemovalWhenUndecodable: forceRemovalWhenUndecodable
+                ) {
+                    changed = true
+                }
             }
-            if utcURL != localURL, fileManager.fileExists(atPath: utcURL.path) {
-                try? fileManager.removeItem(at: utcURL)
-                changed = true
-            }
+
             if markTombstone {
-                let normalizedDate = Self.utcDateForLocalCivilDay(day)
-                let key = Self.key(for: normalizedDate)
-                let tombstone = LocalDeletionTombstone(date: normalizedDate, lastModified: deletedAt)
-                let tombstoneURL = tombstoneFileURL(forKey: key)
+                let tombstone = LocalDeletionTombstone(date: canonicalDate, lastModified: deletedAt)
+                let tombstoneURL = tombstoneFileURL(forKey: canonicalKey)
                 if let data = try? isoEncoder.encode(tombstone) {
                     try? data.write(to: tombstoneURL, options: [.atomic])
                     changed = true
                 }
             } else {
-                if clearDeletionTombstoneIfPresent(for: day) {
+                if clearDeletionTombstoneIfPresent(for: localDay) {
                     changed = true
                 }
             }
             return changed
         }
         if didChange {
-            notifyChange()
+            notifyChange(changedDays: [localDay])
         }
     }
 
@@ -202,15 +236,15 @@ final class LocalDayEntryStore: ObservableObject {
             }
             try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         }
-        notifyChange()
+        notifyChange(invalidatesAllEntries: true)
     }
 
-    func clearDeletionTombstone(on day: Date) {
+    func clearDeletionTombstone(on day: Date, notify: Bool = false) {
         let didChange = queue.sync {
             clearDeletionTombstoneIfPresent(for: day)
         }
-        if didChange {
-            notifyChange()
+        if didChange, notify {
+            notifyChange(changedDays: [day])
         }
     }
 
@@ -293,6 +327,36 @@ final class LocalDayEntryStore: ObservableObject {
         return result.sorted { $0.date < $1.date }
     }
 
+    private func decodeCachedEntry(from url: URL) -> CachedEntry? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        if let obj = try? isoDecoder.decode(CachedEntry.self, from: data) {
+            return obj
+        }
+        if let legacy = try? legacyDecoder.decode(LegacyCachedEntry.self, from: data) {
+            return Self.fromLegacy(legacy)
+        }
+        return nil
+    }
+
+    @discardableResult
+    private func removeCachedEntryIfMatchesLocalDay(
+        at url: URL,
+        localDay: Date,
+        forceRemovalWhenUndecodable: Bool
+    ) -> Bool {
+        guard fileManager.fileExists(atPath: url.path) else { return false }
+
+        if let cached = decodeCachedEntry(from: url) {
+            guard cached.date.isSameLocalDay(as: localDay) else { return false }
+            try? fileManager.removeItem(at: url)
+            return true
+        }
+
+        guard forceRemovalWhenUndecodable else { return false }
+        try? fileManager.removeItem(at: url)
+        return true
+    }
+
     @discardableResult
     private func upsertCached(_ incoming: CachedEntry) -> Bool {
         let key = Self.key(for: incoming.date)
@@ -365,6 +429,18 @@ final class LocalDayEntryStore: ObservableObject {
         return String(format: "%04d-%02d-%02d", y, m, d)
     }
 
+    // Legacy key strategy that interpreted the absolute date in UTC before truncating.
+    private static func legacyUTCKey(for date: Date) -> String {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let start = utc.startOfDay(for: date)
+        let comps = utc.dateComponents([.year, .month, .day], from: start)
+        let y = comps.year ?? 0
+        let m = comps.month ?? 0
+        let d = comps.day ?? 0
+        return String(format: "%04d-%02d-%02d", y, m, d)
+    }
+
     // Map a local civil day to UTC midnight of the same Y-M-D.
     private static func utcDateForLocalCivilDay(_ date: Date) -> Date {
         let localComps = Calendar.current.dateComponents([.year, .month, .day], from: date)
@@ -375,8 +451,8 @@ final class LocalDayEntryStore: ObservableObject {
 
     private static func tombstoneCandidateKeys(for day: Date) -> [String] {
         let candidates = [
-            key(for: day), // legacy path
-            key(for: utcDateForLocalCivilDay(day))
+            key(for: utcDateForLocalCivilDay(day)),
+            keyFromLocalDay(day)
         ]
         var seen = Set<String>()
         return candidates.filter { seen.insert($0).inserted }
@@ -399,6 +475,7 @@ final class LocalDayEntryStore: ObservableObject {
             breakSeconds: legacy.breakSeconds,
             manualWorkedSeconds: legacy.manualWorkedSeconds,
             creditedOverrideSeconds: legacy.creditedOverrideSeconds,
+            alwaysApplyFifteenMinuteBuffer: legacy.alwaysApplyFifteenMinuteBuffer,
             lastModified: legacy.lastModified ?? start
         )
     }
@@ -423,18 +500,20 @@ final class LocalDayEntryStore: ObservableObject {
             breakSeconds: entry.breakSeconds,
             manualWorkedSeconds: entry.manualWorkedSeconds,
             creditedOverrideSeconds: entry.creditedOverrideSeconds,
+            alwaysApplyFifteenMinuteBuffer: entry.alwaysApplyFifteenMinuteBuffer,
             lastModified: entry.updatedAt
         )
     }
 
     private static func toDayEntry(_ cached: CachedEntry) -> DayEntry? {
-        let type = DayType(rawValue: cached.typeRaw) ?? .work
+        let type = DayType.fromPersistedRaw(cached.typeRaw) ?? .work
         let e = DayEntry(date: cached.date, updatedAt: cached.lastModified, type: type, notes: cached.notes)
         e.shiftStart = cached.shiftStart
         e.shiftEnd = cached.shiftEnd
         e.breakSeconds = cached.breakSeconds ?? 0
         e.manualWorkedSeconds = cached.manualWorkedSeconds
         e.creditedOverrideSeconds = cached.creditedOverrideSeconds
+        e.alwaysApplyFifteenMinuteBuffer = cached.alwaysApplyFifteenMinuteBuffer
         return e
     }
 }

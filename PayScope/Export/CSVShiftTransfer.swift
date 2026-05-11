@@ -7,6 +7,7 @@ struct ShiftCSVImportRowDraft: Identifiable, Equatable {
     var date: Date
     var startMinute: Int
     var endMinute: Int
+    var endDayOffset: Int
     var breakMinutes: Int
     var isEditing: Bool
 
@@ -16,6 +17,7 @@ struct ShiftCSVImportRowDraft: Identifiable, Equatable {
         date: Date,
         startMinute: Int,
         endMinute: Int,
+        endDayOffset: Int? = nil,
         breakMinutes: Int,
         isEditing: Bool = false
     ) {
@@ -24,12 +26,27 @@ struct ShiftCSVImportRowDraft: Identifiable, Equatable {
         self.date = date.startOfDayLocal()
         self.startMinute = max(0, min(23 * 60 + 59, startMinute))
         self.endMinute = max(0, min(23 * 60 + 59, endMinute))
+        self.endDayOffset = max(0, min(1, endDayOffset ?? (self.endMinute <= self.startMinute ? 1 : 0)))
         self.breakMinutes = max(0, breakMinutes)
         self.isEditing = isEditing
     }
 
+    var endMinuteOffset: Int {
+        if endDayOffset > 0 {
+            return endMinute + (endDayOffset * ShiftTimeRange.minutesPerDay)
+        }
+        if endMinute <= startMinute {
+            return endMinute + ShiftTimeRange.minutesPerDay
+        }
+        return endMinute
+    }
+
+    var effectiveEndDayOffset: Int {
+        endMinuteOffset >= ShiftTimeRange.minutesPerDay ? 1 : 0
+    }
+
     var hasValidTimeRange: Bool {
-        endMinute > startMinute
+        ShiftTimeRange(startMinute: startMinute, endMinuteOffset: endMinuteOffset) != nil
     }
 }
 
@@ -39,21 +56,25 @@ struct ShiftCSVImportParseResult {
 }
 
 enum ShiftCSVTransfer {
-    static let exportHeader = "categoryIcon,date,start,end,breakMinutes,type,workedHours,workedPay,creditedHours,creditedPay,notes"
+    static let exportHeader = "categoryIcon,date,start,end,endDayOffset,breakMinutes,type,workedHours,workedPay,creditedHours,creditedPay,notes"
 
-    static func exportColumns(for entry: DayEntry) -> (icon: String, date: String, start: String, end: String, breakMinutes: String, type: String) {
+    static func exportColumns(for entry: DayEntry) -> (icon: String, date: String, start: String, end: String, endDayOffset: String, breakMinutes: String, type: String) {
         let icon = entry.type.icon
         let date = dayFormatter.string(from: entry.date)
         let type = entry.type.rawValue
 
         guard let shiftStart = entry.shiftStart, let shiftEnd = entry.shiftEnd, shiftEnd > shiftStart else {
-            return (icon, date, "", "", "", type)
+            return (icon, date, "", "", "", "", type)
         }
 
         let start = timeFormatter.string(from: shiftStart)
         let end = timeFormatter.string(from: shiftEnd)
+        let startDay = shiftStart.startOfDayLocal()
+        let endDay = shiftEnd.startOfDayLocal()
+        let offset = Calendar.current.dateComponents([.day], from: startDay, to: endDay).day ?? 0
+        let endDayOffset = String(max(0, min(1, offset)))
         let breakMinutes = String(max(0, (entry.breakSeconds ?? 0) / 60))
-        return (icon, date, start, end, breakMinutes, type)
+        return (icon, date, start, end, endDayOffset, breakMinutes, type)
     }
 
     static func parse(csv: String) -> ShiftCSVImportParseResult {
@@ -114,6 +135,17 @@ enum ShiftCSVTransfer {
             return nil
         }
 
+        let explicitEndDayOffset = parseEndDayOffset(value(for: [
+            "enddayoffset",
+            "endday",
+            "enddateoffset",
+            "endoffset",
+            "folgetag",
+            "morgen"
+        ]))
+        let endTextDayOffset = parseEndDayOffset(endText)
+        let endDayOffset = explicitEndDayOffset ?? endTextDayOffset ?? (endMinute <= startMinute ? 1 : 0)
+
         let typeText = value(for: ["type", "daytype", "kategorie", "category"])
         let iconText = value(for: ["categoryicon", "kategorieicon", "icon", "symbol", "category"])
 
@@ -129,6 +161,7 @@ enum ShiftCSVTransfer {
             date: date,
             startMinute: startMinute,
             endMinute: endMinute,
+            endDayOffset: endDayOffset,
             breakMinutes: breakMinutes,
             isEditing: false
         )
@@ -180,7 +213,12 @@ enum ShiftCSVTransfer {
     }
 
     private static func parseMinuteOfDay(_ value: String) -> Int? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        trimmed = trimmed
+            .replacingOccurrences(of: "(+1)", with: "")
+            .replacingOccurrences(of: "+1", with: "")
+            .replacingOccurrences(of: "Morgen", with: "", options: .caseInsensitive)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
         let separators = [":", "."]
@@ -198,7 +236,27 @@ enum ShiftCSVTransfer {
         return nil
     }
 
-    private static func normalizeHeader(_ header: String) -> String {
+    private static func parseEndDayOffset(_ value: String?) -> Int? {
+        guard let value else { return nil }
+        let normalized = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !normalized.isEmpty else { return nil }
+
+        if normalized.contains("+1") || normalized.contains("morgen") {
+            return 1
+        }
+        switch normalized {
+        case "1", "true", "yes", "ja", "y":
+            return 1
+        case "0", "false", "no", "nein", "n":
+            return 0
+        default:
+            return Int(normalized).map { max(0, min(1, $0)) }
+        }
+    }
+
+    private nonisolated static func normalizeHeader(_ header: String) -> String {
         header
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()

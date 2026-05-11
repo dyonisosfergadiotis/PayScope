@@ -62,8 +62,6 @@ private struct OnboardingFlowView: View {
     @State private var weeklyHours = ""
     @State private var holidayCountryCode = "DE"
     @State private var holidaySubdivisionCode = ""
-    @State private var timelineMinMinute = 6 * 60
-    @State private var timelineMaxMinute = 22 * 60
 
     private let pageCount = 7
 
@@ -123,8 +121,6 @@ private struct OnboardingFlowView: View {
             weeklyHours = settings.weeklyTargetSeconds.map { String(format: "%.1f", Double($0) / 3600) } ?? ""
             holidayCountryCode = settings.holidayCountryCode ?? "DE"
             holidaySubdivisionCode = settings.holidaySubdivisionCode ?? ""
-            timelineMinMinute = settings.timelineMinMinute ?? 6 * 60
-            timelineMaxMinute = settings.timelineMaxMinute ?? 22 * 60
             settings.weekStart = .monday
         }
     }
@@ -144,7 +140,7 @@ private struct OnboardingFlowView: View {
                 bullet("Wöchentliche Sollstunden")
                 bullet("Land/Bundesland für Feiertage")
                 bullet("Regeln für 13-Wochen-Berechnung")
-                bullet("Timeline und Kalenderdarstellung")
+                bullet("Kalenderdarstellung und Akzentfarbe")
             }
         }
     }
@@ -311,28 +307,13 @@ private struct OnboardingFlowView: View {
     private var captureAndThemePage: some View {
         OnboardingPageShell(
             title: "Erfassung & Ansicht",
-            subtitle: "Lege Timeline-Fenster und Kalenderdarstellung fest.",
+            subtitle: "Lege Kalenderdarstellung und Akzentfarbe fest.",
             step: page + 1,
             total: pageCount,
             icon: "paintpalette",
             accent: settings.themeAccent.color
         ) {
             VStack(alignment: .leading, spacing: 14) {
-                minuteWindowControl(
-                    title: "Frühester Start",
-                    value: $timelineMinMinute,
-                    step: 15,
-                    lower: 0,
-                    upper: max(0, timelineMaxMinute - 60)
-                )
-                minuteWindowControl(
-                    title: "Spätestes Ende",
-                    value: $timelineMaxMinute,
-                    step: 15,
-                    lower: min(24 * 60, timelineMinMinute + 60),
-                    upper: 24 * 60
-                )
-
                 Picker("Zellanzeige im Kalender", selection: calendarDisplayModeBinding) {
                     ForEach(CalendarCellDisplayMode.allCases) { mode in
                         Text(mode.label).tag(mode)
@@ -411,8 +392,6 @@ private struct OnboardingFlowView: View {
         settings.weeklyTargetSeconds = parseHoursToSeconds(weeklyHours)
         settings.holidayCountryCode = normalizedHolidayCountryCode
         settings.holidaySubdivisionCode = normalizedHolidaySubdivisionCode
-        settings.timelineMinMinute = timelineMinMinute
-        settings.timelineMaxMinute = timelineMaxMinute
         persistSettingsLocally()
     }
 
@@ -491,43 +470,6 @@ private struct OnboardingFlowView: View {
             get: { settings.calendarCellDisplayMode ?? .dot },
             set: { settings.calendarCellDisplayMode = $0 }
         )
-    }
-
-    @ViewBuilder
-    private func minuteWindowControl(
-        title: String,
-        value: Binding<Int>,
-        step: Int,
-        lower: Int,
-        upper: Int
-    ) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Button {
-                value.wrappedValue = max(lower, value.wrappedValue - step)
-            } label: {
-                Image(systemName: "minus.circle")
-            }
-            .buttonStyle(.plain)
-
-            Text(formatMinute(value.wrappedValue))
-                .font(.subheadline.bold())
-                .frame(minWidth: 58)
-
-            Button {
-                value.wrappedValue = min(upper, value.wrappedValue + step)
-            } label: {
-                Image(systemName: "plus.circle")
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private func formatMinute(_ minute: Int) -> String {
-        let h = minute / 60
-        let m = minute % 60
-        return String(format: "%02d:%02d", h, m)
     }
 }
 

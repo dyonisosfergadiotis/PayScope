@@ -19,8 +19,9 @@ struct CSVExporter {
             .sorted { $0.date < $1.date }
 
         var lines: [String] = [ShiftCSVTransfer.exportHeader]
+        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
         for entry in filtered {
-            let result = service.dayComputation(for: entry, allEntries: entries, settings: settings)
+            let result = service.exportComputation(for: entry, entriesByDate: entriesByDate, settings: settings)
             let shiftColumns = ShiftCSVTransfer.exportColumns(for: entry)
 
             let workedSeconds: Int
@@ -55,17 +56,28 @@ struct CSVExporter {
                 shiftColumns.date,
                 shiftColumns.start,
                 shiftColumns.end,
+                shiftColumns.endDayOffset,
                 shiftColumns.breakMinutes,
                 shiftColumns.type,
                 String(format: "%.2f", Double(workedSeconds) / 3600),
                 String(format: "%.2f", Double(workedPay) / 100),
                 String(format: "%.2f", Double(creditedSeconds) / 3600),
                 String(format: "%.2f", Double(creditedPay) / 100),
-                entry.notes.replacingOccurrences(of: ",", with: " ")
-            ].joined(separator: ",")
+                entry.notes
+            ].map(Self.csvField).joined(separator: ",")
             lines.append(row)
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    private nonisolated static func csvField(_ value: String) -> String {
+        let normalized = value
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        guard normalized.contains(",") || normalized.contains("\"") || normalized.contains("\n") else {
+            return normalized
+        }
+        return "\"\(normalized.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
 }

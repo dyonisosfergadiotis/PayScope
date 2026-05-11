@@ -3,6 +3,7 @@ import ActivityKit
 import Combine
 import CloudKit
 import SwiftData
+import WidgetKit
 import os
 
 @main
@@ -83,6 +84,7 @@ struct PayScopeApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .environment(\.locale, Locale(identifier: "de_DE"))
                 .environmentObject(cloudKitService)
                 .modelContainer(Self.localModelContainer)
         }
@@ -109,8 +111,34 @@ struct PayScope_WidgetsAttributes: ActivityAttributes {
 @MainActor
 enum PayScopeLiveActivityManager {
     private static let service = CalculationService()
+    private static let rectangularWidgetKind = "PayScopeRectangularLockScreenWidget"
+    private static let inlineWidgetKind = "PayScopeInlineLockScreenWidget"
+    private static let rectangularWidgetAppGroupIdentifier = "group.DyonisosFergadiotis.PayScope"
+    private static let rectangularWidgetSnapshotKey = "payscope.rectangularWidgetSnapshot.v1"
+
+    private struct RectangularWidgetSnapshot: Codable {
+        let themeAccentRawValue: String
+        let isShiftActive: Bool
+        let shiftCategoryTitle: String?
+        let shiftCategoryIcon: String?
+        let shiftStart: Date?
+        let shiftEnd: Date?
+        let shiftDurationSeconds: Int
+        let nextShiftStart: Date?
+        let isAllDayStatus: Bool?
+        let allDayYear: Int?
+        let allDayMonth: Int?
+        let allDayDay: Int?
+    }
 
     static func syncAtAppLaunch(settings: Settings, entries: [DayEntry], now: Date = .now) async {
+        persistRectangularWidgetSnapshot(settings: settings, entries: entries, now: now)
+
+        guard settings.effectiveShowLiveActivity else {
+            await endAllActivities()
+            return
+        }
+
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
         guard let payload = launchPayload(settings: settings, entries: entries, now: now) else {
@@ -119,6 +147,106 @@ enum PayScopeLiveActivityManager {
         }
 
         await startOrUpdate(with: payload)
+    }
+
+    private static func persistRectangularWidgetSnapshot(settings: Settings, entries: [DayEntry], now: Date) {
+        guard let defaults = UserDefaults(suiteName: rectangularWidgetAppGroupIdentifier) else { return }
+
+        let snapshot = rectangularWidgetSnapshot(settings: settings, entries: entries, now: now)
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+
+        defaults.set(data, forKey: rectangularWidgetSnapshotKey)
+        WidgetCenter.shared.reloadTimelines(ofKind: rectangularWidgetKind)
+        WidgetCenter.shared.reloadTimelines(ofKind: inlineWidgetKind)
+    }
+
+    private static func rectangularWidgetSnapshot(settings: Settings, entries: [DayEntry], now: Date) -> RectangularWidgetSnapshot {
+        let dayStart = now.startOfDayLocal()
+        let payload = launchPayload(settings: settings, entries: entries, now: now)
+
+        if let payload, now >= payload.timelineStart, now < payload.timelineEnd {
+            return RectangularWidgetSnapshot(
+                themeAccentRawValue: payload.themeAccentRawValue,
+                isShiftActive: true,
+                shiftCategoryTitle: payload.shiftCategoryTitle,
+                shiftCategoryIcon: payload.shiftCategoryIcon,
+                shiftStart: payload.timelineStart,
+                shiftEnd: payload.timelineEnd,
+                shiftDurationSeconds: max(0, Int(payload.timelineEnd.timeIntervalSince(payload.timelineStart))),
+                nextShiftStart: payload.nextShiftStart,
+                isAllDayStatus: nil,
+                allDayYear: nil,
+                allDayMonth: nil,
+                allDayDay: nil
+            )
+        }
+
+        if let allDayEntry = entries.first(where: {
+            $0.date.isSameLocalDay(as: dayStart) &&
+            ($0.type == .vacation || $0.type == .holiday || $0.type == .sick)
+        }) {
+            let dayComponents = Calendar.current.dateComponents([.year, .month, .day], from: dayStart)
+            return RectangularWidgetSnapshot(
+                themeAccentRawValue: settings.themeAccent.rawValue,
+                isShiftActive: false,
+                shiftCategoryTitle: shiftTitle(for: allDayEntry.type),
+                shiftCategoryIcon: shiftIcon(for: allDayEntry.type),
+                shiftStart: nil,
+                shiftEnd: nil,
+                shiftDurationSeconds: 0,
+                nextShiftStart: nextUpcomingShiftStart(after: now, entries: entries),
+                isAllDayStatus: true,
+                allDayYear: dayComponents.year,
+                allDayMonth: dayComponents.month,
+                allDayDay: dayComponents.day
+            )
+        }
+
+        if let payload {
+            let isShiftActive = now >= payload.timelineStart && now < payload.timelineEnd
+            return RectangularWidgetSnapshot(
+                themeAccentRawValue: payload.themeAccentRawValue,
+                isShiftActive: isShiftActive,
+                shiftCategoryTitle: payload.shiftCategoryTitle,
+                shiftCategoryIcon: payload.shiftCategoryIcon,
+                shiftStart: payload.timelineStart,
+                shiftEnd: payload.timelineEnd,
+                shiftDurationSeconds: max(0, Int(payload.timelineEnd.timeIntervalSince(payload.timelineStart))),
+                nextShiftStart: payload.nextShiftStart,
+                isAllDayStatus: nil,
+                allDayYear: nil,
+                allDayMonth: nil,
+                allDayDay: nil
+            )
+        }
+
+        let nextShiftStart = nextUpcomingShiftStart(after: now, entries: entries)
+        let nextShiftCategoryIcon: String?
+        let nextShiftCategoryTitle: String?
+        if let nextShiftStart {
+            let nextShiftDay = nextShiftStart.startOfDayLocal()
+            let nextShiftEntry = entries.first(where: { $0.date.isSameLocalDay(as: nextShiftDay) })
+            nextShiftCategoryIcon = shiftIcon(for: nextShiftEntry?.type)
+            nextShiftCategoryTitle = shiftTitle(for: nextShiftEntry?.type)
+        } else {
+            nextShiftCategoryIcon = nil
+            nextShiftCategoryTitle = nil
+        }
+
+        return RectangularWidgetSnapshot(
+            themeAccentRawValue: settings.themeAccent.rawValue,
+            isShiftActive: false,
+            shiftCategoryTitle: nextShiftCategoryTitle,
+            shiftCategoryIcon: nextShiftCategoryIcon,
+            shiftStart: nil,
+            shiftEnd: nil,
+            shiftDurationSeconds: 0,
+            nextShiftStart: nextShiftStart,
+            isAllDayStatus: nil,
+            allDayYear: nil,
+            allDayMonth: nil,
+            allDayDay: nil
+        )
     }
 
     private static func startOrUpdate(with payload: LaunchPayload) async {
@@ -179,41 +307,57 @@ enum PayScopeLiveActivityManager {
 
     private static func launchPayload(settings: Settings, entries: [DayEntry], now: Date) -> LaunchPayload? {
         let dayStart = now.startOfDayLocal()
+        let activeShift = activeShiftCandidate(at: now, entries: entries)
         let todayEntry = entries.first(where: { $0.date.isSameLocalDay(as: dayStart) })
-        if let todayEntry {
+        if activeShift == nil, let todayEntry {
             switch todayEntry.type {
             case .vacation, .holiday, .sick:
                 return nil
             case .work, .manual:
                 break
             }
-        } else if !isScheduledWorkday(now, settings: settings) {
+        }
+
+        let todayShift = shiftCandidate(on: dayStart, entries: entries)
+        guard let baseShift = activeShift ?? todayShift else {
             return nil
         }
 
-        let fallbackStart = dateAtMinute(settings.timelineMinMinute ?? 8 * 60, on: dayStart)
-        let fallbackEnd = dateAtMinute(settings.timelineMaxMinute ?? 17 * 60, on: dayStart)
-        let shiftWindow = shiftWindow(for: todayEntry, fallbackStart: fallbackStart, fallbackEnd: fallbackEnd)
-        let timelineStart = shiftWindow.start
-        let timelineEnd = shiftWindow.end
+        let explicitUpcomingShift = nextShiftCandidate(after: dayStart, entries: entries)
 
-        guard timelineEnd > timelineStart else { return nil }
+        let focusShift: ShiftCandidate
+        if let activeShift {
+            focusShift = activeShift
+        } else if let todayShift, now <= todayShift.end {
+            focusShift = todayShift
+        } else if let explicitUpcomingShift {
+            focusShift = explicitUpcomingShift
+        } else {
+            focusShift = baseShift
+        }
 
+        let timelineStart = focusShift.start
+        let timelineEnd = focusShift.end
         let effectiveNow = min(max(now, timelineStart), timelineEnd)
-        let workedTodaySeconds = workedSeconds(until: effectiveNow, for: todayEntry)
+        let focusShiftWorkedSeconds = workedSeconds(until: effectiveNow, for: focusShift.entry)
         let workedReferenceStart = max(
             timelineStart,
-            effectiveNow.addingTimeInterval(TimeInterval(-workedTodaySeconds))
+            effectiveNow.addingTimeInterval(TimeInterval(-focusShiftWorkedSeconds))
         )
+        let workedReferenceShift = todayShift ?? activeShift ?? focusShift
+        let todayEffectiveNow = min(max(now, workedReferenceShift.start), workedReferenceShift.end)
+        let workedTodaySeconds = workedSeconds(until: todayEffectiveNow, for: workedReferenceShift.entry)
         let completedPayCents = service.payCents(for: workedTodaySeconds, settings: settings)
         let isCompleted = now >= timelineEnd
-        let shiftCategoryIcon = shiftIcon(for: todayEntry?.type)
-        let shiftCategoryTitle = shiftTitle(for: todayEntry?.type)
-        let nextShift = nextShift(after: dayStart, entries: entries, settings: settings)
-        let staleDate = nextShift?.start ?? dayStart.addingDays(1)
+        let shiftCategoryIcon = shiftIcon(for: focusShift.entry?.type)
+        let shiftCategoryTitle = shiftTitle(for: focusShift.entry?.type)
+        let nextShift = nextShift(after: focusShift.dayStart, entries: entries)
+        let title = focusShift.dayStart.isSameLocalDay(as: dayStart) ? "\(shiftCategoryTitle) heute" : "\(shiftCategoryTitle) läuft"
+        let staleDate = nextShift?.start ?? timelineEnd.addingTimeInterval(60)
 
         return LaunchPayload(
-            title: "\(shiftCategoryTitle) heute",
+            title: title,
+            shiftCategoryTitle: shiftCategoryTitle,
             timelineStart: timelineStart,
             timelineEnd: timelineEnd,
             workedTodaySeconds: workedTodaySeconds,
@@ -228,81 +372,105 @@ enum PayScopeLiveActivityManager {
         )
     }
 
-    private static func isScheduledWorkday(_ date: Date, settings: Settings) -> Bool {
-        let calendar = Calendar.current
-        let weekStartWeekday = 2
-        let currentWeekday = calendar.component(.weekday, from: date)
-        let index = (currentWeekday - weekStartWeekday + 7) % 7
-        return index < min(max(settings.scheduledWorkdaysCount, 1), 7)
-    }
+    private static func activeShiftCandidate(at referenceDate: Date, entries: [DayEntry]) -> ShiftCandidate? {
+        entries.compactMap { entry -> ShiftCandidate? in
+            switch entry.type {
+            case .work, .manual:
+                break
+            case .vacation, .holiday, .sick:
+                return nil
+            }
 
-    private static func dateAtMinute(_ minute: Int, on dayStart: Date) -> Date {
-        let clamped = min(max(minute, 0), 24 * 60)
-        if clamped >= 24 * 60 {
-            return dayStart.addingTimeInterval(24 * 3600)
+            guard let start = entry.shiftStart, let end = entry.shiftEnd, end > start else {
+                return nil
+            }
+            guard start <= referenceDate, referenceDate < end else {
+                return nil
+            }
+
+            return ShiftCandidate(
+                dayStart: entry.date.startOfDayLocal(),
+                entry: entry,
+                start: start,
+                end: end
+            )
         }
-        let hour = clamped / 60
-        let minutes = clamped % 60
-        return Calendar.current.date(bySettingHour: hour, minute: minutes, second: 0, of: dayStart) ?? dayStart
+        .max { lhs, rhs in
+            lhs.start < rhs.start
+        }
     }
 
-    private static func shiftWindow(for day: DayEntry?, fallbackStart: Date, fallbackEnd: Date) -> (start: Date, end: Date) {
-        guard let day else { return (fallbackStart, fallbackEnd) }
-
-        // New model: fixed shift times.
-        if let start = day.shiftStart, let end = day.shiftEnd, end > start {
-            return (start, end)
+    private static func shiftCandidate(on dayStart: Date, entries: [DayEntry]) -> ShiftCandidate? {
+        guard let entry = entries.first(where: { $0.date.isSameLocalDay(as: dayStart) }) else {
+            return nil
         }
 
-        return (fallbackStart, fallbackEnd)
+        switch entry.type {
+        case .vacation, .holiday, .sick:
+            return nil
+        case .work, .manual:
+            break
+        }
+
+        guard let start = entry.shiftStart, let end = entry.shiftEnd, end > start else {
+            return nil
+        }
+
+        return ShiftCandidate(
+            dayStart: dayStart,
+            entry: entry,
+            start: start,
+            end: end
+        )
     }
 
-    private static func nextShift(after dayStart: Date, entries: [DayEntry], settings: Settings) -> (start: Date, durationSeconds: Int)? {
+    private static func nextShiftCandidate(after dayStart: Date, entries: [DayEntry]) -> ShiftCandidate? {
         for dayOffset in 1...21 {
             let candidateDay = dayStart.addingDays(dayOffset)
-            let entry = entries.first(where: { $0.date.isSameLocalDay(as: candidateDay) })
-
-            if let entry {
-                switch entry.type {
-                case .vacation, .holiday, .sick:
-                    continue
-                case .work, .manual:
-                    break
-                }
-            } else if !isScheduledWorkday(candidateDay, settings: settings) {
+            guard let candidate = shiftCandidate(on: candidateDay, entries: entries) else {
                 continue
             }
-
-            guard let entry, hasTrackedWork(for: entry) else {
-                continue
-            }
-
-            // We only show a next shift when fixed times exist.
-            guard let start = entry.shiftStart, let end = entry.shiftEnd, end > start else {
-                continue
-            }
-
-            let rawSeconds = Int(end.timeIntervalSince(start))
-            let breakSeconds = max(0, entry.breakSeconds ?? 0)
-            let durationSeconds = max(0, rawSeconds - breakSeconds)
-
-            return (start, durationSeconds)
+            return candidate
         }
         return nil
     }
 
-    private static func hasTrackedWork(for day: DayEntry) -> Bool {
-        // New model: fixed shift start/end.
-        if let start = day.shiftStart, let end = day.shiftEnd, end > start {
-            return true
+    private static func nextShift(after dayStart: Date, entries: [DayEntry]) -> (start: Date, durationSeconds: Int)? {
+        guard let candidate = nextShiftCandidate(after: dayStart, entries: entries) else {
+            return nil
         }
 
-        // Manual days can still be valid if they have manual seconds.
-        if let manualSeconds = day.manualWorkedSeconds {
-            return manualSeconds > 0
+        return (
+            candidate.start,
+            shiftDurationSeconds(for: candidate.entry, start: candidate.start, end: candidate.end)
+        )
+    }
+
+    private static func nextUpcomingShiftStart(after now: Date, entries: [DayEntry]) -> Date? {
+        nextExplicitUpcomingShiftCandidate(after: now, entries: entries)?.start
+    }
+
+    private static func nextExplicitUpcomingShiftCandidate(after now: Date, entries: [DayEntry]) -> ShiftCandidate? {
+        let dayStart = now.startOfDayLocal()
+
+        for dayOffset in 0...21 {
+            let candidateDayStart = dayStart.addingDays(dayOffset)
+            guard let candidate = shiftCandidate(on: candidateDayStart, entries: entries) else {
+                continue
+            }
+            guard candidate.start > now, candidate.end > now else {
+                continue
+            }
+            return candidate
         }
 
-        return false
+        return nil
+    }
+
+    private static func shiftDurationSeconds(for day: DayEntry?, start: Date, end: Date) -> Int {
+        let rawSeconds = max(0, Int(end.timeIntervalSince(start)))
+        let breakSeconds = max(0, day?.breakSeconds ?? 0)
+        return max(0, rawSeconds - breakSeconds)
     }
 
     private static func workedSeconds(until now: Date, for day: DayEntry?) -> Int {
@@ -356,6 +524,7 @@ enum PayScopeLiveActivityManager {
 
     private struct LaunchPayload {
         let title: String
+        let shiftCategoryTitle: String
         let timelineStart: Date
         let timelineEnd: Date
         let workedTodaySeconds: Int
@@ -367,5 +536,12 @@ enum PayScopeLiveActivityManager {
         let nextShiftStart: Date?
         let nextShiftDurationSeconds: Int
         let staleDate: Date
+    }
+
+    private struct ShiftCandidate {
+        let dayStart: Date
+        let entry: DayEntry?
+        let start: Date
+        let end: Date
     }
 }

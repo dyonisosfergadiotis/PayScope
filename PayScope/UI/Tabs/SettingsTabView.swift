@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct SettingsTabView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var cloudKitService: CloudKitService
+    @ObservedObject private var appleCalendarSync = AppleCalendarSyncService.shared
     @State private var settings: Settings
     @State private var showResetConfirmation = false
     @State private var showResetResultAlert = false
@@ -23,7 +24,7 @@ struct SettingsTabView: View {
                     } label: {
                         SettingsMenuRow(
                             title: "Vergütung",
-                            subtitle: paySummary,
+                            subtitle: "Abrechnungsmodell und Gehaltswert einstellen",
                             systemImage: "eurosign.circle"
                         )
                     }
@@ -33,8 +34,18 @@ struct SettingsTabView: View {
                     } label: {
                         SettingsMenuRow(
                             title: "Netto-Standardwerte",
-                            subtitle: netDefaultsSummary,
+                            subtitle: "Abgaben und Zuschläge für Netto-Berechnungen verwalten",
                             systemImage: "percent"
+                        )
+                    }
+
+                    NavigationLink {
+                        TipsSettingsView(settings: $settings)
+                    } label: {
+                        SettingsMenuRow(
+                            title: "Trinkgeld",
+                            subtitle: tipsSettingsSubtitle,
+                            systemImage: "eurosign.circle"
                         )
                     }
 
@@ -43,7 +54,7 @@ struct SettingsTabView: View {
                     } label: {
                         SettingsMenuRow(
                             title: "Arbeitswoche",
-                            subtitle: workweekSummary,
+                            subtitle: "Wochenbeginn und Arbeitstage pro Woche festlegen",
                             systemImage: "calendar.badge.clock"
                         )
                     }
@@ -53,7 +64,7 @@ struct SettingsTabView: View {
                     } label: {
                         SettingsMenuRow(
                             title: "Wochenstunden",
-                            subtitle: weeklyHoursSummary,
+                            subtitle: "Sollstunden pro Woche hinterlegen",
                             systemImage: "clock"
                         )
                     }
@@ -63,7 +74,7 @@ struct SettingsTabView: View {
                     } label: {
                         SettingsMenuRow(
                             title: "Berechnungsregeln",
-                            subtitle: rulesSummary,
+                            subtitle: "Gutschriften und Referenzlogik konfigurieren",
                             systemImage: "slider.horizontal.3"
                         )
                     }
@@ -73,7 +84,7 @@ struct SettingsTabView: View {
                     } label: {
                         SettingsMenuRow(
                             title: "Schichtvorlagen",
-                            subtitle: shiftShortcutSummary,
+                            subtitle: "Namen und Zeiten für schnelle Schichten bearbeiten",
                             systemImage: "clock.badge"
                         )
                     }
@@ -85,17 +96,17 @@ struct SettingsTabView: View {
                     } label: {
                         SettingsMenuRow(
                             title: "Erscheinungsbild",
-                            subtitle: appearanceSummary,
+                            subtitle: "Akzentfarbe der App auswählen",
                             systemImage: "paintpalette"
                         )
                     }
 
                     NavigationLink {
-                        CalendarTimelineSettingsView(settings: $settings)
+                        CalendarSettingsView(settings: $settings)
                     } label: {
                         SettingsMenuRow(
-                            title: "Kalender & Timeline",
-                            subtitle: timelineSummary,
+                            title: "Kalender",
+                            subtitle: "Kalenderzellen und Wocheninfos anpassen",
                             systemImage: "rectangle.3.group"
                         )
                     }
@@ -107,8 +118,18 @@ struct SettingsTabView: View {
                     } label: {
                         SettingsMenuRow(
                             title: "Feiertage",
-                            subtitle: holidaySummary,
+                            subtitle: "Region, Import und automatische Markierung einstellen",
                             systemImage: "flag"
+                        )
+                    }
+
+                    NavigationLink {
+                        AppleCalendarSettingsView(settings: settings)
+                    } label: {
+                        SettingsMenuRow(
+                            title: "Apple Kalender",
+                            subtitle: appleCalendarSubtitle,
+                            systemImage: "calendar.badge.plus"
                         )
                     }
 
@@ -116,8 +137,8 @@ struct SettingsTabView: View {
                         ExportSettingsView(settings: $settings)
                     } label: {
                         SettingsMenuRow(
-                            title: "CSV-Export",
-                            subtitle: "Monatsdaten teilen oder archivieren",
+                            title: "Export",
+                            subtitle: "Monatsdaten als CSV, Text oder PDF teilen",
                             systemImage: "square.and.arrow.up"
                         )
                     }
@@ -129,7 +150,7 @@ struct SettingsTabView: View {
                     } label: {
                         SettingsMenuRow(
                             title: "Info & Entwickler",
-                            subtitle: appInfoSummary,
+                            subtitle: "App-Version und Entwicklerangaben ansehen",
                             systemImage: "info.circle"
                         )
                     }
@@ -160,114 +181,17 @@ struct SettingsTabView: View {
         }
     }
 
-    // MARK: - Summaries (use settings)
-
-    private var paySummary: String {
-        switch settings.payMode {
-        case .hourly:
-            if let cents = settings.hourlyRateCents {
-                return "Stündlich · \(PayScopeFormatters.currencyString(cents: cents))"
-            }
-            return "Stündlich"
-        case .monthly:
-            if let cents = settings.monthlySalaryCents {
-                return "Monatlich · \(PayScopeFormatters.currencyString(cents: cents))"
-            }
-            return "Monatlich"
+    private var tipsSettingsSubtitle: String {
+        guard settings.effectiveShowTipsButton else {
+            return "Trinkgeld-Button ausgeblendet"
         }
+        return settings.effectiveShowTipsButtonAmount ? "Button zeigt Monatsbetrag" : "Button ohne Monatsbetrag"
     }
 
-    private var netDefaultsSummary: String {
-        let taxText = settings.netWageTaxPercent.map { String(format: "%.2f%%", $0).replacingOccurrences(of: ".", with: ",") } ?? "Lohnsteuer -"
-        let pensionText = settings.netPensionPercent.map { String(format: "%.2f%%", $0).replacingOccurrences(of: ".", with: ",") } ?? "Rente -"
-        let bonusCount = (settings.netBonusesCSV ?? "")
-            .split(separator: ";")
-            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            .count
-        return "\(taxText) · \(pensionText) · Zuschläge: \(bonusCount)"
-    }
-
-    private var workweekSummary: String {
-        "Montag als Wochenstart · \(settings.scheduledWorkdaysCount) Tagewoche"
-    }
-
-    private var weeklyHoursSummary: String {
-        let hoursText: String
-        if let weeklyTargetSeconds = settings.weeklyTargetSeconds {
-            hoursText = PayScopeFormatters.hoursString(seconds: weeklyTargetSeconds)
-        } else {
-            hoursText = "kein Sollwert"
-        }
-        return hoursText
-    }
-
-    private var rulesSummary: String {
-        let vacationMode: String
-        switch settings.effectiveVacationCreditingMode {
-        case .lookback13Weeks:
-            vacationMode = "Urlaub: 13-Wochen"
-        case .fixedValue:
-            let fixed = PayScopeFormatters.hhmmString(seconds: settings.effectiveVacationFixedSeconds)
-            vacationMode = "Urlaub: Fix \(fixed)"
-        }
-        let holidayMode: String
-        switch settings.effectiveHolidayCreditingMode {
-        case .lookback13Weeks:
-            holidayMode = "Feiertag: 13-Wochen"
-        case .fixedValue, .weeklyTargetDistributed, .zero:
-            let fixed = PayScopeFormatters.hhmmString(seconds: settings.effectiveHolidayFixedSeconds)
-            holidayMode = "Feiertag: Fix \(fixed)"
-        }
-        let strict = settings.strictHistoryRequired ? "strikt" : "flexibel"
-        let missing = settings.countMissingAsZero ? "Lückenlos" : "Mit Lücken"
-        return "\(vacationMode) · \(holidayMode) · \(strict) · \(missing)"
-    }
-
-    private var appearanceSummary: String {
-        "\(settings.themeAccent.label)"
-    }
-
-    private var timelineSummary: String {
-        let mode = settings.calendarCellDisplayMode ?? .dot
-        let minMinute = settings.timelineMinMinute ?? 6 * 60
-        let maxMinute = settings.timelineMaxMinute ?? 22 * 60
-        var weekItems: [String] = []
-        if settings.effectiveShowCalendarWeekNumbers {
-            weekItems.append("KW")
-        }
-        if settings.effectiveShowCalendarWeekHours {
-            weekItems.append("W-Std")
-        }
-        if settings.effectiveShowCalendarWeekPay {
-            weekItems.append("W-Geld")
-        }
-        let weekSuffix = weekItems.isEmpty ? "" : " · \(weekItems.joined(separator: "+"))"
-        if mode == .hours {
-            return "\(mode.label) (\(settings.effectiveCalendarHoursBreakMode.label)) · \(formatMinute(minMinute))-\(formatMinute(maxMinute))\(weekSuffix)"
-        }
-        return "\(mode.label) · \(formatMinute(minMinute))-\(formatMinute(maxMinute))\(weekSuffix)"
-    }
-
-    private var holidaySummary: String {
-        let countryCode = settings.holidayCountryCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let country = countryCode.isEmpty ? "DE" : countryCode
-        let subdivision = settings.holidaySubdivisionCode ?? "alle Regionen"
-        let selectedDayCount = (1...7).filter { settings.isPaidHolidayWeekday(weekday: $0) }.count
-        let autoShiftSuffix = selectedDayCount == 0 ? " · keine Auto-Feiertagsschicht" : " · Auto-Feiertag an \(selectedDayCount) Tagen"
-        return "\(country) · \(subdivision)\(autoShiftSuffix)"
-    }
-
-    private var appInfoSummary: String {
-        let info = AppInfoSnapshot.current
-        return "\(info.developerName) · \(info.versionBuild)"
-    }
-
-    private var shiftShortcutSummary: String {
-        //let first = summaryLabelForShiftShortcut(raw: settings.shiftShortcut1, index: 0, name: settings.shiftShortcutName1 ?? "")
-       // let second = summaryLabelForShiftShortcut(raw: settings.shiftShortcut2, index: 1, name: settings.shiftShortcutName2 ?? "")
-        //let third = summaryLabelForShiftShortcut(raw: settings.shiftShortcut3, index: 2, name: settings.shiftShortcutName3 ?? "")
-        //return "\(first) · \(second) · \(third)"
-        return "Shortcuts für Schichten bearbeiten"
+    private var appleCalendarSubtitle: String {
+        appleCalendarSync.isEnabled
+            ? "Automatischer Export ist aktiv"
+            : "Schichten in Apple Kalender exportieren"
     }
 
     private func resetLocalAppData() {
@@ -282,6 +206,7 @@ struct SettingsTabView: View {
         clearLocalEntities(of: DayEntry.self)
         clearLocalEntities(of: HolidayCalendarDay.self)
         clearLocalEntities(of: NetWageMonthConfig.self)
+        LocalTipEntryStore.shared.resetAll()
 
         if let bundleID = Bundle.main.bundleIdentifier {
             UserDefaults.standard.removePersistentDomain(forName: bundleID)
@@ -493,6 +418,47 @@ private struct NetDefaultsSettingsView: View {
         bonusTexts = bonusTexts.map { formatForDisplay(from: $0) ?? $0 }
 
         Task { try? await cloudKitService.saveSettings(settings) }
+    }
+}
+
+private struct TipsSettingsView: View {
+    @EnvironmentObject private var cloudKitService: CloudKitService
+    @Binding var settings: Settings
+
+    var body: some View {
+        Form {
+            Section(
+                header: Text("Trinkgeld"),
+                footer: Text("Steuert, ob der Trinkgeld-Button im Kalender erscheint und ob er den Monatsbetrag anzeigt.")
+            ) {
+                Toggle("Trinkgeld anzeigen", isOn: showTipsButtonBinding)
+
+                if settings.effectiveShowTipsButton {
+                    Toggle("Monatsbetrag im Button", isOn: showTipsButtonAmountBinding)
+                }
+            }
+        }
+        .navigationTitle("Trinkgeld")
+    }
+
+    private var showTipsButtonBinding: Binding<Bool> {
+        Binding(
+            get: { settings.effectiveShowTipsButton },
+            set: {
+                settings.showTipsButton = $0
+                Task { try? await cloudKitService.saveSettings(settings) }
+            }
+        )
+    }
+
+    private var showTipsButtonAmountBinding: Binding<Bool> {
+        Binding(
+            get: { settings.effectiveShowTipsButtonAmount },
+            set: {
+                settings.showTipsButtonAmount = $0
+                Task { try? await cloudKitService.saveSettings(settings) }
+            }
+        )
     }
 }
 
@@ -822,7 +788,7 @@ private struct AppearanceSettingsView: View {
     }
 }
 
-private struct CalendarTimelineSettingsView: View {
+private struct CalendarSettingsView: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
     @Binding var settings: Settings
 
@@ -846,30 +812,26 @@ private struct CalendarTimelineSettingsView: View {
                     .pickerStyle(.segmented)
                 }
 
+                Picker("Monatsübersicht", selection: calendarSummaryDisplayModeBinding) {
+                    ForEach(CalendarSummaryDisplayMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
                 Toggle("Kalenderwochen", isOn: showCalendarWeekNumbersBinding)
                 Toggle("Wochenstunden", isOn: showCalendarWeekHoursBinding)
                 Toggle("Wochenverdienst", isOn: showCalendarWeekPayBinding)
             }
 
-            Section(header: Text("Timeline-Zeitfenster"),
-            footer: Text("Begrenzt den sichtbaren Tagesbereich in der Timeline.")){
-                minuteWindowControl(
-                    title: "Früheste Zeit",
-                    value: timelineMinBinding,
-                    step: 15,
-                    lower: 0,
-                    upper: max(0, timelineMaxBinding.wrappedValue - 60)
-                )
-                minuteWindowControl(
-                    title: "Späteste Zeit",
-                    value: timelineMaxBinding,
-                    step: 15,
-                    lower: min(24 * 60, timelineMinBinding.wrappedValue + 60),
-                    upper: 24 * 60
-                )
+            Section(
+                header: Text("Live Activity"),
+                footer: Text("Wenn aktiv, startet PayScope eine Live Activity für den aktuellen Arbeitstag.")
+            ) {
+                Toggle("Zeige Live Activity", isOn: showLiveActivityBinding)
             }
         }
-        .navigationTitle("Kalender & Timeline")
+        .navigationTitle("Kalender")
     }
 
     private var calendarDisplayModeBinding: Binding<CalendarCellDisplayMode> {
@@ -882,23 +844,21 @@ private struct CalendarTimelineSettingsView: View {
         )
     }
 
-    private var timelineMinBinding: Binding<Int> {
-        Binding(
-            get: { settings.timelineMinMinute ?? 6 * 60 },
-            set: { newValue in
-                let clamped = max(0, min(newValue, 23 * 60))
-                let currentMax = settings.timelineMaxMinute ?? 22 * 60
-                settings.timelineMinMinute = min(clamped, currentMax - 60)
-                Task { try? await cloudKitService.saveSettings(settings) }
-            }
-        )
-    }
-
     private var calendarHoursBreakModeBinding: Binding<CalendarHoursBreakMode> {
         Binding(
             get: { settings.effectiveCalendarHoursBreakMode },
             set: {
                 settings.calendarHoursBreakMode = $0
+                Task { try? await cloudKitService.saveSettings(settings) }
+            }
+        )
+    }
+
+    private var calendarSummaryDisplayModeBinding: Binding<CalendarSummaryDisplayMode> {
+        Binding(
+            get: { settings.effectiveCalendarSummaryDisplayMode },
+            set: {
+                settings.calendarSummaryDisplayMode = $0
                 Task { try? await cloudKitService.saveSettings(settings) }
             }
         )
@@ -934,47 +894,14 @@ private struct CalendarTimelineSettingsView: View {
         )
     }
 
-    private var timelineMaxBinding: Binding<Int> {
+    private var showLiveActivityBinding: Binding<Bool> {
         Binding(
-            get: { settings.timelineMaxMinute ?? 22 * 60 },
-            set: { newValue in
-                let clamped = max(60, min(newValue, 24 * 60))
-                let currentMin = settings.timelineMinMinute ?? 6 * 60
-                settings.timelineMaxMinute = max(clamped, currentMin + 60)
+            get: { settings.effectiveShowLiveActivity },
+            set: {
+                settings.showLiveActivity = $0
                 Task { try? await cloudKitService.saveSettings(settings) }
             }
         )
-    }
-
-    @ViewBuilder
-    private func minuteWindowControl(
-        title: String,
-        value: Binding<Int>,
-        step: Int,
-        lower: Int,
-        upper: Int
-    ) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Button {
-                value.wrappedValue = max(lower, value.wrappedValue - step)
-            } label: {
-                Image(systemName: "minus.circle")
-            }
-            .buttonStyle(.plain)
-
-            Text(formatMinute(value.wrappedValue))
-                .font(.subheadline.bold())
-                .frame(minWidth: 58)
-
-            Button {
-                value.wrappedValue = min(upper, value.wrappedValue + step)
-            } label: {
-                Image(systemName: "plus.circle")
-            }
-            .buttonStyle(.plain)
-        }
     }
 }
 
@@ -1164,10 +1091,16 @@ private struct ShiftShortcutsSettingsView: View {
 
     private func adjustDraftTime(isStart: Bool, deltaMinutes: Int) {
         if isStart {
-            draftStartMinute = max(0, min(24 * 60 - 15, draftStartMinute + deltaMinutes))
-            draftEndMinute = max(draftStartMinute + 15, draftEndMinute)
+            let duration = max(15, draftEndMinute - draftStartMinute)
+            let upperStart = min(ShiftTimeRange.minutesPerDay - 1, ShiftTimeRange.maxEndMinuteOffset - duration)
+            draftStartMinute = max(0, min(upperStart, draftStartMinute + deltaMinutes))
+            draftEndMinute = min(
+                ShiftTimeRange.maxEndMinuteOffset,
+                min(draftStartMinute + ShiftTimeRange.maxDurationMinutes, draftStartMinute + duration)
+            )
         } else {
-            draftEndMinute = max(draftStartMinute + 15, min(24 * 60, draftEndMinute + deltaMinutes))
+            let upperEnd = min(ShiftTimeRange.maxEndMinuteOffset, draftStartMinute + ShiftTimeRange.maxDurationMinutes)
+            draftEndMinute = max(draftStartMinute + 15, min(upperEnd, draftEndMinute + deltaMinutes))
         }
     }
 
@@ -1392,13 +1325,169 @@ private struct HolidayImportSettingsView: View {
     }
 }
 
+private struct AppleCalendarSettingsView: View {
+    @ObservedObject private var syncService = AppleCalendarSyncService.shared
+    let settings: Settings
+    @State private var showRemoveConfirmation = false
+
+    var body: some View {
+        Form {
+            Section(
+                header: Text("Apple Kalender"),
+                footer: Text("PayScope erstellt einen eigenen Kalender und aktualisiert Schichten beim Speichern, Importieren und Löschen.")
+            ) {
+                Toggle("Automatisch exportieren", isOn: calendarSyncBinding)
+                    .disabled(syncService.isSyncing)
+
+                LabeledContent("Status", value: syncService.authorizationStatusLabel)
+                LabeledContent("Kalender", value: syncService.calendarDisplayName)
+            }
+
+            Section(
+                header: Text("Kalenderfarbe"),
+                footer: Text("Die Farbe wird auf den von PayScope angelegten Apple Kalender angewendet.")
+            ) {
+                Picker("Farbe", selection: calendarAccentBinding) {
+                    ForEach(ThemeAccent.allCases) { accent in
+                        HStack {
+                            Circle()
+                                .fill(accent.color)
+                                .frame(width: 12, height: 12)
+                            Text(accent.label)
+                        }
+                        .tag(accent)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            Section(
+                header: Text("Eintragstypen"),
+                footer: Text("Nur aktivierte Kategorien werden in den Apple Kalender übernommen.")
+            ) {
+                ForEach(DayType.allCases) { type in
+                    Toggle(isOn: includedTypeBinding(for: type)) {
+                        Label(type.label, systemImage: type.icon)
+                    }
+                    .disabled(syncService.isSyncing)
+                }
+            }
+
+            Section("Synchronisieren") {
+                Button {
+                    Task {
+                        await exportAllLocalShifts()
+                    }
+                } label: {
+                    Label("Alle lokalen Schichten exportieren", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(!syncService.isEnabled || syncService.isSyncing)
+
+                Button(role: .destructive) {
+                    showRemoveConfirmation = true
+                } label: {
+                    Label("Exportierte Einträge entfernen", systemImage: "trash")
+                }
+                .disabled(syncService.isSyncing)
+
+                if syncService.isSyncing {
+                    ProgressView("Kalender wird aktualisiert...")
+                }
+
+                if let lastSyncSummary = syncService.lastSyncSummary {
+                    Text(lastSyncSummary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let lastErrorMessage = syncService.lastErrorMessage {
+                    Text(lastErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+        .navigationTitle("Apple Kalender")
+        .task {
+            syncService.refreshAuthorizationStatus()
+        }
+        .confirmationDialog(
+            "Exportierte PayScope-Termine entfernen?",
+            isPresented: $showRemoveConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Entfernen", role: .destructive) {
+                Task {
+                    do {
+                        try await syncService.removeAllExportedEvents()
+                    } catch {
+                        syncService.refreshAuthorizationStatus()
+                    }
+                }
+            }
+            Button("Abbrechen", role: .cancel) { }
+        } message: {
+            Text("Entfernt nur Termine, die PayScope im Apple Kalender angelegt hat. Deine Schichten in PayScope bleiben erhalten.")
+        }
+    }
+
+    private var calendarSyncBinding: Binding<Bool> {
+        Binding(
+            get: { syncService.isEnabled },
+            set: { newValue in
+                if newValue {
+                    Task {
+                        do {
+                            try await syncService.enableAndSync(entries: LocalDayEntryStore.shared.loadAll(), settings: settings)
+                        } catch {
+                        }
+                    }
+                } else {
+                    syncService.disableSync()
+                }
+            }
+        )
+    }
+
+    private var calendarAccentBinding: Binding<ThemeAccent> {
+        Binding(
+            get: { syncService.calendarAccent },
+            set: { accent in
+                Task {
+                    await syncService.setCalendarAccent(accent)
+                }
+            }
+        )
+    }
+
+    private func includedTypeBinding(for type: DayType) -> Binding<Bool> {
+        Binding(
+            get: { syncService.includedEntryTypes.contains(type) },
+            set: { isIncluded in
+                Task {
+                    await syncService.setIncludedEntryType(
+                        type,
+                        isIncluded: isIncluded,
+                        entries: LocalDayEntryStore.shared.loadAll(),
+                        settings: settings
+                    )
+                }
+            }
+        )
+    }
+
+    private func exportAllLocalShifts() async {
+        await syncService.sync(entries: LocalDayEntryStore.shared.loadAll(), settings: settings)
+    }
+}
+
 private struct ExportSettingsView: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
     @Binding var settings: Settings
 
     @State private var exportMonthNumber = Calendar.current.component(.month, from: Date())
     @State private var exportYear = Calendar.current.component(.year, from: Date())
-    @State private var csvPayload = ""
+    @State private var shareItems: [Any] = []
     @State private var showShare = false
     @State private var showFileImporter = false
     @State private var showImportSheet = false
@@ -1407,16 +1496,25 @@ private struct ExportSettingsView: View {
     @State private var importInfoMessage: String?
     @State private var importErrorMessage: String?
     @State private var isSavingImportRows = false
+    @State private var isPreparingExport = false
+    @State private var exportErrorMessage: String?
 
-    private let exporter = CSVExporter()
+    private let csvExporter = CSVExporter()
+    private let textExporter = ShiftTextExporter()
+    private let pdfExporter = ShiftPDFExporter()
+    private static let germanMonthSymbols: [String] = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "de_DE")
+        return calendar.monthSymbols
+    }()
 
     var body: some View {
         Form {
-            Section(header: Text("CSV-Export"),footer:Text("Der Export enthält alle Tage des gewählten Monats inklusive Kategorien und Zeiten.")) {
+            Section(header: Text("Export"), footer: Text("Der Export enthält alle Tage des gewählten Monats inklusive Kategorien, Zeiten, Summen und Trinkgeld.")) {
                 HStack {
                     Picker("Monat", selection: $exportMonthNumber) {
                         ForEach(1...12, id: \.self) { month in
-                            Text(Calendar.current.monthSymbols[month - 1]).tag(month)
+                            Text(Self.germanMonthSymbols[month - 1]).tag(month)
                         }
                     }
                     Picker("Jahr", selection: $exportYear) {
@@ -1428,12 +1526,33 @@ private struct ExportSettingsView: View {
 
                 Button("CSV erstellen") {
                     Task {
-                        let start = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: selectedExportMonthDate)) ?? selectedExportMonthDate
-                        let end = Calendar.current.date(byAdding: .month, value: 1, to: start)?.addingTimeInterval(-1) ?? Date()
-                        let fetched = (try? await cloudKitService.fetchDayEntries(in: DateInterval(start: start, end: end))) ?? []
-                        csvPayload = exporter.csvForMonth(entries: fetched, month: selectedExportMonthDate, settings: settings)
-                        showShare = !csvPayload.isEmpty
+                        await shareCSVExport()
                     }
+                }
+                .disabled(isPreparingExport)
+
+                Button("Text exportieren") {
+                    Task {
+                        await shareTextExport()
+                    }
+                }
+                .disabled(isPreparingExport)
+
+                Button("PDF exportieren") {
+                    Task {
+                        await sharePDFExport()
+                    }
+                }
+                .disabled(isPreparingExport)
+
+                if isPreparingExport {
+                    ProgressView()
+                }
+
+                if let exportErrorMessage {
+                    Text(exportErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
                 }
             }
 
@@ -1455,9 +1574,9 @@ private struct ExportSettingsView: View {
                 }
             }
         }
-        .navigationTitle("CSV-Export")
+        .navigationTitle("Export")
         .sheet(isPresented: $showShare) {
-            ShareSheet(items: [csvPayload])
+            ShareSheet(items: shareItems)
         }
         .fileImporter(
             isPresented: $showFileImporter,
@@ -1482,6 +1601,143 @@ private struct ExportSettingsView: View {
     private var selectedExportMonthDate: Date {
         let comps = DateComponents(year: exportYear, month: exportMonthNumber, day: 1)
         return Calendar.current.date(from: comps) ?? Date()
+    }
+
+    private var selectedExportInterval: DateInterval {
+        let start = selectedExportMonthDate.startOfMonthLocal()
+        let end = Calendar.current.date(byAdding: .month, value: 1, to: start)?.addingTimeInterval(-1) ?? start
+        return DateInterval(start: start, end: end)
+    }
+
+    private var selectedExportLookupInterval: DateInterval {
+        let exportInterval = selectedExportInterval
+        let lookbackDays = max(1, settings.vacationLookbackCount) * 7
+        let start = Calendar.current.date(
+            byAdding: .day,
+            value: -lookbackDays,
+            to: exportInterval.start
+        ) ?? exportInterval.start.addingTimeInterval(TimeInterval(-lookbackDays * 24 * 60 * 60))
+        return DateInterval(start: start.startOfDayLocal(), end: exportInterval.end)
+    }
+
+    @MainActor
+    private func shareCSVExport() async {
+        await prepareShare {
+            let data = await loadExportData()
+            let payload = csvExporter.csvForMonth(entries: data.entries, month: selectedExportMonthDate, settings: settings)
+            return payload.isEmpty ? [] : [payload]
+        }
+    }
+
+    @MainActor
+    private func shareTextExport() async {
+        await prepareShare {
+            let data = await loadExportData()
+            let payload = textExporter.textForMonth(
+                entries: data.entries,
+                tips: data.tips,
+                month: selectedExportMonthDate,
+                settings: settings
+            )
+            return [payload]
+        }
+    }
+
+    @MainActor
+    private func sharePDFExport() async {
+        await prepareShare {
+            let data = await loadExportData()
+            let url = try pdfExporter.pdfURLForMonth(
+                entries: data.entries,
+                tips: data.tips,
+                month: selectedExportMonthDate,
+                settings: settings
+            )
+            return [url]
+        }
+    }
+
+    @MainActor
+    private func prepareShare(_ builder: @escaping () async throws -> [Any]) async {
+        isPreparingExport = true
+        exportErrorMessage = nil
+        defer { isPreparingExport = false }
+
+        do {
+            let items = try await builder()
+            shareItems = items
+            showShare = !items.isEmpty
+        } catch {
+            exportErrorMessage = "Export fehlgeschlagen: \(error.localizedDescription)"
+        }
+    }
+
+    private func loadExportData() async -> (entries: [DayEntry], tips: [TipEntry]) {
+        let interval = selectedExportInterval
+        let lookupInterval = selectedExportLookupInterval
+        let localEntries = LocalDayEntryStore.shared.loadAll(in: lookupInterval)
+        let localTips = LocalTipEntryStore.shared.loadAll(in: interval)
+        let deletedDaysByKey = Dictionary(
+            LocalDayEntryStore.shared.loadDeletionTombstones().map { (dayKey($0.date), $0.lastModified) },
+            uniquingKeysWith: { current, incoming in incoming > current ? incoming : current }
+        )
+        let deletedTipsByID = Dictionary(
+            LocalTipEntryStore.shared.loadDeletionTombstones().map { ($0.id, $0.lastModified) },
+            uniquingKeysWith: { current, incoming in incoming > current ? incoming : current }
+        )
+        let remoteEntries = ((try? await cloudKitService.fetchDayEntries(in: lookupInterval)) ?? []).filter { entry in
+            guard let deletedAt = deletedDaysByKey[dayKey(entry.date)] else { return true }
+            return deletedAt < entry.updatedAt
+        }
+        let remoteTips = ((try? await cloudKitService.fetchTipEntries(in: interval)) ?? []).filter { tip in
+            guard let deletedAt = deletedTipsByID[tip.id] else { return true }
+            return deletedAt < tip.updatedAt
+        }
+
+        if !remoteEntries.isEmpty {
+            LocalDayEntryStore.shared.upsertMany(remoteEntries, notify: false)
+        }
+        if !remoteTips.isEmpty {
+            LocalTipEntryStore.shared.upsertMany(remoteTips)
+        }
+
+        return (
+            entries: mergeEntriesByLocalDayKeepingNewest(local: localEntries, remote: remoteEntries),
+            tips: mergeTipEntriesKeepingNewest(local: localTips, remote: remoteTips)
+        )
+    }
+
+    private func mergeEntriesByLocalDayKeepingNewest(local: [DayEntry], remote: [DayEntry]) -> [DayEntry] {
+        let byDay = Dictionary(
+            (local + remote).map { (dayKey($0.date), $0) },
+            uniquingKeysWith: { existing, candidate in
+                candidate.updatedAt > existing.updatedAt ? candidate : existing
+            }
+        )
+        return byDay.values.sorted { $0.date < $1.date }
+    }
+
+    private func mergeTipEntriesKeepingNewest(local: [TipEntry], remote: [TipEntry]) -> [TipEntry] {
+        let byID = Dictionary(
+            (local + remote).map { ($0.id, $0) },
+            uniquingKeysWith: { existing, candidate in
+                candidate.updatedAt > existing.updatedAt ? candidate : existing
+            }
+        )
+        return byID.values.sorted {
+            if $0.date != $1.date {
+                return $0.date < $1.date
+            }
+            return $0.updatedAt < $1.updatedAt
+        }
+    }
+
+    private func dayKey(_ date: Date) -> String {
+        let day = date.startOfDayLocal()
+        let year = Calendar.current.component(.year, from: day)
+        let month = Calendar.current.component(.month, from: day)
+        let dayOfMonth = Calendar.current.component(.day, from: day)
+        return String(format: "%04d-%02d-%02d", year, month, dayOfMonth)
     }
 
     private func handleFileImportSelection(_ result: Result<[URL], Error>) {
@@ -1534,6 +1790,7 @@ private struct ExportSettingsView: View {
 
         var saved = 0
         var skipped = skippedImportRows
+        var persistedEntries: [DayEntry] = []
 
         for row in importedRows {
             guard row.hasValidTimeRange else {
@@ -1544,7 +1801,7 @@ private struct ExportSettingsView: View {
             let dayStart = row.date.startOfDayLocal()
             guard
                 let start = Calendar.current.date(byAdding: .minute, value: row.startMinute, to: dayStart),
-                let end = Calendar.current.date(byAdding: .minute, value: row.endMinute, to: dayStart),
+                let end = Calendar.current.date(byAdding: .minute, value: row.endMinuteOffset, to: dayStart),
                 end > start
             else {
                 skipped += 1
@@ -1576,6 +1833,7 @@ private struct ExportSettingsView: View {
 
             do {
                 try await cloudKitService.saveDayEntry(entry)
+                persistedEntries.append(entry)
                 saved += 1
             } catch {
                 importErrorMessage = "Speichern fehlgeschlagen: \(error.localizedDescription)"
@@ -1583,7 +1841,12 @@ private struct ExportSettingsView: View {
             }
         }
 
-        NotificationCenter.default.post(name: .dayEntriesDidChange, object: nil)
+        LocalDayEntryStore.shared.upsertMany(persistedEntries)
+        await AppleCalendarSyncService.shared.sync(
+            entries: persistedEntries,
+            allEntries: LocalDayEntryStore.shared.loadAll(),
+            settings: settings
+        )
         importInfoMessage = "\(saved) Schichten gespeichert" + (skipped > 0 ? " · \(skipped) übersprungen" : "")
         importErrorMessage = nil
         return true
@@ -1643,7 +1906,7 @@ private struct ShiftCSVImportSheet: View {
 
                             DatePicker(
                                 "Ende",
-                                selection: minuteBinding(minute: $row.endMinute, date: $row.date),
+                                selection: endMinuteBinding(row: $row),
                                 displayedComponents: .hourAndMinute
                             )
 
@@ -1651,11 +1914,12 @@ private struct ShiftCSVImportSheet: View {
                         } else {
                             LabeledContent("Datum", value: dayText(row.date))
                             LabeledContent("Start", value: minuteText(row.startMinute))
-                            LabeledContent("Ende", value: minuteText(row.endMinute))
+                            LabeledContent("Ende", value: endMinuteText(row))
                             LabeledContent("Pause", value: "\(row.breakMinutes) min")
                         }
                     }
                     .padding(.vertical, 4)
+                    .foregroundStyle(row.hasValidTimeRange ? .primary : .secondary)
                 }
             }
             .navigationTitle("Schichten importieren")
@@ -1697,6 +1961,11 @@ private struct ShiftCSVImportSheet: View {
         return String(format: "%02d:%02d", hour, minutePart)
     }
 
+    private func endMinuteText(_ row: ShiftCSVImportRowDraft) -> String {
+        let suffix = row.effectiveEndDayOffset > 0 ? " (+1)" : ""
+        return "\(minuteText(row.endMinute))\(suffix)"
+    }
+
     private func minuteBinding(minute: Binding<Int>, date: Binding<Date>) -> Binding<Date> {
         Binding(
             get: {
@@ -1711,8 +1980,26 @@ private struct ShiftCSVImportSheet: View {
         )
     }
 
+    private func endMinuteBinding(row: Binding<ShiftCSVImportRowDraft>) -> Binding<Date> {
+        Binding(
+            get: {
+                let dayStart = row.wrappedValue.date.startOfDayLocal()
+                return Calendar.current.date(byAdding: .minute, value: row.wrappedValue.endMinuteOffset, to: dayStart) ?? dayStart
+            },
+            set: { newValue in
+                let dayStart = row.wrappedValue.date.startOfDayLocal()
+                let offset = Calendar.current.dateComponents([.minute], from: dayStart, to: newValue).minute
+                    ?? Int(newValue.timeIntervalSince(dayStart) / 60)
+                let clamped = max(0, min(ShiftTimeRange.maxEndMinuteOffset, offset))
+                row.wrappedValue.endMinute = ShiftTimeRange.normalizedClockMinute(clamped)
+                row.wrappedValue.endDayOffset = clamped >= ShiftTimeRange.minutesPerDay ? 1 : 0
+            }
+        )
+    }
+
     private var dayFormatter: DateFormatter {
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter
@@ -1861,19 +2148,13 @@ private func parseShiftShortcutRange(raw: String) -> ShiftShortcutRange? {
 }
 
 private func clampShiftShortcutRange(_ range: ShiftShortcutRange) -> ShiftShortcutRange {
-    let clampedStart = max(0, min(24 * 60 - 15, range.startMinute))
-    let clampedEnd = max(clampedStart + 15, min(24 * 60, range.endMinute))
+    let clampedStart = max(0, min(ShiftTimeRange.minutesPerDay - 1, range.startMinute))
+    let normalizedEnd = range.endMinute <= clampedStart
+        ? range.endMinute + ShiftTimeRange.minutesPerDay
+        : range.endMinute
+    let upperEnd = min(ShiftTimeRange.maxEndMinuteOffset, clampedStart + ShiftTimeRange.maxDurationMinutes)
+    let clampedEnd = max(clampedStart + 15, min(upperEnd, normalizedEnd))
     return ShiftShortcutRange(startMinute: clampedStart, endMinute: clampedEnd)
-}
-
-private func summaryLabelForShiftShortcut(raw: String, index: Int, name: String) -> String {
-    let range = parseShiftShortcutRange(raw: raw) ?? defaultShiftShortcutRange(index: index)
-    let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    let rangeText = "\(formatMinute(range.startMinute))-\(formatMinute(range.endMinute))"
-    if trimmedName.isEmpty {
-        return rangeText
-    }
-    return "\(trimmedName) \(rangeText)"
 }
 
 private func parseMoneyToCents(_ text: String) -> Int? {
@@ -1893,9 +2174,7 @@ private func normalizeHolidayCode(_ value: String) -> String {
 }
 
 private func formatMinute(_ minute: Int) -> String {
-    let h = minute / 60
-    let m = minute % 60
-    return String(format: "%02d:%02d", h, m)
+    ShiftTimeRange.displayMinute(minute)
 }
 
 private extension String {

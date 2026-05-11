@@ -13,6 +13,7 @@ enum CloudKitReadRecordKeys {
         case shiftStart
         case shiftEnd
         case breakSeconds
+        case alwaysApplyFifteenMinuteBuffer
     }
 
     enum TimeSegment: String {
@@ -44,8 +45,7 @@ enum CloudKitReadRecordKeys {
         case showCalendarWeekNumbers
         case showCalendarWeekHours
         case showCalendarWeekPay
-        case timelineMinMinute
-        case timelineMaxMinute
+        case alwaysApplyFifteenMinuteBuffer
         case holidayCountryCode
         case holidaySubdivisionCode
         case autoSetHolidayCategory
@@ -91,6 +91,7 @@ struct CloudSnapshot: Codable, Equatable {
         let shiftStart: Date?
         let shiftEnd: Date?
         let breakSeconds: Int?
+        let alwaysApplyFifteenMinuteBuffer: Bool?
     }
 
     struct SettingsPayload: Codable, Equatable {
@@ -114,8 +115,7 @@ struct CloudSnapshot: Codable, Equatable {
         let showCalendarWeekNumbers: Bool?
         let showCalendarWeekHours: Bool?
         let showCalendarWeekPay: Bool?
-        let timelineMinMinute: Int?
-        let timelineMaxMinute: Int?
+        let alwaysApplyFifteenMinuteBuffer: Bool?
         let holidayCountryCode: String?
         let holidaySubdivisionCode: String?
         let autoSetHolidayCategory: Bool?
@@ -276,7 +276,7 @@ actor CloudKitReadService {
             guard
                 let date = record[CloudKitReadRecordKeys.DayEntry.date.rawValue] as? Date,
                 let typeRaw = record[CloudKitReadRecordKeys.DayEntry.dayType.rawValue] as? String,
-                let type = DayType(rawValue: typeRaw)
+                let type = DayType.fromPersistedRaw(typeRaw)
             else {
                 continue
             }
@@ -285,23 +285,56 @@ actor CloudKitReadService {
                 ?? record.modificationDate
                 ?? date
             let notes = record[CloudKitReadRecordKeys.DayEntry.notes.rawValue] as? String ?? ""
-            let manualWorkedSeconds = (record[CloudKitReadRecordKeys.DayEntry.manualWorkedSeconds.rawValue] as? NSNumber)?.intValue
-            let creditedOverrideSeconds = (record[CloudKitReadRecordKeys.DayEntry.creditedOverrideSeconds.rawValue] as? NSNumber)?.intValue
+            var manualWorkedSeconds = (record[CloudKitReadRecordKeys.DayEntry.manualWorkedSeconds.rawValue] as? NSNumber)?.intValue
+            var creditedOverrideSeconds = (record[CloudKitReadRecordKeys.DayEntry.creditedOverrideSeconds.rawValue] as? NSNumber)?.intValue
+            let alwaysApplyFifteenMinuteBuffer = (record[
+                CloudKitReadRecordKeys.DayEntry.alwaysApplyFifteenMinuteBuffer.rawValue
+            ] as? NSNumber)?.boolValue
 
             var shiftStart = record[CloudKitReadRecordKeys.DayEntry.shiftStart.rawValue] as? Date
             var shiftEnd = record[CloudKitReadRecordKeys.DayEntry.shiftEnd.rawValue] as? Date
             var breakSeconds = (record[CloudKitReadRecordKeys.DayEntry.breakSeconds.rawValue] as? NSNumber)?.intValue
 
-            if shiftStart == nil || shiftEnd == nil {
-                let key = dayKey(for: date)
-                if let segments = segmentsByDayKey[key], !segments.isEmpty {
-                    let starts = segments.map(\.start)
-                    let ends = segments.map(\.end)
-                    shiftStart = starts.min()
-                    shiftEnd = ends.max()
-                    breakSeconds = segments.reduce(0) { $0 + max(0, $1.breakSeconds) }
+            switch type {
+            case .work:
+                // Only work entries should recover legacy segment-based shift fields.
+                if shiftStart == nil || shiftEnd == nil {
+                    let key = dayKey(for: date)
+                    if let segments = segmentsByDayKey[key], !segments.isEmpty {
+                        let starts = segments.map(\.start)
+                        let ends = segments.map(\.end)
+                        shiftStart = starts.min()
+                        shiftEnd = ends.max()
+                        breakSeconds = segments.reduce(0) { $0 + max(0, $1.breakSeconds) }
+                    }
                 }
+                manualWorkedSeconds = nil
+                creditedOverrideSeconds = nil
+
+            case .manual:
+                // Manual entries should carry duration only, without shift fields.
+                if manualWorkedSeconds == nil,
+                   let start = shiftStart,
+                   let end = shiftEnd,
+                   end > start {
+                    let rawSeconds = Int(end.timeIntervalSince(start))
+                    let pause = max(0, breakSeconds ?? 0)
+                    manualWorkedSeconds = max(0, rawSeconds - pause)
+                }
+                shiftStart = nil
+                shiftEnd = nil
+                breakSeconds = nil
+                creditedOverrideSeconds = nil
+
+            case .vacation, .holiday, .sick:
+                // Credited entries should not be interpreted as shift records.
+                shiftStart = nil
+                shiftEnd = nil
+                breakSeconds = nil
             }
+
+            manualWorkedSeconds = manualWorkedSeconds.map { max(0, $0) }
+            creditedOverrideSeconds = creditedOverrideSeconds.map { max(0, $0) }
 
             let payload = CloudSnapshot.DayEntryPayload(
                 date: date,
@@ -312,7 +345,8 @@ actor CloudKitReadService {
                 creditedOverrideSeconds: creditedOverrideSeconds,
                 shiftStart: shiftStart,
                 shiftEnd: shiftEnd,
-                breakSeconds: breakSeconds
+                breakSeconds: breakSeconds,
+                alwaysApplyFifteenMinuteBuffer: alwaysApplyFifteenMinuteBuffer
             )
             let key = dayKey(for: date)
             let existingUpdatedAt = latestByUTCDayKey[key]?.updatedAt ?? .distantPast
@@ -541,8 +575,7 @@ actor CloudKitReadService {
         let showCalendarWeekNumbers = (record[CloudKitReadRecordKeys.Settings.showCalendarWeekNumbers.rawValue] as? NSNumber)?.boolValue
         let showCalendarWeekHours = (record[CloudKitReadRecordKeys.Settings.showCalendarWeekHours.rawValue] as? NSNumber)?.boolValue
         let showCalendarWeekPay = (record[CloudKitReadRecordKeys.Settings.showCalendarWeekPay.rawValue] as? NSNumber)?.boolValue
-        let timelineMinMinute = (record[CloudKitReadRecordKeys.Settings.timelineMinMinute.rawValue] as? NSNumber)?.intValue
-        let timelineMaxMinute = (record[CloudKitReadRecordKeys.Settings.timelineMaxMinute.rawValue] as? NSNumber)?.intValue
+        let alwaysApplyFifteenMinuteBuffer = (record[CloudKitReadRecordKeys.Settings.alwaysApplyFifteenMinuteBuffer.rawValue] as? NSNumber)?.boolValue
         let holidayCountryCode = record[CloudKitReadRecordKeys.Settings.holidayCountryCode.rawValue] as? String
         let holidaySubdivisionCode = record[CloudKitReadRecordKeys.Settings.holidaySubdivisionCode.rawValue] as? String
         let autoSetHolidayCategory = (record[CloudKitReadRecordKeys.Settings.autoSetHolidayCategory.rawValue] as? NSNumber)?.boolValue
@@ -574,8 +607,7 @@ actor CloudKitReadService {
             showCalendarWeekNumbers: showCalendarWeekNumbers,
             showCalendarWeekHours: showCalendarWeekHours,
             showCalendarWeekPay: showCalendarWeekPay,
-            timelineMinMinute: timelineMinMinute,
-            timelineMaxMinute: timelineMaxMinute,
+            alwaysApplyFifteenMinuteBuffer: alwaysApplyFifteenMinuteBuffer,
             holidayCountryCode: holidayCountryCode,
             holidaySubdivisionCode: holidaySubdivisionCode,
             autoSetHolidayCategory: autoSetHolidayCategory,

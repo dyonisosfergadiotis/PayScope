@@ -15,6 +15,7 @@ enum CloudKitRecordKeys {
         case shiftStart
         case shiftEnd
         case breakSeconds
+        case alwaysApplyFifteenMinuteBuffer
     }
 
     enum TimeSegment: String {
@@ -43,11 +44,12 @@ enum CloudKitRecordKeys {
         case themeAccent
         case calendarCellDisplayMode
         case calendarHoursBreakMode
+        case calendarSummaryDisplayMode
         case showCalendarWeekNumbers
         case showCalendarWeekHours
         case showCalendarWeekPay
-        case timelineMinMinute
-        case timelineMaxMinute
+        case showLiveActivity
+        case alwaysApplyFifteenMinuteBuffer
         case holidayCountryCode
         case holidaySubdivisionCode
         case autoSetHolidayCategory
@@ -57,6 +59,8 @@ enum CloudKitRecordKeys {
         case netPensionPercent
         case netMonthlyAllowanceEuro
         case netBonusesCSV
+        case showTipsButton
+        case showTipsButtonAmount
         case shiftShortcut1
         case shiftShortcut2
         case shiftShortcut3
@@ -85,6 +89,14 @@ enum CloudKitRecordKeys {
         case pensionPercent
         case monthlyAllowanceEuro
         case bonusesCSV
+    }
+
+    enum TipEntry: String {
+        case type = "TipEntry"
+        case id
+        case date
+        case amountCents
+        case updatedAt
     }
 }
 
@@ -146,6 +158,73 @@ final class CloudKitService: ObservableObject {
         return CKRecord.ID(recordName: key)
     }
 
+    private func holidayRecordID(for key: String) -> CKRecord.ID {
+        CKRecord.ID(recordName: "holiday-\(key)")
+    }
+
+    private func tipEntryRecordID(for id: String) -> CKRecord.ID {
+        CKRecord.ID(recordName: "tip-\(id)")
+    }
+
+    private func normalizeHolidayCode(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private func normalizeHolidaySubdivisionCode(_ value: String?) -> String? {
+        guard let normalized = normalizeHolidayCode(value) else { return nil }
+        return normalized == "ALL" ? nil : normalized
+    }
+
+    private func deduplicateHolidayDays(_ days: [HolidayCalendarDay]) -> [HolidayCalendarDay] {
+        var seenKeys: Set<String> = []
+        var deduplicated: [HolidayCalendarDay] = []
+        deduplicated.reserveCapacity(days.count)
+
+        for day in days where seenKeys.insert(day.key).inserted {
+            deduplicated.append(day)
+        }
+        return deduplicated
+    }
+
+    private func normalizedHolidayDays(
+        _ days: [HolidayCalendarDay],
+        countryCode: String,
+        subdivisionCode: String?,
+        year: Int
+    ) -> [HolidayCalendarDay] {
+        deduplicateHolidayDays(days).map { day in
+            HolidayCalendarDay(
+                date: day.date,
+                localName: day.localName,
+                countryCode: countryCode,
+                subdivisionCode: subdivisionCode,
+                sourceYear: year
+            )
+        }
+    }
+
+    private func holidayKey(from record: CKRecord) -> String? {
+        guard
+            let date = record[CloudKitRecordKeys.HolidayCalendarDay.date.rawValue] as? Date,
+            let countryCode = normalizeHolidayCode(
+                record[CloudKitRecordKeys.HolidayCalendarDay.countryCode.rawValue] as? String
+            )
+        else {
+            return nil
+        }
+
+        let subdivisionCode = normalizeHolidaySubdivisionCode(
+            record[CloudKitRecordKeys.HolidayCalendarDay.subdivisionCode.rawValue] as? String
+        )
+        return HolidayCalendarDay.makeKey(
+            date: date,
+            countryCode: countryCode,
+            subdivisionCode: subdivisionCode
+        )
+    }
+
     private func queryRecords(_ query: CKQuery) async throws -> [CKRecord] {
         var all: [CKRecord] = []
         var page = try await privateDatabase.records(matching: query)
@@ -166,6 +245,51 @@ final class CloudKitService: ObservableObject {
         case .invalidArguments, .serverRejectedRequest, .partialFailure:
             let diagnostics = "\(ckError.localizedDescription) \(String(describing: ckError.userInfo))".lowercased()
             return diagnostics.contains("index") || diagnostics.contains("queryable") || diagnostics.contains("sort")
+        default:
+            return false
+        }
+    }
+
+    private func isLikelyMissingRecordTypeError(_ error: Error, recordType: String) -> Bool {
+        guard let ckError = error as? CKError else { return false }
+        switch ckError.code {
+        case .unknownItem, .invalidArguments, .serverRejectedRequest, .partialFailure:
+            let diagnostics = "\(ckError.localizedDescription) \(String(describing: ckError.userInfo))".lowercased()
+            let normalizedRecordType = recordType.lowercased()
+            return diagnostics.contains(normalizedRecordType) &&
+                (diagnostics.contains("record type") || diagnostics.contains("recordtype")) &&
+                (diagnostics.contains("not found") || diagnostics.contains("did not find") || diagnostics.contains("unknown"))
+        default:
+            return false
+        }
+    }
+
+    private enum SettingsWriteProfile {
+        case full
+        case compatibility
+    }
+
+    private func shouldRetrySettingsSaveInCompatibilityMode(_ error: Error) -> Bool {
+        guard let ckError = error as? CKError else { return false }
+        switch ckError.code {
+        case .invalidArguments, .serverRejectedRequest:
+            return true
+        case .partialFailure:
+            let diagnostics = "\(ckError.localizedDescription) \(String(describing: ckError.userInfo))".lowercased()
+            return diagnostics.contains("field") || diagnostics.contains("schema") || diagnostics.contains("record")
+        default:
+            return false
+        }
+    }
+
+    private func shouldRetryDayEntrySaveInCompatibilityMode(_ error: Error) -> Bool {
+        guard let ckError = error as? CKError else { return false }
+        switch ckError.code {
+        case .invalidArguments, .serverRejectedRequest:
+            return true
+        case .partialFailure:
+            let diagnostics = "\(ckError.localizedDescription) \(String(describing: ckError.userInfo))".lowercased()
+            return diagnostics.contains("field") || diagnostics.contains("schema") || diagnostics.contains("record")
         default:
             return false
         }
@@ -205,6 +329,26 @@ final class CloudKitService: ObservableObject {
         }
     }
 
+    private func recordIfExists(_ recordID: CKRecord.ID) async throws -> CKRecord? {
+        do {
+            return try await privateDatabase.record(for: recordID)
+        } catch let error as CKError where error.code == .unknownItem {
+            return nil
+        }
+    }
+
+    private func shouldDeleteDayEntryRecord(
+        _ record: CKRecord,
+        targetLocalDay: Date,
+        canonicalRecordName: String
+    ) -> Bool {
+        if let storedDate = record[CloudKitRecordKeys.DayEntry.date.rawValue] as? Date {
+            return storedDate.isSameLocalDay(as: targetLocalDay)
+        }
+        // Fallback for malformed legacy records without a date field.
+        return record.recordID.recordName == canonicalRecordName
+    }
+
     // MARK: - Account Status
 
     func checkAccountStatus() async throws -> CKAccountStatus {
@@ -214,57 +358,87 @@ final class CloudKitService: ObservableObject {
     // MARK: - Save Operations
 
     func saveDayEntry(_ dayEntry: DayEntry) async throws {
-        do {
-            dayEntry.updatedAt = Date()
-            // Use UTC-normalized day for deterministic record ID
-            let recordID = dayEntryRecordID(for: dayEntry.date)
-            let record: CKRecord
-            if let existing = try? await privateDatabase.record(for: recordID) {
-                record = existing
+        let updatedAt = dayEntry.updatedAt
+        // Use UTC-normalized day for deterministic record ID
+        let recordID = dayEntryRecordID(for: dayEntry.date)
+        let record: CKRecord
+        if let existing = try? await privateDatabase.record(for: recordID) {
+            record = existing
+        } else {
+            record = CKRecord(recordType: CloudKitRecordKeys.DayEntry.type.rawValue, recordID: recordID)
+        }
+
+        record[CloudKitRecordKeys.DayEntry.date.rawValue] = dayEntry.date.startOfDayUTC()
+        record[CloudKitRecordKeys.DayEntry.updatedAt.rawValue] = updatedAt as NSDate
+        record[CloudKitRecordKeys.DayEntry.dayType.rawValue] = dayEntry.type.rawValue
+        record[CloudKitRecordKeys.DayEntry.notes.rawValue] = dayEntry.notes
+
+        // Shift fields (single start/end/breakSeconds)
+        // We store only whole shifts now (no segments aggregation here)
+        switch dayEntry.type {
+        case .manual:
+            record[CloudKitRecordKeys.DayEntry.manualWorkedSeconds.rawValue] =
+                dayEntry.manualWorkedSeconds.map { NSNumber(value: max(0, $0)) }
+            record[CloudKitRecordKeys.DayEntry.creditedOverrideSeconds.rawValue] = nil
+            // Manual entries: only duration, no explicit shift times
+            record[CloudKitRecordKeys.DayEntry.shiftStart.rawValue] = nil
+            record[CloudKitRecordKeys.DayEntry.shiftEnd.rawValue] = nil
+            record[CloudKitRecordKeys.DayEntry.breakSeconds.rawValue] = nil
+            record[CloudKitRecordKeys.DayEntry.alwaysApplyFifteenMinuteBuffer.rawValue] = nil
+        case .vacation, .holiday, .sick:
+            record[CloudKitRecordKeys.DayEntry.manualWorkedSeconds.rawValue] =
+                dayEntry.manualWorkedSeconds.map { NSNumber(value: max(0, $0)) }
+            record[CloudKitRecordKeys.DayEntry.creditedOverrideSeconds.rawValue] =
+                dayEntry.creditedOverrideSeconds.map { NSNumber(value: max(0, $0)) }
+            // Credited types: value comes from rules/settings; no explicit shift times
+            record[CloudKitRecordKeys.DayEntry.shiftStart.rawValue] = nil
+            record[CloudKitRecordKeys.DayEntry.shiftEnd.rawValue] = nil
+            record[CloudKitRecordKeys.DayEntry.breakSeconds.rawValue] = nil
+            record[CloudKitRecordKeys.DayEntry.alwaysApplyFifteenMinuteBuffer.rawValue] = nil
+        case .work:
+            // Work entries use shift data; keep manual/credited fields empty to avoid stale carry-over.
+            record[CloudKitRecordKeys.DayEntry.manualWorkedSeconds.rawValue] = nil
+            record[CloudKitRecordKeys.DayEntry.creditedOverrideSeconds.rawValue] = nil
+            if let alwaysApply = dayEntry.alwaysApplyFifteenMinuteBuffer {
+                record[CloudKitRecordKeys.DayEntry.alwaysApplyFifteenMinuteBuffer.rawValue] = NSNumber(value: alwaysApply)
             } else {
-                record = CKRecord(recordType: CloudKitRecordKeys.DayEntry.type.rawValue, recordID: recordID)
+                record[CloudKitRecordKeys.DayEntry.alwaysApplyFifteenMinuteBuffer.rawValue] = nil
             }
-
-            record[CloudKitRecordKeys.DayEntry.date.rawValue] = dayEntry.date.startOfDayUTC()
-            record[CloudKitRecordKeys.DayEntry.updatedAt.rawValue] = dayEntry.updatedAt as NSDate
-            record[CloudKitRecordKeys.DayEntry.dayType.rawValue] = dayEntry.type.rawValue
-            record[CloudKitRecordKeys.DayEntry.notes.rawValue] = dayEntry.notes
-            record[CloudKitRecordKeys.DayEntry.manualWorkedSeconds.rawValue] = dayEntry.manualWorkedSeconds as NSNumber?
-            record[CloudKitRecordKeys.DayEntry.creditedOverrideSeconds.rawValue] = dayEntry.creditedOverrideSeconds as NSNumber?
-
-            // Shift fields (single start/end/breakSeconds)
-            // We store only whole shifts now (no segments aggregation here)
-            switch dayEntry.type {
-            case .manual:
-                // Manual entries: only duration, no explicit shift times
+            if let start = dayEntry.shiftStart, let end = dayEntry.shiftEnd, end > start {
+                let breakSecs = max(0, dayEntry.breakSeconds ?? 0)
+                record[CloudKitRecordKeys.DayEntry.shiftStart.rawValue] = start
+                record[CloudKitRecordKeys.DayEntry.shiftEnd.rawValue] = end
+                record[CloudKitRecordKeys.DayEntry.breakSeconds.rawValue] = NSNumber(value: breakSecs)
+            } else {
+                // Invalid or missing shift times: clear fields
                 record[CloudKitRecordKeys.DayEntry.shiftStart.rawValue] = nil
                 record[CloudKitRecordKeys.DayEntry.shiftEnd.rawValue] = nil
                 record[CloudKitRecordKeys.DayEntry.breakSeconds.rawValue] = nil
-            case .vacation, .holiday, .sick:
-                // Credited types: value comes from rules/settings; no explicit shift times
-                record[CloudKitRecordKeys.DayEntry.shiftStart.rawValue] = nil
-                record[CloudKitRecordKeys.DayEntry.shiftEnd.rawValue] = nil
-                record[CloudKitRecordKeys.DayEntry.breakSeconds.rawValue] = nil
-            case .work:
-                if let start = dayEntry.shiftStart, let end = dayEntry.shiftEnd, end > start {
-                    let breakSecs = max(0, dayEntry.breakSeconds ?? 0)
-                    record[CloudKitRecordKeys.DayEntry.shiftStart.rawValue] = start
-                    record[CloudKitRecordKeys.DayEntry.shiftEnd.rawValue] = end
-                    record[CloudKitRecordKeys.DayEntry.breakSeconds.rawValue] = NSNumber(value: breakSecs)
-                } else {
-                    // Invalid or missing shift times: clear fields
-                    record[CloudKitRecordKeys.DayEntry.shiftStart.rawValue] = nil
-                    record[CloudKitRecordKeys.DayEntry.shiftEnd.rawValue] = nil
-                    record[CloudKitRecordKeys.DayEntry.breakSeconds.rawValue] = nil
-                }
             }
+        }
 
+        do {
             _ = try await privateDatabase.save(record)
             Self.logger.debug("Upserted DayEntry for \(dayEntry.date, privacy: .public)")
             markSynced()
         } catch {
-            markSyncError(error)
-            throw error
+            guard shouldRetryDayEntrySaveInCompatibilityMode(error) else {
+                markSyncError(error)
+                throw error
+            }
+
+            do {
+                // Compatibility retry for environments where this field is not in the CloudKit schema yet.
+                record[CloudKitRecordKeys.DayEntry.alwaysApplyFifteenMinuteBuffer.rawValue] = nil
+                _ = try await privateDatabase.save(record)
+                Self.logger.warning(
+                    "DayEntry save succeeded with compatibility profile after initial error: \(String(describing: error), privacy: .public)"
+                )
+                markSynced()
+            } catch {
+                markSyncError(error)
+                throw error
+            }
         }
     }
 
@@ -370,11 +544,24 @@ final class CloudKitService: ObservableObject {
 
     func deleteDayEntry(on date: Date) async throws {
         do {
-            let dayStart = date.startOfDayLocal()
-            let dayEnd = dayStart.addingDays(1)
-            let candidateIDs = dayEntryRecordIDs(forLocalDay: date)
+            let targetLocalDay = date.startOfDayLocal()
+            let dayEnd = targetLocalDay.addingDays(1)
+            var utc = Calendar(identifier: .gregorian)
+            utc.timeZone = TimeZone(secondsFromGMT: 0)!
+            let localComps = Calendar.current.dateComponents([.year, .month, .day], from: targetLocalDay)
+            let canonicalUTCDate = utc.date(from: localComps) ?? targetLocalDay.startOfDayUTC()
+            let canonicalRecordName = dayEntryRecordID(for: canonicalUTCDate).recordName
+            let candidateIDs = dayEntryRecordIDs(forLocalDay: targetLocalDay)
 
             for recordID in candidateIDs {
+                guard let record = try await recordIfExists(recordID) else { continue }
+                guard shouldDeleteDayEntryRecord(
+                    record,
+                    targetLocalDay: targetLocalDay,
+                    canonicalRecordName: canonicalRecordName
+                ) else {
+                    continue
+                }
                 try await deleteRecordIfExists(recordID)
             }
 
@@ -382,7 +569,7 @@ final class CloudKitService: ObservableObject {
             do {
                 let predicate = NSPredicate(
                     format: "\(CloudKitRecordKeys.DayEntry.date.rawValue) >= %@ AND \(CloudKitRecordKeys.DayEntry.date.rawValue) < %@",
-                    dayStart as NSDate,
+                    targetLocalDay as NSDate,
                     dayEnd as NSDate
                 )
                 let query = CKQuery(recordType: CloudKitRecordKeys.DayEntry.type.rawValue, predicate: predicate)
@@ -397,7 +584,7 @@ final class CloudKitService: ObservableObject {
                 Self.logger.warning("Skipped legacy DayEntry cleanup query due to missing index. Error: \(String(describing: error), privacy: .public)")
             }
 
-            Self.logger.debug("Deleted DayEntry and TimeSegment records for \(dayStart, privacy: .public)")
+            Self.logger.debug("Deleted DayEntry and TimeSegment records for \(targetLocalDay, privacy: .public)")
             markSynced()
         } catch {
             markSyncError(error)
@@ -433,7 +620,7 @@ final class CloudKitService: ObservableObject {
         guard
             let date = record[CloudKitRecordKeys.DayEntry.date.rawValue] as? Date,
             let dayTypeString = record[CloudKitRecordKeys.DayEntry.dayType.rawValue] as? String,
-            let dayType = DayType(rawValue: dayTypeString)
+            let dayType = DayType.fromPersistedRaw(dayTypeString)
         else {
             return nil
         }
@@ -446,6 +633,9 @@ final class CloudKitService: ObservableObject {
         let creditedOverrideSeconds = (record[
             CloudKitRecordKeys.DayEntry.creditedOverrideSeconds.rawValue
         ] as? NSNumber)?.intValue
+        let alwaysApplyFifteenMinuteBuffer = (record[
+            CloudKitRecordKeys.DayEntry.alwaysApplyFifteenMinuteBuffer.rawValue
+        ] as? NSNumber)?.boolValue
 
         let entry = DayEntry(
             date: date,
@@ -454,7 +644,8 @@ final class CloudKitService: ObservableObject {
             notes: notes,
             segments: [],
             manualWorkedSeconds: manualWorkedSeconds,
-            creditedOverrideSeconds: creditedOverrideSeconds
+            creditedOverrideSeconds: creditedOverrideSeconds,
+            alwaysApplyFifteenMinuteBuffer: alwaysApplyFifteenMinuteBuffer
         )
 
         // Map shift fields
@@ -510,11 +701,13 @@ final class CloudKitService: ObservableObject {
         let calendarCellDisplayMode = calendarCellDisplayModeRaw.flatMap(CalendarCellDisplayMode.init(rawValue:))
         let calendarHoursBreakModeRaw = record[CloudKitRecordKeys.Settings.calendarHoursBreakMode.rawValue] as? String
         let calendarHoursBreakMode = calendarHoursBreakModeRaw.flatMap(CalendarHoursBreakMode.init(rawValue:))
+        let calendarSummaryDisplayModeRaw = record[CloudKitRecordKeys.Settings.calendarSummaryDisplayMode.rawValue] as? String
+        let calendarSummaryDisplayMode = calendarSummaryDisplayModeRaw.flatMap(CalendarSummaryDisplayMode.init(rawValue:))
         let showCalendarWeekNumbers = (record[CloudKitRecordKeys.Settings.showCalendarWeekNumbers.rawValue] as? NSNumber)?.boolValue
         let showCalendarWeekHours = (record[CloudKitRecordKeys.Settings.showCalendarWeekHours.rawValue] as? NSNumber)?.boolValue
         let showCalendarWeekPay = (record[CloudKitRecordKeys.Settings.showCalendarWeekPay.rawValue] as? NSNumber)?.boolValue
-        let timelineMinMinute = (record[CloudKitRecordKeys.Settings.timelineMinMinute.rawValue] as? NSNumber)?.intValue
-        let timelineMaxMinute = (record[CloudKitRecordKeys.Settings.timelineMaxMinute.rawValue] as? NSNumber)?.intValue
+        let showLiveActivity = (record[CloudKitRecordKeys.Settings.showLiveActivity.rawValue] as? NSNumber)?.boolValue
+        let alwaysApplyFifteenMinuteBuffer = (record[CloudKitRecordKeys.Settings.alwaysApplyFifteenMinuteBuffer.rawValue] as? NSNumber)?.boolValue
         let holidayCountryCode = record[CloudKitRecordKeys.Settings.holidayCountryCode.rawValue] as? String
         let holidaySubdivisionCode = record[CloudKitRecordKeys.Settings.holidaySubdivisionCode.rawValue] as? String
         let autoSetHolidayCategory = (record[CloudKitRecordKeys.Settings.autoSetHolidayCategory.rawValue] as? NSNumber)?.boolValue
@@ -524,6 +717,8 @@ final class CloudKitService: ObservableObject {
         let netPensionPercent = (record[CloudKitRecordKeys.Settings.netPensionPercent.rawValue] as? NSNumber)?.doubleValue
         let netMonthlyAllowanceEuro = (record[CloudKitRecordKeys.Settings.netMonthlyAllowanceEuro.rawValue] as? NSNumber)?.doubleValue
         let netBonusesCSV = record[CloudKitRecordKeys.Settings.netBonusesCSV.rawValue] as? String
+        let showTipsButton = (record[CloudKitRecordKeys.Settings.showTipsButton.rawValue] as? NSNumber)?.boolValue
+        let showTipsButtonAmount = (record[CloudKitRecordKeys.Settings.showTipsButtonAmount.rawValue] as? NSNumber)?.boolValue
         let shiftShortcut1 = record[CloudKitRecordKeys.Settings.shiftShortcut1.rawValue] as? String ?? ""
         let shiftShortcut2 = record[CloudKitRecordKeys.Settings.shiftShortcut2.rawValue] as? String ?? ""
         let shiftShortcut3 = record[CloudKitRecordKeys.Settings.shiftShortcut3.rawValue] as? String ?? ""
@@ -551,11 +746,12 @@ final class CloudKitService: ObservableObject {
             themeAccent: themeAccent,
             calendarCellDisplayMode: calendarCellDisplayMode ?? .dot,
             calendarHoursBreakMode: calendarHoursBreakMode ?? .withoutBreak,
+            calendarSummaryDisplayMode: calendarSummaryDisplayMode ?? .grossNet,
             showCalendarWeekNumbers: showCalendarWeekNumbers ?? false,
             showCalendarWeekHours: showCalendarWeekHours ?? false,
             showCalendarWeekPay: showCalendarWeekPay ?? false,
-            timelineMinMinute: timelineMinMinute,
-            timelineMaxMinute: timelineMaxMinute,
+            showLiveActivity: showLiveActivity ?? true,
+            alwaysApplyFifteenMinuteBuffer: alwaysApplyFifteenMinuteBuffer ?? false,
             holidayCountryCode: holidayCountryCode,
             holidaySubdivisionCode: holidaySubdivisionCode,
             autoSetHolidayCategory: autoSetHolidayCategory ?? false,
@@ -565,6 +761,8 @@ final class CloudKitService: ObservableObject {
             netPensionPercent: netPensionPercent,
             netMonthlyAllowanceEuro: netMonthlyAllowanceEuro,
             netBonusesCSV: netBonusesCSV,
+            showTipsButton: showTipsButton ?? true,
+            showTipsButtonAmount: showTipsButtonAmount ?? true,
             shiftShortcut1: shiftShortcut1,
             shiftShortcut2: shiftShortcut2,
             shiftShortcut3: shiftShortcut3,
@@ -575,11 +773,16 @@ final class CloudKitService: ObservableObject {
         settings.vacationCreditingMode = vacationCreditingMode
         settings.calendarCellDisplayMode = calendarCellDisplayMode
         settings.calendarHoursBreakMode = calendarHoursBreakMode
+        settings.calendarSummaryDisplayMode = calendarSummaryDisplayMode
         settings.showCalendarWeekNumbers = showCalendarWeekNumbers
         settings.showCalendarWeekHours = showCalendarWeekHours
         settings.showCalendarWeekPay = showCalendarWeekPay
+        settings.showLiveActivity = showLiveActivity
+        settings.alwaysApplyFifteenMinuteBuffer = alwaysApplyFifteenMinuteBuffer
         settings.autoSetHolidayCategory = autoSetHolidayCategory
         settings.markPaidHolidays = markPaidHolidays
+        settings.showTipsButton = showTipsButton
+        settings.showTipsButtonAmount = showTipsButtonAmount
 
         return settings
     }
@@ -641,151 +844,216 @@ final class CloudKitService: ObservableObject {
         }
     }
 
+    private func buildSettingsRecord(
+        from settings: Settings,
+        saveDate: Date,
+        profile: SettingsWriteProfile
+    ) async -> CKRecord {
+        let recordID = Self.settingsSingletonRecordID
+        let record: CKRecord
+        if let existing = try? await privateDatabase.record(for: recordID) {
+            record = existing
+        } else {
+            record = CKRecord(recordType: CloudKitRecordKeys.Settings.type.rawValue, recordID: recordID)
+        }
+        applySettingsFields(to: record, from: settings, saveDate: saveDate, profile: profile)
+        return record
+    }
+
+    private func applySettingsFields(
+        to record: CKRecord,
+        from settings: Settings,
+        saveDate: Date,
+        profile: SettingsWriteProfile
+    ) {
+        let includeExtendedFields = profile == .full
+
+        record[CloudKitRecordKeys.Settings.settingsKey.rawValue] = "singleton"
+        record[CloudKitRecordKeys.Settings.updatedAt.rawValue] = saveDate as NSDate
+        record[CloudKitRecordKeys.Settings.hasCompletedOnboarding.rawValue] = NSNumber(value: settings.hasCompletedOnboarding)
+        record[CloudKitRecordKeys.Settings.payMode.rawValue] = settings.payMode.rawValue
+        if let hourly = settings.hourlyRateCents {
+            record[CloudKitRecordKeys.Settings.hourlyRateCents.rawValue] = NSNumber(value: hourly)
+        } else {
+            record[CloudKitRecordKeys.Settings.hourlyRateCents.rawValue] = nil
+        }
+        if let monthly = settings.monthlySalaryCents {
+            record[CloudKitRecordKeys.Settings.monthlySalaryCents.rawValue] = NSNumber(value: monthly)
+        } else {
+            record[CloudKitRecordKeys.Settings.monthlySalaryCents.rawValue] = nil
+        }
+        if let weekly = settings.weeklyTargetSeconds {
+            record[CloudKitRecordKeys.Settings.weeklyTargetSeconds.rawValue] = NSNumber(value: weekly)
+        } else {
+            record[CloudKitRecordKeys.Settings.weeklyTargetSeconds.rawValue] = nil
+        }
+        record[CloudKitRecordKeys.Settings.weekStart.rawValue] = WeekStart.monday.rawValue
+        let sanitizedVacationLookbackCount = max(1, settings.vacationLookbackCount)
+        record[CloudKitRecordKeys.Settings.vacationLookbackCount.rawValue] = NSNumber(value: sanitizedVacationLookbackCount)
+        if let vacationMode = settings.vacationCreditingMode {
+            record[CloudKitRecordKeys.Settings.vacationCreditingMode.rawValue] = vacationMode.rawValue
+        } else {
+            record[CloudKitRecordKeys.Settings.vacationCreditingMode.rawValue] = nil
+        }
+        if let vacationFixedSeconds = settings.vacationFixedSeconds {
+            record[CloudKitRecordKeys.Settings.vacationFixedSeconds.rawValue] = NSNumber(value: max(0, vacationFixedSeconds))
+        } else {
+            record[CloudKitRecordKeys.Settings.vacationFixedSeconds.rawValue] = nil
+        }
+        record[CloudKitRecordKeys.Settings.countMissingAsZero.rawValue] = NSNumber(value: settings.countMissingAsZero)
+        record[CloudKitRecordKeys.Settings.strictHistoryRequired.rawValue] = NSNumber(value: settings.strictHistoryRequired)
+        record[CloudKitRecordKeys.Settings.holidayCreditingMode.rawValue] = settings.holidayCreditingMode.rawValue
+        if let holidayFixedSeconds = settings.holidayFixedSeconds {
+            record[CloudKitRecordKeys.Settings.holidayFixedSeconds.rawValue] = NSNumber(value: max(0, holidayFixedSeconds))
+        } else {
+            record[CloudKitRecordKeys.Settings.holidayFixedSeconds.rawValue] = nil
+        }
+        let sanitizedWorkdaysCount = min(max(settings.scheduledWorkdaysCount, 1), 7)
+        record[CloudKitRecordKeys.Settings.scheduledWorkdaysCount.rawValue] = NSNumber(value: sanitizedWorkdaysCount)
+        record[CloudKitRecordKeys.Settings.themeAccent.rawValue] = settings.themeAccent.rawValue
+        if let calendarDisplayMode = settings.calendarCellDisplayMode {
+            record[CloudKitRecordKeys.Settings.calendarCellDisplayMode.rawValue] = calendarDisplayMode.rawValue
+        } else {
+            record[CloudKitRecordKeys.Settings.calendarCellDisplayMode.rawValue] = nil
+        }
+        if let calendarHoursBreakMode = settings.calendarHoursBreakMode {
+            record[CloudKitRecordKeys.Settings.calendarHoursBreakMode.rawValue] = calendarHoursBreakMode.rawValue
+        } else {
+            record[CloudKitRecordKeys.Settings.calendarHoursBreakMode.rawValue] = nil
+        }
+
+        guard includeExtendedFields else { return }
+
+        if let calendarSummaryDisplayMode = settings.calendarSummaryDisplayMode {
+            record[CloudKitRecordKeys.Settings.calendarSummaryDisplayMode.rawValue] = calendarSummaryDisplayMode.rawValue
+        } else {
+            record[CloudKitRecordKeys.Settings.calendarSummaryDisplayMode.rawValue] = nil
+        }
+        if let show = settings.showCalendarWeekNumbers {
+            record[CloudKitRecordKeys.Settings.showCalendarWeekNumbers.rawValue] = NSNumber(value: show)
+        } else {
+            record[CloudKitRecordKeys.Settings.showCalendarWeekNumbers.rawValue] = nil
+        }
+        if let show = settings.showCalendarWeekHours {
+            record[CloudKitRecordKeys.Settings.showCalendarWeekHours.rawValue] = NSNumber(value: show)
+        } else {
+            record[CloudKitRecordKeys.Settings.showCalendarWeekHours.rawValue] = nil
+        }
+        if let show = settings.showCalendarWeekPay {
+            record[CloudKitRecordKeys.Settings.showCalendarWeekPay.rawValue] = NSNumber(value: show)
+        } else {
+            record[CloudKitRecordKeys.Settings.showCalendarWeekPay.rawValue] = nil
+        }
+        if let showLiveActivity = settings.showLiveActivity {
+            record[CloudKitRecordKeys.Settings.showLiveActivity.rawValue] = NSNumber(value: showLiveActivity)
+        } else {
+            record[CloudKitRecordKeys.Settings.showLiveActivity.rawValue] = nil
+        }
+        if let alwaysApplyFifteenMinuteBuffer = settings.alwaysApplyFifteenMinuteBuffer {
+            record[CloudKitRecordKeys.Settings.alwaysApplyFifteenMinuteBuffer.rawValue] = NSNumber(value: alwaysApplyFifteenMinuteBuffer)
+        } else {
+            record[CloudKitRecordKeys.Settings.alwaysApplyFifteenMinuteBuffer.rawValue] = nil
+        }
+        if let holidayCountryCode = settings.holidayCountryCode {
+            record[CloudKitRecordKeys.Settings.holidayCountryCode.rawValue] = holidayCountryCode
+        } else {
+            record[CloudKitRecordKeys.Settings.holidayCountryCode.rawValue] = nil
+        }
+        if let holidaySubdivisionCode = settings.holidaySubdivisionCode {
+            record[CloudKitRecordKeys.Settings.holidaySubdivisionCode.rawValue] = holidaySubdivisionCode
+        } else {
+            record[CloudKitRecordKeys.Settings.holidaySubdivisionCode.rawValue] = nil
+        }
+        if let autoSetHolidayCategory = settings.autoSetHolidayCategory {
+            record[CloudKitRecordKeys.Settings.autoSetHolidayCategory.rawValue] = NSNumber(value: autoSetHolidayCategory)
+        } else {
+            record[CloudKitRecordKeys.Settings.autoSetHolidayCategory.rawValue] = nil
+        }
+        if let markPaidHolidays = settings.markPaidHolidays {
+            record[CloudKitRecordKeys.Settings.markPaidHolidays.rawValue] = NSNumber(value: markPaidHolidays)
+        } else {
+            record[CloudKitRecordKeys.Settings.markPaidHolidays.rawValue] = nil
+        }
+        if let paidHolidayWeekdayMask = settings.paidHolidayWeekdayMask {
+            record[CloudKitRecordKeys.Settings.paidHolidayWeekdayMask.rawValue] = NSNumber(value: paidHolidayWeekdayMask)
+        } else {
+            record[CloudKitRecordKeys.Settings.paidHolidayWeekdayMask.rawValue] = nil
+        }
+        if let netWageTaxPercent = settings.netWageTaxPercent {
+            record[CloudKitRecordKeys.Settings.netWageTaxPercent.rawValue] = NSNumber(value: netWageTaxPercent)
+        } else {
+            record[CloudKitRecordKeys.Settings.netWageTaxPercent.rawValue] = nil
+        }
+        if let netPensionPercent = settings.netPensionPercent {
+            record[CloudKitRecordKeys.Settings.netPensionPercent.rawValue] = NSNumber(value: netPensionPercent)
+        } else {
+            record[CloudKitRecordKeys.Settings.netPensionPercent.rawValue] = nil
+        }
+        if let netMonthlyAllowanceEuro = settings.netMonthlyAllowanceEuro {
+            record[CloudKitRecordKeys.Settings.netMonthlyAllowanceEuro.rawValue] = NSNumber(value: netMonthlyAllowanceEuro)
+        } else {
+            record[CloudKitRecordKeys.Settings.netMonthlyAllowanceEuro.rawValue] = nil
+        }
+        if let netBonusesCSV = settings.netBonusesCSV {
+            record[CloudKitRecordKeys.Settings.netBonusesCSV.rawValue] = netBonusesCSV
+        } else {
+            record[CloudKitRecordKeys.Settings.netBonusesCSV.rawValue] = nil
+        }
+        if let showTipsButton = settings.showTipsButton {
+            record[CloudKitRecordKeys.Settings.showTipsButton.rawValue] = NSNumber(value: showTipsButton)
+        } else {
+            record[CloudKitRecordKeys.Settings.showTipsButton.rawValue] = nil
+        }
+        if let showTipsButtonAmount = settings.showTipsButtonAmount {
+            record[CloudKitRecordKeys.Settings.showTipsButtonAmount.rawValue] = NSNumber(value: showTipsButtonAmount)
+        } else {
+            record[CloudKitRecordKeys.Settings.showTipsButtonAmount.rawValue] = nil
+        }
+
+        let shortcut1 = settings.shiftShortcut1.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shortcut2 = settings.shiftShortcut2.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shortcut3 = settings.shiftShortcut3.trimmingCharacters(in: .whitespacesAndNewlines)
+        record[CloudKitRecordKeys.Settings.shiftShortcut1.rawValue] = shortcut1.isEmpty ? nil : shortcut1
+        record[CloudKitRecordKeys.Settings.shiftShortcut2.rawValue] = shortcut2.isEmpty ? nil : shortcut2
+        record[CloudKitRecordKeys.Settings.shiftShortcut3.rawValue] = shortcut3.isEmpty ? nil : shortcut3
+
+        let name1 = settings.shiftShortcutName1?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name2 = settings.shiftShortcutName2?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name3 = settings.shiftShortcutName3?.trimmingCharacters(in: .whitespacesAndNewlines)
+        record[CloudKitRecordKeys.Settings.shiftShortcutName1.rawValue] = (name1?.isEmpty == false) ? name1 : nil
+        record[CloudKitRecordKeys.Settings.shiftShortcutName2.rawValue] = (name2?.isEmpty == false) ? name2 : nil
+        record[CloudKitRecordKeys.Settings.shiftShortcutName3.rawValue] = (name3?.isEmpty == false) ? name3 : nil
+    }
+
     func saveSettings(_ settings: Settings) async throws {
+        let saveDate = Date()
+
         do {
-            settings.updatedAt = Date()
-            let recordID = Self.settingsSingletonRecordID
-            let record: CKRecord
-            if let existing = try? await privateDatabase.record(for: recordID) {
-                record = existing
-            } else {
-                record = CKRecord(recordType: CloudKitRecordKeys.Settings.type.rawValue, recordID: recordID)
-            }
-
-            record[CloudKitRecordKeys.Settings.settingsKey.rawValue] = "singleton"
-            record[CloudKitRecordKeys.Settings.updatedAt.rawValue] = settings.updatedAt as NSDate
-            record[CloudKitRecordKeys.Settings.hasCompletedOnboarding.rawValue] = NSNumber(value: settings.hasCompletedOnboarding)
-            record[CloudKitRecordKeys.Settings.payMode.rawValue] = settings.payMode.rawValue
-            if let hourly = settings.hourlyRateCents { record[CloudKitRecordKeys.Settings.hourlyRateCents.rawValue] = NSNumber(value: hourly) } else { record[CloudKitRecordKeys.Settings.hourlyRateCents.rawValue] = nil }
-            if let monthly = settings.monthlySalaryCents { record[CloudKitRecordKeys.Settings.monthlySalaryCents.rawValue] = NSNumber(value: monthly) } else { record[CloudKitRecordKeys.Settings.monthlySalaryCents.rawValue] = nil }
-            if let weekly = settings.weeklyTargetSeconds { record[CloudKitRecordKeys.Settings.weeklyTargetSeconds.rawValue] = NSNumber(value: weekly) } else { record[CloudKitRecordKeys.Settings.weeklyTargetSeconds.rawValue] = nil }
-            record[CloudKitRecordKeys.Settings.weekStart.rawValue] = WeekStart.monday.rawValue
-            record[CloudKitRecordKeys.Settings.vacationLookbackCount.rawValue] = NSNumber(value: settings.vacationLookbackCount)
-            if let vacationMode = settings.vacationCreditingMode {
-                record[CloudKitRecordKeys.Settings.vacationCreditingMode.rawValue] = vacationMode.rawValue
-            } else {
-                record[CloudKitRecordKeys.Settings.vacationCreditingMode.rawValue] = nil
-            }
-            if let vacationFixedSeconds = settings.vacationFixedSeconds {
-                record[CloudKitRecordKeys.Settings.vacationFixedSeconds.rawValue] = NSNumber(value: vacationFixedSeconds)
-            } else {
-                record[CloudKitRecordKeys.Settings.vacationFixedSeconds.rawValue] = nil
-            }
-            record[CloudKitRecordKeys.Settings.countMissingAsZero.rawValue] = NSNumber(value: settings.countMissingAsZero)
-            record[CloudKitRecordKeys.Settings.strictHistoryRequired.rawValue] = NSNumber(value: settings.strictHistoryRequired)
-            record[CloudKitRecordKeys.Settings.holidayCreditingMode.rawValue] = settings.holidayCreditingMode.rawValue
-            if let holidayFixedSeconds = settings.holidayFixedSeconds {
-                record[CloudKitRecordKeys.Settings.holidayFixedSeconds.rawValue] = NSNumber(value: holidayFixedSeconds)
-            } else {
-                record[CloudKitRecordKeys.Settings.holidayFixedSeconds.rawValue] = nil
-            }
-            record[CloudKitRecordKeys.Settings.scheduledWorkdaysCount.rawValue] = NSNumber(value: settings.scheduledWorkdaysCount)
-            record[CloudKitRecordKeys.Settings.themeAccent.rawValue] = settings.themeAccent.rawValue
-            if let calendarDisplayMode = settings.calendarCellDisplayMode {
-                record[CloudKitRecordKeys.Settings.calendarCellDisplayMode.rawValue] = calendarDisplayMode.rawValue
-            } else {
-                record[CloudKitRecordKeys.Settings.calendarCellDisplayMode.rawValue] = nil
-            }
-            if let calendarHoursBreakMode = settings.calendarHoursBreakMode {
-                record[CloudKitRecordKeys.Settings.calendarHoursBreakMode.rawValue] = calendarHoursBreakMode.rawValue
-            } else {
-                record[CloudKitRecordKeys.Settings.calendarHoursBreakMode.rawValue] = nil
-            }
-            if let show = settings.showCalendarWeekNumbers {
-                record[CloudKitRecordKeys.Settings.showCalendarWeekNumbers.rawValue] = NSNumber(value: show)
-            } else {
-                record[CloudKitRecordKeys.Settings.showCalendarWeekNumbers.rawValue] = nil
-            }
-            if let show = settings.showCalendarWeekHours {
-                record[CloudKitRecordKeys.Settings.showCalendarWeekHours.rawValue] = NSNumber(value: show)
-            } else {
-                record[CloudKitRecordKeys.Settings.showCalendarWeekHours.rawValue] = nil
-            }
-            if let show = settings.showCalendarWeekPay {
-                record[CloudKitRecordKeys.Settings.showCalendarWeekPay.rawValue] = NSNumber(value: show)
-            } else {
-                record[CloudKitRecordKeys.Settings.showCalendarWeekPay.rawValue] = nil
-            }
-            if let timelineMinMinute = settings.timelineMinMinute {
-                record[CloudKitRecordKeys.Settings.timelineMinMinute.rawValue] = NSNumber(value: timelineMinMinute)
-            } else {
-                record[CloudKitRecordKeys.Settings.timelineMinMinute.rawValue] = nil
-            }
-            if let timelineMaxMinute = settings.timelineMaxMinute {
-                record[CloudKitRecordKeys.Settings.timelineMaxMinute.rawValue] = NSNumber(value: timelineMaxMinute)
-            } else {
-                record[CloudKitRecordKeys.Settings.timelineMaxMinute.rawValue] = nil
-            }
-            if let holidayCountryCode = settings.holidayCountryCode {
-                record[CloudKitRecordKeys.Settings.holidayCountryCode.rawValue] = holidayCountryCode
-            } else {
-                record[CloudKitRecordKeys.Settings.holidayCountryCode.rawValue] = nil
-            }
-            if let holidaySubdivisionCode = settings.holidaySubdivisionCode {
-                record[CloudKitRecordKeys.Settings.holidaySubdivisionCode.rawValue] = holidaySubdivisionCode
-            } else {
-                record[CloudKitRecordKeys.Settings.holidaySubdivisionCode.rawValue] = nil
-            }
-            if let autoSetHolidayCategory = settings.autoSetHolidayCategory {
-                record[CloudKitRecordKeys.Settings.autoSetHolidayCategory.rawValue] = NSNumber(value: autoSetHolidayCategory)
-            } else {
-                record[CloudKitRecordKeys.Settings.autoSetHolidayCategory.rawValue] = nil
-            }
-            if let markPaidHolidays = settings.markPaidHolidays {
-                record[CloudKitRecordKeys.Settings.markPaidHolidays.rawValue] = NSNumber(value: markPaidHolidays)
-            } else {
-                record[CloudKitRecordKeys.Settings.markPaidHolidays.rawValue] = nil
-            }
-            if let paidHolidayWeekdayMask = settings.paidHolidayWeekdayMask {
-                record[CloudKitRecordKeys.Settings.paidHolidayWeekdayMask.rawValue] = NSNumber(value: paidHolidayWeekdayMask)
-            } else {
-                record[CloudKitRecordKeys.Settings.paidHolidayWeekdayMask.rawValue] = nil
-            }
-            if let netWageTaxPercent = settings.netWageTaxPercent {
-                record[CloudKitRecordKeys.Settings.netWageTaxPercent.rawValue] = NSNumber(value: netWageTaxPercent)
-            } else {
-                record[CloudKitRecordKeys.Settings.netWageTaxPercent.rawValue] = nil
-            }
-            if let netPensionPercent = settings.netPensionPercent {
-                record[CloudKitRecordKeys.Settings.netPensionPercent.rawValue] = NSNumber(value: netPensionPercent)
-            } else {
-                record[CloudKitRecordKeys.Settings.netPensionPercent.rawValue] = nil
-            }
-            if let netMonthlyAllowanceEuro = settings.netMonthlyAllowanceEuro {
-                record[CloudKitRecordKeys.Settings.netMonthlyAllowanceEuro.rawValue] = NSNumber(value: netMonthlyAllowanceEuro)
-            } else {
-                record[CloudKitRecordKeys.Settings.netMonthlyAllowanceEuro.rawValue] = nil
-            }
-            if let netBonusesCSV = settings.netBonusesCSV {
-                record[CloudKitRecordKeys.Settings.netBonusesCSV.rawValue] = netBonusesCSV
-            } else {
-                record[CloudKitRecordKeys.Settings.netBonusesCSV.rawValue] = nil
-            }
-            record[CloudKitRecordKeys.Settings.shiftShortcut1.rawValue] = settings.shiftShortcut1
-            record[CloudKitRecordKeys.Settings.shiftShortcut2.rawValue] = settings.shiftShortcut2
-            record[CloudKitRecordKeys.Settings.shiftShortcut3.rawValue] = settings.shiftShortcut3
-            if let shiftShortcutName1 = settings.shiftShortcutName1 {
-                record[CloudKitRecordKeys.Settings.shiftShortcutName1.rawValue] = shiftShortcutName1
-            } else {
-                record[CloudKitRecordKeys.Settings.shiftShortcutName1.rawValue] = nil
-            }
-            if let shiftShortcutName2 = settings.shiftShortcutName2 {
-                record[CloudKitRecordKeys.Settings.shiftShortcutName2.rawValue] = shiftShortcutName2
-            } else {
-                record[CloudKitRecordKeys.Settings.shiftShortcutName2.rawValue] = nil
-            }
-            if let shiftShortcutName3 = settings.shiftShortcutName3 {
-                record[CloudKitRecordKeys.Settings.shiftShortcutName3.rawValue] = shiftShortcutName3
-            } else {
-                record[CloudKitRecordKeys.Settings.shiftShortcutName3.rawValue] = nil
-            }
-
-            _ = try await privateDatabase.save(record)
+            let fullRecord = await buildSettingsRecord(from: settings, saveDate: saveDate, profile: .full)
+            _ = try await privateDatabase.save(fullRecord)
+            settings.updatedAt = saveDate
             Self.logger.debug("Upserted Settings singleton")
             markSynced()
         } catch {
-            markSyncError(error)
-            throw error
+            guard shouldRetrySettingsSaveInCompatibilityMode(error) else {
+                markSyncError(error)
+                throw error
+            }
+
+            do {
+                let compatibilityRecord = await buildSettingsRecord(
+                    from: settings,
+                    saveDate: saveDate,
+                    profile: .compatibility
+                )
+                _ = try await privateDatabase.save(compatibilityRecord)
+                settings.updatedAt = saveDate
+                Self.logger.warning("Settings save succeeded with compatibility profile after initial error: \(String(describing: error), privacy: .public)")
+                markSynced()
+            } catch {
+                markSyncError(error)
+                throw error
+            }
         }
     }
 
@@ -823,7 +1091,6 @@ final class CloudKitService: ObservableObject {
     func markOnboardingCompleted(_ settings: Settings) async {
         let updated = settings
         updated.hasCompletedOnboarding = true
-        updated.updatedAt = Date()
         do {
             try await saveSettings(updated)
         } catch {
@@ -836,8 +1103,10 @@ final class CloudKitService: ObservableObject {
 
     func saveHolidayDays(_ days: [HolidayCalendarDay]) async throws {
         do {
-            for day in days {
-                let recordID = CKRecord.ID(recordName: "holiday-\(day.key)")
+            let uniqueDays = deduplicateHolidayDays(days)
+
+            for day in uniqueDays {
+                let recordID = holidayRecordID(for: day.key)
                 let record: CKRecord
                 if let existing = try? await privateDatabase.record(for: recordID) {
                     record = existing
@@ -848,14 +1117,16 @@ final class CloudKitService: ObservableObject {
                     )
                 }
                 record[CloudKitRecordKeys.HolidayCalendarDay.key.rawValue] = day.key
-                record[CloudKitRecordKeys.HolidayCalendarDay.date.rawValue] = day.date
+                record[CloudKitRecordKeys.HolidayCalendarDay.date.rawValue] = day.date.startOfDayUTC()
                 record[CloudKitRecordKeys.HolidayCalendarDay.localName.rawValue] = day.localName
-                record[CloudKitRecordKeys.HolidayCalendarDay.countryCode.rawValue] = day.countryCode
-                if let sub = day.subdivisionCode { record[CloudKitRecordKeys.HolidayCalendarDay.subdivisionCode.rawValue] = sub }
+                record[CloudKitRecordKeys.HolidayCalendarDay.countryCode.rawValue] =
+                    normalizeHolidayCode(day.countryCode) ?? day.countryCode
+                record[CloudKitRecordKeys.HolidayCalendarDay.subdivisionCode.rawValue] =
+                    normalizeHolidaySubdivisionCode(day.subdivisionCode)
                 record[CloudKitRecordKeys.HolidayCalendarDay.sourceYear.rawValue] = NSNumber(value: day.sourceYear)
                 try await privateDatabase.save(record)
             }
-            Self.logger.debug("Saved \(days.count) HolidayCalendarDay records")
+            Self.logger.debug("Saved \(uniqueDays.count) HolidayCalendarDay records")
             markSynced()
         } catch {
             markSyncError(error)
@@ -869,22 +1140,68 @@ final class CloudKitService: ObservableObject {
         subdivisionCode: String?,
         year: Int
     ) async throws {
-        let normalizedCountry = countryCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        let normalizedSubdivision = subdivisionCode?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        let existing = try await fetchHolidayDays(
-            countryCode: normalizedCountry,
-            subdivisionCode: normalizedSubdivision,
-            year: year
-        )
+        do {
+            let normalizedCountry = normalizeHolidayCode(countryCode) ?? "DE"
+            let normalizedSubdivision = normalizeHolidaySubdivisionCode(subdivisionCode)
+            let incomingDays = normalizedHolidayDays(
+                days,
+                countryCode: normalizedCountry,
+                subdivisionCode: normalizedSubdivision,
+                year: year
+            )
+            let incomingKeys = Set(incomingDays.map(\.key))
 
-        let incomingKeys = Set(days.map(\.key))
-        for oldDay in existing where !incomingKeys.contains(oldDay.key) {
-            let recordID = CKRecord.ID(recordName: "holiday-\(oldDay.key)")
-            try await deleteRecordIfExists(recordID)
-        }
+            let query = CKQuery(
+                recordType: CloudKitRecordKeys.HolidayCalendarDay.type.rawValue,
+                predicate: NSCompoundPredicate(andPredicateWithSubpredicates: [
+                    NSPredicate(
+                        format: "\(CloudKitRecordKeys.HolidayCalendarDay.sourceYear.rawValue) == %d",
+                        year
+                    ),
+                    NSPredicate(
+                        format: "\(CloudKitRecordKeys.HolidayCalendarDay.countryCode.rawValue) == %@",
+                        normalizedCountry
+                    )
+                ])
+            )
+            let existingRecords = try await queryRecords(query)
+            var recordsToDeleteByName: [String: CKRecord.ID] = [:]
 
-        if !days.isEmpty {
-            try await saveHolidayDays(days)
+            for record in existingRecords {
+                let existingSubdivision = normalizeHolidaySubdivisionCode(
+                    record[CloudKitRecordKeys.HolidayCalendarDay.subdivisionCode.rawValue] as? String
+                )
+                guard existingSubdivision == normalizedSubdivision else { continue }
+
+                guard let existingKey = holidayKey(from: record) else {
+                    recordsToDeleteByName[record.recordID.recordName] = record.recordID
+                    continue
+                }
+
+                if !incomingKeys.contains(existingKey) {
+                    recordsToDeleteByName[record.recordID.recordName] = record.recordID
+                    continue
+                }
+
+                let canonicalRecordName = holidayRecordID(for: existingKey).recordName
+                if record.recordID.recordName != canonicalRecordName {
+                    // Cleanup legacy records that use non-canonical record IDs.
+                    recordsToDeleteByName[record.recordID.recordName] = record.recordID
+                }
+            }
+
+            for recordID in recordsToDeleteByName.values {
+                try await deleteRecordIfExists(recordID)
+            }
+
+            if !incomingDays.isEmpty {
+                try await saveHolidayDays(incomingDays)
+            } else {
+                markSynced()
+            }
+        } catch {
+            markSyncError(error)
+            throw error
         }
     }
 
@@ -970,23 +1287,109 @@ final class CloudKitService: ObservableObject {
 
     func fetchHolidayDays(countryCode: String?, subdivisionCode: String?, year: Int) async throws -> [HolidayCalendarDay] {
         do {
+            let normalizedCountry = normalizeHolidayCode(countryCode)
+            let normalizedSubdivision = normalizeHolidaySubdivisionCode(subdivisionCode)
+
             var predicates: [NSPredicate] = []
             predicates.append(NSPredicate(format: "\(CloudKitRecordKeys.HolidayCalendarDay.sourceYear.rawValue) == %d", year))
-            if let country = countryCode {
+            if let country = normalizedCountry {
                 predicates.append(NSPredicate(format: "\(CloudKitRecordKeys.HolidayCalendarDay.countryCode.rawValue) == %@", country))
-            }
-            if let subdivision = subdivisionCode {
-                predicates.append(NSPredicate(format: "\(CloudKitRecordKeys.HolidayCalendarDay.subdivisionCode.rawValue) == %@", subdivision))
             }
             let predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
 
             let query = CKQuery(recordType: CloudKitRecordKeys.HolidayCalendarDay.type.rawValue, predicate: predicate)
-            let result = try await privateDatabase.records(matching: query)
-            let records = result.matchResults.compactMap { try? $0.1.get() }
+            let records = try await queryRecords(query)
             let mapped = records.compactMap { convertToHolidayCalendarDay(from: $0) }
-            let uniqueByKey = Dictionary(mapped.map { ($0.key, $0) }, uniquingKeysWith: { current, _ in current })
+            let filtered = mapped.filter { holiday in
+                normalizeHolidaySubdivisionCode(holiday.subdivisionCode) == normalizedSubdivision
+            }
+            let uniqueByKey = Dictionary(filtered.map { ($0.key, $0) }, uniquingKeysWith: { current, _ in current })
+            let sorted = uniqueByKey.values.sorted { lhs, rhs in
+                if lhs.date != rhs.date {
+                    return lhs.date < rhs.date
+                }
+                return lhs.key < rhs.key
+            }
             markSynced()
-            return Array(uniqueByKey.values)
+            return sorted
+        } catch {
+            markSyncError(error)
+            throw error
+        }
+    }
+
+    // MARK: - TipEntry API
+
+    func saveTipEntry(_ tip: TipEntry) async throws {
+        do {
+            let recordID = tipEntryRecordID(for: tip.id)
+            let record: CKRecord
+            if let existing = try? await privateDatabase.record(for: recordID) {
+                record = existing
+            } else {
+                record = CKRecord(recordType: CloudKitRecordKeys.TipEntry.type.rawValue, recordID: recordID)
+            }
+
+            record[CloudKitRecordKeys.TipEntry.id.rawValue] = tip.id
+            record[CloudKitRecordKeys.TipEntry.date.rawValue] = tip.date.startOfDayLocal()
+            record[CloudKitRecordKeys.TipEntry.amountCents.rawValue] = NSNumber(value: max(0, tip.amountCents))
+            record[CloudKitRecordKeys.TipEntry.updatedAt.rawValue] = tip.updatedAt as NSDate
+
+            _ = try await privateDatabase.save(record)
+            Self.logger.debug("Upserted TipEntry \(tip.id, privacy: .public)")
+            markSynced()
+        } catch {
+            markSyncError(error)
+            throw error
+        }
+    }
+
+    func fetchTipEntries(in interval: DateInterval) async throws -> [TipEntry] {
+        do {
+            let records: [CKRecord]
+
+            do {
+                let predicate = NSPredicate(
+                    format: "\(CloudKitRecordKeys.TipEntry.date.rawValue) >= %@ AND \(CloudKitRecordKeys.TipEntry.date.rawValue) <= %@",
+                    interval.start as NSDate,
+                    interval.end as NSDate
+                )
+                let query = CKQuery(recordType: CloudKitRecordKeys.TipEntry.type.rawValue, predicate: predicate)
+                query.sortDescriptors = [
+                    NSSortDescriptor(key: CloudKitRecordKeys.TipEntry.date.rawValue, ascending: false)
+                ]
+                records = try await queryRecords(query)
+            } catch {
+                guard isLikelyQueryIndexingError(error) else { throw error }
+                Self.logger.warning("TipEntry date query failed, falling back to full scan. Error: \(String(describing: error), privacy: .public)")
+                let fallbackQuery = CKQuery(
+                    recordType: CloudKitRecordKeys.TipEntry.type.rawValue,
+                    predicate: NSPredicate(value: true)
+                )
+                records = try await queryRecords(fallbackQuery)
+            }
+
+            let mapped = records
+                .compactMap { convertToTipEntry(from: $0) }
+                .filter { isWithinInterval($0.date, interval: interval) }
+                .sorted { $0.date > $1.date }
+            markSynced()
+            return mapped
+        } catch {
+            if isLikelyMissingRecordTypeError(error, recordType: CloudKitRecordKeys.TipEntry.type.rawValue) {
+                markSynced()
+                return []
+            }
+            markSyncError(error)
+            throw error
+        }
+    }
+
+    func deleteTipEntry(_ tip: TipEntry) async throws {
+        do {
+            try await deleteRecordIfExists(tipEntryRecordID(for: tip.id))
+            Self.logger.debug("Deleted TipEntry \(tip.id, privacy: .public)")
+            markSynced()
         } catch {
             markSyncError(error)
             throw error
@@ -1032,6 +1435,32 @@ final class CloudKitService: ObservableObject {
         }
     }
 
+    private func convertToTipEntry(from record: CKRecord) -> TipEntry? {
+        guard
+            let date = record[CloudKitRecordKeys.TipEntry.date.rawValue] as? Date,
+            let amount = record[CloudKitRecordKeys.TipEntry.amountCents.rawValue] as? NSNumber
+        else {
+            return nil
+        }
+
+        let fallbackID: String = {
+            let recordName = record.recordID.recordName
+            if recordName.hasPrefix("tip-") {
+                return String(recordName.dropFirst(4))
+            }
+            return recordName
+        }()
+        let id = record[CloudKitRecordKeys.TipEntry.id.rawValue] as? String ?? fallbackID
+        let updatedAt = (record[CloudKitRecordKeys.TipEntry.updatedAt.rawValue] as? Date) ?? record.modificationDate ?? date
+
+        return TipEntry(
+            id: id,
+            date: date,
+            amountCents: amount.intValue,
+            updatedAt: updatedAt
+        )
+    }
+
     private func convertToNetWageMonthConfig(from record: CKRecord) -> NetWageMonthConfig? {
         guard let monthStart = record[CloudKitRecordKeys.NetWageMonthConfig.monthStart.rawValue] as? Date else { return nil }
         let wageTax = (record[CloudKitRecordKeys.NetWageMonthConfig.wageTaxPercent.rawValue] as? NSNumber)?.doubleValue
@@ -1052,13 +1481,17 @@ final class CloudKitService: ObservableObject {
         guard
             let date = record[CloudKitRecordKeys.HolidayCalendarDay.date.rawValue] as? Date,
             let localName = record[CloudKitRecordKeys.HolidayCalendarDay.localName.rawValue] as? String,
-            let countryCode = record[CloudKitRecordKeys.HolidayCalendarDay.countryCode.rawValue] as? String,
+            let countryCode = normalizeHolidayCode(
+                record[CloudKitRecordKeys.HolidayCalendarDay.countryCode.rawValue] as? String
+            ),
             let sourceYearNum = record[CloudKitRecordKeys.HolidayCalendarDay.sourceYear.rawValue] as? NSNumber
         else {
             return nil
         }
 
-        let subdivisionCode = record[CloudKitRecordKeys.HolidayCalendarDay.subdivisionCode.rawValue] as? String
+        let subdivisionCode = normalizeHolidaySubdivisionCode(
+            record[CloudKitRecordKeys.HolidayCalendarDay.subdivisionCode.rawValue] as? String
+        )
         return HolidayCalendarDay(
             date: date,
             localName: localName,

@@ -51,8 +51,8 @@ struct DayEditorView: View {
     @State private var hasUnsavedUserChanges = false
 
     private var timelineBounds: ClosedRange<Int> {
-        let minValue = max(0, min(settings.timelineMinMinute ?? 6 * 60, 23 * 60))
-        let maxValue = max(minValue + 60, min(settings.timelineMaxMinute ?? 22 * 60, 24 * 60))
+        let minValue = 6 * 60
+        let maxValue = 22 * 60
         return minValue...maxValue
     }
 
@@ -225,7 +225,7 @@ struct DayEditorView: View {
                 Text("Dieser Tag wird dauerhaft entfernt.")
             }
         }
-        .payScopeSheetSurface(accent: settings.themeAccent.color)
+        .dayEditorSheetSurface()
         .presentationDetents(editorDetents, selection: $selectedSheetDetent)
         .sheet(isPresented: isEditingShortcutBinding) {
             shortcutEditorSheet
@@ -496,7 +496,15 @@ struct DayEditorView: View {
                         .frame(minHeight: 120)
                         .padding(10)
                         .scrollContentBackground(.hidden)
-                        .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 12, emphasis: 0.16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color(.systemBackground))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(settings.themeAccent.color.opacity(0.14), lineWidth: 1)
+                                .allowsHitTesting(false)
+                        )
                 }
             }
         }
@@ -887,8 +895,10 @@ struct DayEditorView: View {
                     do {
                         try await cloudKitService.deleteDayEntry(on: dayDate)
                     } catch {
+                        #if DEBUG
+                        print("CloudKit delete failed, local tombstone kept for retry: \(error)")
+                        #endif
                     }
-                    await load(for: dayDate)
                 }
             } else {
                 hasUnsavedUserChanges = false
@@ -929,15 +939,15 @@ struct DayEditorView: View {
         onDaySaved?(dayDate, target)
         dismiss()
 
+        localStore.save(target)
+
         Task {
             refreshFollowingAutoCreditedEntries(changedFrom: dayDate)
             let mergedEntriesAfterSave = mergedEntriesReplacingDay(on: dayDate, with: target)
 
             do {
-                // Cloud-first: iCloud is the primary source of truth.
                 try await cloudKitService.saveDayEntry(target)
                 localStore.save(target)
-                await load(for: dayDate)
                 if isTodaySave {
                     await PayScopeLiveActivityManager.syncAtAppLaunch(
                         settings: settings,
@@ -945,8 +955,6 @@ struct DayEditorView: View {
                     )
                 }
             } catch {
-                // Fallback for offline/unreachable CloudKit.
-                localStore.save(target)
                 if isTodaySave {
                     await PayScopeLiveActivityManager.syncAtAppLaunch(
                         settings: settings,
@@ -966,19 +974,21 @@ struct DayEditorView: View {
         hasUnsavedUserChanges = false
         onDaySaved?(dayDate, nil)
 
-        // Delete from CloudKit
-        Task {
-            do {
-                try await cloudKitService.deleteDayEntry(on: dayDate)
-            } catch {
-            }
-            await load(for: selectedDate)
-        }
         // Delete from local cache
         localStore.delete(on: dayDate)
         allEntries.removeAll { $0.date.isSameLocalDay(as: dayDate) }
         localEntries.removeAll { $0.date.isSameLocalDay(as: dayDate) }
         refreshFollowingAutoCreditedEntries(changedFrom: dayDate)
+
+        Task {
+            do {
+                try await cloudKitService.deleteDayEntry(on: dayDate)
+            } catch {
+                #if DEBUG
+                print("CloudKit delete failed, local tombstone kept for retry: \(error)")
+                #endif
+            }
+        }
 
         // Update live activity if today
         if dayDate.isSameLocalDay(as: Date().startOfDayLocal()) {
@@ -1416,14 +1426,26 @@ private struct NeoPanelStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(15)
-            .payScopeSurface(accent: accent, cornerRadius: 22, emphasis: glow ? 0.62 : 0.4)
-            .shadow(color: accent.opacity(glow ? 0.18 : 0.08), radius: glow ? 20 : 10, x: 0, y: glow ? 10 : 5)
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(Color(.secondarySystemGroupedBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(accent.opacity(glow ? 0.22 : 0.14), lineWidth: 1)
+                    .allowsHitTesting(false)
+            )
     }
 }
 
 private extension View {
     func neoPanel(accent: Color, glow: Bool = false) -> some View {
         modifier(NeoPanelStyle(accent: accent, glow: glow))
+    }
+
+    func dayEditorSheetSurface() -> some View {
+        scrollContentBackground(.hidden)
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
     }
 }
 
@@ -1578,48 +1600,17 @@ private struct MultiSegmentTimelinePreview: View {
 
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(
-                        LinearGradient(
-                            colors: segments.isEmpty ? [
-                                Color(.systemBackground).opacity(0.88),
-                                accent.opacity(0.10),
-                                accent.opacity(0.18)
-                            ] : [
-                                Color(.systemBackground).opacity(0.85),
-                                accent.opacity(0.06),
-                                accent.opacity(0.12)
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
+                    .fill(segments.isEmpty ? accent.opacity(0.08) : accent.opacity(0.06))
                     .frame(height: 22)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
-                            .stroke(.white.opacity(0.15), lineWidth: 0.5)
+                            .stroke(accent.opacity(0.12), lineWidth: 0.5)
                     )
                     .allowsHitTesting(false)
 
                 ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(
-                            LinearGradient(
-                                colors: [accent.opacity(0.9), accent.opacity(0.6)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [Color.white.opacity(0.25), .clear],
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
-                                )
-                                .blendMode(.overlay)
-                        )
+                        .fill(accent.opacity(0.72))
                         .overlay(
                             RoundedRectangle(cornerRadius: 8)
                                 .stroke(accent.opacity(0.35), lineWidth: 1)
@@ -1629,7 +1620,6 @@ private struct MultiSegmentTimelinePreview: View {
                             height: 22
                         )
                         .offset(x: x(for: segment.startMinute, width: width))
-                        .shadow(color: accent.opacity(0.28), radius: 6, x: 0, y: 2)
                         .allowsHitTesting(false)
                 }
 
@@ -1639,7 +1629,7 @@ private struct MultiSegmentTimelinePreview: View {
                         path.move(to: CGPoint(x: xPosition, y: 2))
                         path.addLine(to: CGPoint(x: xPosition, y: 20))
                     }
-                    .stroke(.white.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
+                    .stroke(Color(.separator).opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
                     .allowsHitTesting(false)
                 }
             }

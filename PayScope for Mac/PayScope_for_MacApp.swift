@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let popover = NSPopover()
     private var statusItem: NSStatusItem?
     private var statusIconHostingView: NSHostingView<MenuBarIconView>?
+    private var statusItemLengthTimer: Timer?
 
     private lazy var contextMenu: NSMenu = {
         let menu = NSMenu()
@@ -47,7 +48,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func configurePopover() {
         popover.behavior = .transient
         popover.animates = true
-        popover.contentViewController = NSHostingController(rootView: ContentView())
+        popover.contentViewController = NSHostingController(
+            rootView: ContentView()
+                .environment(\.locale, Locale(identifier: "de_DE"))
+        )
+        popover.contentSize = NSSize(width: 360, height: 420)
     }
 
     private func configureStatusItem() {
@@ -57,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let hostingView = NSHostingView(rootView: MenuBarIconView())
         hostingView.translatesAutoresizingMaskIntoConstraints = false
         button.addSubview(hostingView)
+        button.toolTip = "PayScope"
 
         NSLayoutConstraint.activate([
             hostingView.leadingAnchor.constraint(equalTo: button.leadingAnchor),
@@ -71,6 +77,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         self.statusItem = statusItem
         self.statusIconHostingView = hostingView
+        updateStatusItemLength()
+        statusItemLengthTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self?.updateStatusItemLength()
+        }
+    }
+
+    private func updateStatusItemLength() {
+        guard let statusItem, let hostingView = statusIconHostingView else { return }
+
+        hostingView.layoutSubtreeIfNeeded()
+        let fittingWidth = ceil(hostingView.fittingSize.width)
+        statusItem.length = min(max(fittingWidth, 28), 150)
     }
 
     @objc

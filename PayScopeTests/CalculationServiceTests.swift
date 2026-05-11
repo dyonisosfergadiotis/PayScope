@@ -17,6 +17,88 @@ final class CalculationServiceTests: XCTestCase {
         XCTAssertEqual(try? result.get(), 7200)
     }
 
+    func testShiftTimeRangeParsesOvernightEndAsNextDay() {
+        let range = ShiftTimeRange(startMinute: 22 * 60, endClockMinute: 6 * 60)
+
+        XCTAssertEqual(range?.endMinuteOffset, 30 * 60)
+        XCTAssertEqual(range?.durationSeconds, 8 * 3600)
+        XCTAssertEqual(range?.crossesMidnight, true)
+        XCTAssertEqual(range?.displayRange(), "22:00-06:00 (+1)")
+    }
+
+    func testShiftTimeRangeAllowsMidnightEndOnNextDay() {
+        let range = ShiftTimeRange(startMinute: 23 * 60 + 30, endClockMinute: 0)
+
+        XCTAssertEqual(range?.endMinuteOffset, 24 * 60)
+        XCTAssertEqual(range?.durationSeconds, 30 * 60)
+        XCTAssertEqual(range?.crossesMidnight, true)
+    }
+
+    func testShiftTimeRangeKeepsMorningShiftSameDay() {
+        let range = ShiftTimeRange(startMinute: 0, endClockMinute: 6 * 60)
+
+        XCTAssertEqual(range?.endMinuteOffset, 6 * 60)
+        XCTAssertEqual(range?.durationSeconds, 6 * 3600)
+        XCTAssertEqual(range?.crossesMidnight, false)
+    }
+
+    func testShiftTimeRangeRejectsEqualStartAndEnd() {
+        XCTAssertNil(ShiftTimeRange(startMinute: 6 * 60, endClockMinute: 6 * 60))
+    }
+
+    func testOvernightShiftStoresAbsoluteEndOnNextDayAndSubtractsPause() {
+        let day = dateFrom(year: 2026, month: 5, day: 12)
+        let range = ShiftTimeRange(startMinute: 22 * 60, endClockMinute: 6 * 60)
+        let entry = DayEntry(date: day, type: .work)
+        entry.shiftStart = range?.startDate(on: day)
+        entry.shiftEnd = range?.endDate(on: day)
+        entry.breakSeconds = 30 * 60
+
+        XCTAssertEqual(Calendar.current.component(.day, from: entry.shiftEnd ?? day), 13)
+        XCTAssertEqual(try? CalculationService().workedSeconds(for: entry).get(), 7 * 3600 + 30 * 60)
+    }
+
+    func testOvernightShiftCountsInStartMonthAndStaysActiveAfterMidnight() {
+        let service = CalculationService()
+        let settings = Settings(payMode: .hourly, hourlyRateCents: 2000)
+        let day = dateFrom(year: 2026, month: 5, day: 31)
+        let range = ShiftTimeRange(startMinute: 22 * 60, endClockMinute: 6 * 60)
+        let entry = DayEntry(date: day, type: .work)
+        entry.shiftStart = range?.startDate(on: day)
+        entry.shiftEnd = range?.endDate(on: day)
+        entry.breakSeconds = 30 * 60
+
+        let mayStart = dateFrom(year: 2026, month: 5, day: 1)
+        let mayEnd = dateFrom(year: 2026, month: 5, day: 31).addingTimeInterval(24 * 3600 - 1)
+        let summary = service.periodSummary(entries: [entry], from: mayStart, to: mayEnd, settings: settings)
+        let afterMidnight = dateFrom(year: 2026, month: 6, day: 1).addingTimeInterval(2 * 3600)
+        let active = service.activeShiftEntry(at: afterMidnight, entries: [entry])
+
+        XCTAssertEqual(summary.totalSeconds, 7 * 3600 + 30 * 60)
+        XCTAssertEqual(active?.shiftStart, entry.shiftStart)
+    }
+
+    func testCSVTransferRoundTripsOvernightEndDayOffset() {
+        let day = dateFrom(year: 2026, month: 5, day: 12)
+        let range = ShiftTimeRange(startMinute: 22 * 60, endClockMinute: 6 * 60)
+        let entry = DayEntry(date: day, type: .work)
+        entry.shiftStart = range?.startDate(on: day)
+        entry.shiftEnd = range?.endDate(on: day)
+        entry.breakSeconds = 30 * 60
+
+        let columns = ShiftCSVTransfer.exportColumns(for: entry)
+        let csv = """
+        categoryIcon,date,start,end,endDayOffset,breakMinutes,type
+        briefcase.fill,2026-05-12,22:00,06:00,1,30,work
+        """
+        let parsed = ShiftCSVTransfer.parse(csv: csv).rows.first
+
+        XCTAssertEqual(columns.endDayOffset, "1")
+        XCTAssertEqual(parsed?.endMinuteOffset, 30 * 60)
+        XCTAssertEqual(parsed?.breakMinutes, 30)
+        XCTAssertEqual(parsed?.hasValidTimeRange, true)
+    }
+
     func testLegalBreakToleranceCorrectionAtSixHoursWindow() {
         let entry = DayEntry(date: Date(), type: .work, manualWorkedSeconds: 6 * 3600 + 10 * 60)
         let result = CalculationService().workedSeconds(for: entry)
@@ -84,7 +166,7 @@ final class CalculationServiceTests: XCTestCase {
         let entry = DayEntry(date: start, type: .work, segments: [segment])
 
         let result = CalculationService().workedSeconds(for: entry)
-        XCTAssertEqual(try? result.get(), 9 * 3600 + 15 * 60)
+        XCTAssertEqual(try? result.get(), 9 * 3600)
     }
 
     func testNineHoursWithoutExplicitBreakOnlyAppliesThirtyMinutes() {
@@ -99,15 +181,17 @@ final class CalculationServiceTests: XCTestCase {
 
     func testLookbackSufficientHistoryOK() {
         let settings = Settings(hasCompletedOnboarding: true, payMode: .hourly, hourlyRateCents: 2000, strictHistoryRequired: true)
-        let target = DayEntry(date: date(daysBack: 0), type: .vacation)
+        let targetDate = dateFrom(year: 2026, month: 5, day: 20)
+        let target = DayEntry(date: targetDate, type: .vacation)
         var entries: [DayEntry] = [target]
 
         for i in 1...13 {
-            let refDate = date(daysBack: i * 7)
+            let refDate = targetDate.addingDays(i * -7, calendar: calendar)
             entries.append(DayEntry(date: refDate, type: .work, manualWorkedSeconds: 28800))
         }
 
-        let result = CalculationService().creditedResult(for: target, allEntries: entries, settings: settings)
+        let service = CalculationService()
+        let result = service.creditedResult(for: target, entriesByDate: service.makeEntriesByDateLookup(from: entries), settings: settings)
         if case let .ok(valueSeconds, _) = result {
             XCTAssertEqual(valueSeconds, 28800)
         } else {
@@ -118,7 +202,8 @@ final class CalculationServiceTests: XCTestCase {
     func testLookbackInsufficientHistoryReturnsZeroWarning() {
         let settings = Settings(hasCompletedOnboarding: true, strictHistoryRequired: true)
         let target = DayEntry(date: date(daysBack: 0), type: .sick)
-        let result = CalculationService().creditedResult(for: target, allEntries: [target], settings: settings)
+        let service = CalculationService()
+        let result = service.creditedResult(for: target, entriesByDate: service.makeEntriesByDateLookup(from: [target]), settings: settings)
         if case let .warning(valueSeconds, _, _) = result {
             XCTAssertEqual(valueSeconds, 0)
         } else {
@@ -129,12 +214,13 @@ final class CalculationServiceTests: XCTestCase {
     func testMissingEntriesAlwaysCountAsZero() {
         let target = DayEntry(date: date(daysBack: 0), type: .vacation)
 
-        let strictOffZeroOff = Settings(strictHistoryRequired: false, countMissingAsZero: false)
-        let r1 = CalculationService().creditedResult(for: target, allEntries: [target], settings: strictOffZeroOff)
-        if case .warning = r1 {} else { XCTFail("Expected warning") }
+        let service = CalculationService()
+        let strictOffZeroOff = Settings(countMissingAsZero: false, strictHistoryRequired: false)
+        let r1 = service.creditedResult(for: target, entriesByDate: service.makeEntriesByDateLookup(from: [target]), settings: strictOffZeroOff)
+        if case .error = r1 {} else { XCTFail("Expected missing history error") }
 
-        let strictOffZeroOn = Settings(strictHistoryRequired: false, countMissingAsZero: true)
-        let r2 = CalculationService().creditedResult(for: target, allEntries: [target], settings: strictOffZeroOn)
+        let strictOffZeroOn = Settings(countMissingAsZero: true, strictHistoryRequired: false)
+        let r2 = service.creditedResult(for: target, entriesByDate: service.makeEntriesByDateLookup(from: [target]), settings: strictOffZeroOn)
         if case .warning = r2 {} else { XCTFail("Expected warning") }
     }
 
@@ -145,7 +231,8 @@ final class CalculationServiceTests: XCTestCase {
         for i in 1...13 {
             entries.append(DayEntry(date: date(daysBack: i * 7), type: .work))
         }
-        let result = CalculationService().creditedResult(for: target, allEntries: entries, settings: settings)
+        let service = CalculationService()
+        let result = service.creditedResult(for: target, entriesByDate: service.makeEntriesByDateLookup(from: entries), settings: settings)
         if case let .warning(valueSeconds, _, _) = result {
             XCTAssertEqual(valueSeconds, 0)
         } else {
@@ -163,10 +250,10 @@ final class CalculationServiceTests: XCTestCase {
 
     func testHolidayCreditMode() {
         let service = CalculationService()
-        let zero = Settings(holidayCreditingMode: .zero, weeklyTargetSeconds: 180000)
+        let zero = Settings(weeklyTargetSeconds: 180000, holidayCreditingMode: .zero)
         XCTAssertEqual(service.holidayCreditedSeconds(settings: zero), 0)
 
-        let distributed = Settings(holidayCreditingMode: .weeklyTargetDistributed, weeklyTargetSeconds: 180000, scheduledWorkdaysCount: 5)
+        let distributed = Settings(weeklyTargetSeconds: 180000, holidayCreditingMode: .weeklyTargetDistributed, scheduledWorkdaysCount: 5)
         XCTAssertEqual(service.holidayCreditedSeconds(settings: distributed), 36000)
     }
 
@@ -182,11 +269,39 @@ final class CalculationServiceTests: XCTestCase {
         }
     }
 
+    func testExportComputationUsesStoredCreditedHolidayValue() {
+        let settings = Settings(
+            payMode: .hourly,
+            hourlyRateCents: 2000,
+            countMissingAsZero: false,
+            strictHistoryRequired: true,
+            holidayCreditingMode: .lookback13Weeks
+        )
+        let holiday = DayEntry(
+            date: date(daysBack: 0),
+            type: .holiday,
+            manualWorkedSeconds: 8 * 3600
+        )
+        let result = CalculationService().exportComputation(for: holiday, allEntries: [holiday], settings: settings)
+
+        if case let .ok(valueSeconds, valueCents) = result {
+            XCTAssertEqual(valueSeconds, 8 * 3600)
+            XCTAssertEqual(valueCents, 16000)
+        } else {
+            XCTFail("Expected export to use the saved credited value.")
+        }
+    }
+
     func testMissingWeeksAreIncludedAsZeroInAverage() {
         let settings = Settings(strictHistoryRequired: true)
         let target = DayEntry(date: date(daysBack: 0), type: .vacation)
         let oneReference = DayEntry(date: date(daysBack: 7), type: .work, manualWorkedSeconds: 13000)
-        let result = CalculationService().creditedResult(for: target, allEntries: [target, oneReference], settings: settings)
+        let service = CalculationService()
+        let result = service.creditedResult(
+            for: target,
+            entriesByDate: service.makeEntriesByDateLookup(from: [target, oneReference]),
+            settings: settings
+        )
 
         if case let .ok(valueSeconds, _) = result {
             XCTAssertEqual(valueSeconds, 1020)

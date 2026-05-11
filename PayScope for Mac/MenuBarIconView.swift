@@ -11,7 +11,13 @@ struct MenuBarIconView: View {
     private static let nextWorkStartFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "de_DE")
-        formatter.dateFormat = "dd.MM HH:mm"
+        formatter.dateFormat = "dd.MM - HH:mm"
+        return formatter
+    }()
+    private static let nextWorkStartTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "HH:mm"
         return formatter
     }()
 
@@ -51,6 +57,13 @@ struct MenuBarIconView: View {
         let entriesByDate = entriesLookup(from: snapshot.dayEntries, calendar: calendar)
         let resolvedSettings = makeSettings(from: snapshot.settings)
         let todayKey = referenceDate.localDayKey(calendar: calendar)
+
+        if let active = activeShiftEntry(in: snapshot.dayEntries, at: referenceDate) {
+            return MenuBarIndicator(
+                icon: active.type.icon,
+                text: countdownText(until: active.shiftEnd ?? referenceDate, referenceDate: referenceDate)
+            )
+        }
 
         if let today = entriesByDate[todayKey] {
             switch today.type {
@@ -101,6 +114,21 @@ struct MenuBarIconView: View {
         return end
     }
 
+    private func activeShiftEntry(
+        in entries: [CloudSnapshot.DayEntryPayload],
+        at referenceDate: Date
+    ) -> CloudSnapshot.DayEntryPayload? {
+        entries
+            .filter { entry in
+                guard entry.type == .work || entry.type == .manual else { return false }
+                guard let start = entry.shiftStart, let end = entry.shiftEnd, end > start else { return false }
+                return referenceDate >= start && referenceDate < end
+            }
+            .max { lhs, rhs in
+                (lhs.shiftStart ?? .distantPast) < (rhs.shiftStart ?? .distantPast)
+            }
+    }
+
     private func reloadSnapshot() {
         Task {
             let envelope = await LocalCloudSnapshotStore.shared.load()
@@ -133,7 +161,11 @@ struct MenuBarIconView: View {
             if settings.effectiveVacationCreditingMode == .fixedValue {
                 return settings.effectiveVacationFixedSeconds
             }
-            return creditedSeconds(for: day, entriesByDate: entriesByDate, settings: settings, calendar: calendar)
+            let computed = creditedSeconds(for: day, entriesByDate: entriesByDate, settings: settings, calendar: calendar)
+            if computed == 0, let cached = day.manualWorkedSeconds {
+                return max(0, cached)
+            }
+            return computed
         case .holiday:
             if let overrideSeconds = day.creditedOverrideSeconds {
                 return max(0, overrideSeconds)
@@ -141,12 +173,20 @@ struct MenuBarIconView: View {
             if settings.effectiveHolidayCreditingMode == .fixedValue {
                 return settings.effectiveHolidayFixedSeconds
             }
-            return creditedSeconds(for: day, entriesByDate: entriesByDate, settings: settings, calendar: calendar)
+            let computed = creditedSeconds(for: day, entriesByDate: entriesByDate, settings: settings, calendar: calendar)
+            if computed == 0, let cached = day.manualWorkedSeconds {
+                return max(0, cached)
+            }
+            return computed
         case .sick:
             if let overrideSeconds = day.creditedOverrideSeconds {
                 return max(0, overrideSeconds)
             }
-            return creditedSeconds(for: day, entriesByDate: entriesByDate, settings: settings, calendar: calendar)
+            let computed = creditedSeconds(for: day, entriesByDate: entriesByDate, settings: settings, calendar: calendar)
+            if computed == 0, let cached = day.manualWorkedSeconds {
+                return max(0, cached)
+            }
+            return computed
         }
     }
 
@@ -165,14 +205,37 @@ struct MenuBarIconView: View {
             let referenceKey = referenceDate.localDayKey(calendar: calendar)
 
             guard let refEntry = entriesByDate[referenceKey] else {
-                if settings.strictHistoryRequired && !settings.countMissingAsZero {
+                if settings.countMissingAsZero {
+                    values.append(0)
+                } else {
                     return 0
                 }
-                values.append(0)
                 continue
             }
 
-            values.append(referenceSeconds(for: refEntry, settings: settings))
+            let hasExplicitReferenceValue = refEntry.creditedOverrideSeconds != nil ||
+                (refEntry.type == .vacation && settings.effectiveVacationCreditingMode == .fixedValue) ||
+                (refEntry.type == .holiday && settings.effectiveHolidayCreditingMode == .fixedValue)
+            let canDeriveReferenceValue = canDeriveCreditedReferenceValue(for: refEntry, settings: settings)
+
+            if isEmptyTrackedDay(refEntry) && !hasExplicitReferenceValue && !canDeriveReferenceValue {
+                if settings.countMissingAsZero {
+                    values.append(0)
+                } else {
+                    return 0
+                }
+                continue
+            }
+
+            guard let seconds = referenceSeconds(
+                for: refEntry,
+                entriesByDate: entriesByDate,
+                settings: settings,
+                calendar: calendar
+            ) else {
+                return 0
+            }
+            values.append(seconds)
         }
 
         guard !values.isEmpty else { return 0 }
@@ -183,7 +246,12 @@ struct MenuBarIconView: View {
         return max(0, roundedToMinute)
     }
 
-    private func referenceSeconds(for day: CloudSnapshot.DayEntryPayload, settings: Settings) -> Int {
+    private func referenceSeconds(
+        for day: CloudSnapshot.DayEntryPayload,
+        entriesByDate: [String: CloudSnapshot.DayEntryPayload],
+        settings: Settings,
+        calendar: Calendar
+    ) -> Int? {
         if let overrideSeconds = day.creditedOverrideSeconds {
             return max(0, overrideSeconds)
         }
@@ -196,7 +264,39 @@ struct MenuBarIconView: View {
             return settings.effectiveHolidayFixedSeconds
         }
 
+        if canDeriveCreditedReferenceValue(for: day, settings: settings) {
+            return creditedSeconds(
+                for: day,
+                entriesByDate: entriesByDate,
+                settings: settings,
+                calendar: calendar
+            )
+        }
+
         return workedSeconds(for: day, includeBreak: settings.effectiveCalendarHoursBreakMode == .withBreak)
+    }
+
+    private func canDeriveCreditedReferenceValue(for day: CloudSnapshot.DayEntryPayload, settings: Settings) -> Bool {
+        switch day.type {
+        case .vacation:
+            return settings.effectiveVacationCreditingMode == .lookback13Weeks
+        case .holiday:
+            return settings.effectiveHolidayCreditingMode == .lookback13Weeks
+        case .sick:
+            return true
+        case .work, .manual:
+            return false
+        }
+    }
+
+    private func isEmptyTrackedDay(_ day: CloudSnapshot.DayEntryPayload) -> Bool {
+        if let manualWorkedSeconds = day.manualWorkedSeconds, manualWorkedSeconds > 0 {
+            return false
+        }
+        if let start = day.shiftStart, let end = day.shiftEnd, end > start {
+            return false
+        }
+        return true
     }
 
     private func workedSeconds(for day: CloudSnapshot.DayEntryPayload, includeBreak: Bool) -> Int {
@@ -258,7 +358,7 @@ struct MenuBarIconView: View {
         if candidate.entry.type == .work {
             return MenuBarIndicator(
                 icon: candidate.entry.type.icon,
-                text: Self.nextWorkStartFormatter.string(from: candidate.startDate)
+                text: nextWorkStartText(for: candidate.startDate, referenceDate: referenceDate, calendar: calendar)
             )
         }
 
@@ -272,6 +372,18 @@ struct MenuBarIconView: View {
             icon: candidate.entry.type.icon,
             text: Formatters.hhmmString(seconds: seconds)
         )
+    }
+
+    private func nextWorkStartText(for startDate: Date, referenceDate: Date, calendar: Calendar) -> String {
+        let todayStart = referenceDate.startOfDayLocal(calendar: calendar)
+        if
+            let tomorrowStart = calendar.date(byAdding: .day, value: 1, to: todayStart),
+            calendar.isDate(startDate, inSameDayAs: tomorrowStart)
+        {
+            return "Morgen - \(Self.nextWorkStartTimeFormatter.string(from: startDate))"
+        }
+
+        return Self.nextWorkStartFormatter.string(from: startDate)
     }
 
     private struct MenuBarIndicator {

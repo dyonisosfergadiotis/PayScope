@@ -44,6 +44,24 @@ enum DayType: String, Codable, CaseIterable, Identifiable {
         case .sick: return .red
         }
     }
+
+    nonisolated static func fromPersistedRaw(_ raw: String) -> DayType? {
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalized {
+        case "work", "arbeit":
+            return .work
+        case "manual", "manuell":
+            return .manual
+        case "vacation", "urlaub":
+            return .vacation
+        case "holiday", "feiertag":
+            return .holiday
+        case "sick", "krank":
+            return .sick
+        default:
+            return DayType(rawValue: normalized)
+        }
+    }
 }
 
 enum PayMode: String, Codable, CaseIterable, Identifiable {
@@ -199,6 +217,10 @@ final class DayEntry {
     var segments: [TimeSegment] = []
     var manualWorkedSeconds: Int?
     var creditedOverrideSeconds: Int?
+    var shiftStart: Date?
+    var shiftEnd: Date?
+    var breakSeconds: Int?
+    var alwaysApplyFifteenMinuteBuffer: Bool?
 
     init(
         date: Date = Date(),
@@ -206,7 +228,11 @@ final class DayEntry {
         notes: String = "",
         segments: [TimeSegment] = [],
         manualWorkedSeconds: Int? = nil,
-        creditedOverrideSeconds: Int? = nil
+        creditedOverrideSeconds: Int? = nil,
+        shiftStart: Date? = nil,
+        shiftEnd: Date? = nil,
+        breakSeconds: Int? = nil,
+        alwaysApplyFifteenMinuteBuffer: Bool? = nil
     ) {
         self.date = date.startOfDayUTC()
         self.type = type
@@ -214,10 +240,16 @@ final class DayEntry {
         self.segments = segments
         self.manualWorkedSeconds = manualWorkedSeconds
         self.creditedOverrideSeconds = creditedOverrideSeconds
+        self.shiftStart = shiftStart
+        self.shiftEnd = shiftEnd
+        self.breakSeconds = breakSeconds
+        self.alwaysApplyFifteenMinuteBuffer = alwaysApplyFifteenMinuteBuffer
     }
 
     var isEmptyTrackedDay: Bool {
-        manualWorkedSeconds == nil && segments.isEmpty
+        if let manualWorkedSeconds, manualWorkedSeconds > 0 { return false }
+        if let shiftStart, let shiftEnd, shiftEnd > shiftStart { return false }
+        return segments.isEmpty
     }
 }
 
@@ -242,8 +274,7 @@ final class Settings {
     var showCalendarWeekNumbers: Bool?
     var showCalendarWeekHours: Bool?
     var showCalendarWeekPay: Bool?
-    var timelineMinMinute: Int?
-    var timelineMaxMinute: Int?
+    var alwaysApplyFifteenMinuteBuffer: Bool?
     var holidayCountryCode: String?
     var holidaySubdivisionCode: String?
     var autoSetHolidayCategory: Bool?
@@ -275,8 +306,7 @@ final class Settings {
         showCalendarWeekNumbers: Bool = false,
         showCalendarWeekHours: Bool = false,
         showCalendarWeekPay: Bool = false,
-        timelineMinMinute: Int? = 6 * 60,
-        timelineMaxMinute: Int? = 22 * 60,
+        alwaysApplyFifteenMinuteBuffer: Bool? = false,
         holidayCountryCode: String? = "DE",
         holidaySubdivisionCode: String? = nil,
         autoSetHolidayCategory: Bool = false,
@@ -307,8 +337,7 @@ final class Settings {
         self.showCalendarWeekNumbers = showCalendarWeekNumbers
         self.showCalendarWeekHours = showCalendarWeekHours
         self.showCalendarWeekPay = showCalendarWeekPay
-        self.timelineMinMinute = timelineMinMinute
-        self.timelineMaxMinute = timelineMaxMinute
+        self.alwaysApplyFifteenMinuteBuffer = alwaysApplyFifteenMinuteBuffer
         self.holidayCountryCode = holidayCountryCode
         self.holidaySubdivisionCode = holidaySubdivisionCode
         self.autoSetHolidayCategory = autoSetHolidayCategory
@@ -369,6 +398,10 @@ extension Settings {
 
     var effectiveShowCalendarWeekPay: Bool {
         showCalendarWeekPay ?? false
+    }
+
+    var effectiveAlwaysApplyFifteenMinuteBuffer: Bool {
+        alwaysApplyFifteenMinuteBuffer ?? false
     }
 
     var effectiveMarkPaidHolidays: Bool {

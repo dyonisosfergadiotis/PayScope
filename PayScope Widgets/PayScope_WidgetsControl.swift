@@ -124,3 +124,25 @@ struct StartTimerIntent: SetValueIntent {
         }
     }
 }
+
+#if DEBUG
+@available(iOS 18.0, *)
+#Preview("Rectangular Lock Screen (Real)", as: .accessoryRectangular) {
+    PayScope_WidgetsRectangularLockScreen()
+} timeline: {
+    PayScopeRectangularEntry.previewActive(date: .now)
+    PayScopeRectangularEntry.previewLongDuration(date: .now)
+    PayScopeRectangularEntry.previewNextShift(date: .now)
+    PayScopeRectangularEntry.previewEmpty(date: .now)
+}
+
+@available(iOS 18.0, *)
+#Preview("Inline Lock Screen (Real)", as: .accessoryInline) {
+    PayScope_WidgetsInlineLockScreen()
+} timeline: {
+    PayScopeRectangularEntry.previewActive(date: .now)
+    PayScopeRectangularEntry.previewLongDuration(date: .now)
+    PayScopeRectangularEntry.previewNextShift(date: .now)
+    PayScopeRectangularEntry.previewEmpty(date: .now)
+}
+#endif

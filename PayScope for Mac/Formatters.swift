@@ -3,12 +3,14 @@ import Foundation
 enum Formatters {
     static let time: DateFormatter = {
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
         formatter.timeStyle = .short
         return formatter
     }()
 
     static let day: DateFormatter = {
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
         formatter.dateStyle = .medium
         return formatter
     }()
@@ -16,7 +18,7 @@ enum Formatters {
     static let isoDay: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale.current
+        formatter.locale = Locale(identifier: "de_DE")
         return formatter
     }()
 

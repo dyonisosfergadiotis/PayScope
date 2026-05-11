@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var settings: Settings?
     @State private var isExpanded = false
     @State private var isRefreshing = false
+    @State private var isLoadingSettingsFromICloud = false
     @State private var hasInitialized = false
     @State private var lastRefreshDate: Date?
     @State private var refreshHint: String?
@@ -28,12 +29,16 @@ struct ContentView: View {
         isExpanded ? expandedWindowHeight : compactWindowHeight
     }
 
+    private var isBusyWithCloud: Bool {
+        isRefreshing || isLoadingSettingsFromICloud
+    }
+
     var body: some View {
         Group {
-            if settings != nil {
+            if let resolvedSettings = settings {
                 VStack(spacing: 10) {
                     CalendarMonthView(
-                        settings: settings,
+                        settings: resolvedSettings,
                         entries: cloudEntries,
                         netConfigs: cloudNetWageConfigs,
                         holidays: cloudHolidayDays,
@@ -43,6 +48,9 @@ struct ContentView: View {
                             }
                         }
                     )
+
+                    //syncStatusBar
+                    breakBufferStatusBar(settings: resolvedSettings)
                 }
                 .padding(10)
                 .frame(width: 380, height: targetWindowHeight, alignment: .top)
@@ -53,12 +61,13 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            guard !hasInitialized else { return }
-            hasInitialized = true
-
             Task {
                 bootstrapIfNeeded()
                 await loadSnapshotFromLocalCache()
+
+                guard !hasInitialized else { return }
+                hasInitialized = true
+
                 let shouldRunManualInitialRefresh = !hasCompletedInitialManualCloudRefresh
                 let didRefreshSucceed = await refreshFromICloud(triggeredByUser: shouldRunManualInitialRefresh)
                 if shouldRunManualInitialRefresh && didRefreshSucceed {
@@ -94,33 +103,54 @@ struct ContentView: View {
     }
 
     private var syncStatusBar: some View {
-        HStack(spacing: 10) {
-            Label {
-                Text(syncStatusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            } icon: {
-                Image(systemName: isRefreshing ? "arrow.triangle.2.circlepath.circle.fill" : "icloud")
-                    .foregroundStyle(isRefreshing ? accentColor : .secondary)
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Label {
+                    Text(syncStatusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } icon: {
+                    Image(systemName: isBusyWithCloud ? "arrow.triangle.2.circlepath.circle.fill" : "icloud")
+                        .foregroundStyle(isBusyWithCloud ? accentColor : .secondary)
+                }
 
-            Spacer()
+                Spacer()
+
+                Button {
+                    Task { _ = await refreshFromICloud(triggeredByUser: true) }
+                } label: {
+                    if isRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(accentColor)
+                .controlSize(.small)
+                .disabled(isBusyWithCloud)
+            }
 
             Button {
-                Task { _ = await refreshFromICloud(triggeredByUser: true) }
+                Task { await loadSettingsFromICloud() }
             } label: {
-                if isRefreshing {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: "arrow.clockwise")
+                HStack(spacing: 6) {
+                    if isLoadingSettingsFromICloud {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "icloud.and.arrow.down")
+                    }
+                    Text("Einstellungen in iCloud laden")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(accentColor)
+            .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(isRefreshing)
+            .disabled(isBusyWithCloud)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -138,6 +168,9 @@ struct ContentView: View {
         if let refreshHint {
             return refreshHint
         }
+        if isLoadingSettingsFromICloud {
+            return "Prüfe iCloud-Einstellungen..."
+        }
         if isRefreshing {
             return "Aktualisiere iCloud-Daten..."
         }
@@ -145,6 +178,29 @@ struct ContentView: View {
             return "Zuletzt aktualisiert: \(Formatters.time.string(from: lastRefreshDate))"
         }
         return "Lokaler Cache aktiv"
+    }
+
+    private func breakBufferStatusBar(settings: Settings) -> some View {
+        let isAlwaysOn = settings.effectiveAlwaysApplyFifteenMinuteBuffer
+
+        return HStack(spacing: 8) {
+            Image(systemName: isAlwaysOn ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isAlwaysOn ? accentColor : .secondary)
+            Text("15-Min-Puffer: \(isAlwaysOn ? "immer an" : "nur bei 6h/9h")")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
     }
 
     private func bootstrapIfNeeded() {
@@ -200,6 +256,88 @@ struct ContentView: View {
         return false
     }
 
+    @MainActor
+    private func loadSettingsFromICloud() async {
+        guard !isRefreshing, !isLoadingSettingsFromICloud else { return }
+
+        isLoadingSettingsFromICloud = true
+        defer { isLoadingSettingsFromICloud = false }
+
+        do {
+            let snapshot = normalizeSnapshot(try await CloudKitReadService.shared.fetchSnapshot())
+            guard let iCloudPayload = snapshot.settings else {
+                refreshHint = "Error: Keine iCloud-Einstellungen gefunden"
+                return
+            }
+
+            let iCloudSettings = makeSettings(from: iCloudPayload)
+            let localSettings = settings ?? Settings()
+            let differenceCount = settingsDifferenceCount(local: localSettings, iCloud: iCloudSettings)
+
+            if differenceCount > 0 {
+                applySnapshot(snapshot)
+                lastAppliedSnapshot = snapshot
+                await LocalCloudSnapshotStore.shared.save(snapshot: snapshot)
+
+                let noun = differenceCount == 1 ? "Einstellung" : "Einstellungen"
+                refreshHint = "\(differenceCount) \(noun) aus iCloud übernommen (iOS-Stand)"
+            } else {
+                refreshHint = "Einstellungen sind bereits wie auf iOS"
+            }
+
+            lastRefreshDate = Date()
+        } catch let error as CloudKitReadServiceError {
+            refreshHint = "Error: \(error.localizedDescription)"
+        } catch let error as CKError {
+            let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            refreshHint = detail.isEmpty
+                ? "Error: CloudKit-Fehler"
+                : "Error: \(detail)"
+        } catch {
+            let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            refreshHint = detail.isEmpty
+                ? "Error: Lokaler Cache bleibt aktiv"
+                : "Error: \(detail)"
+        }
+    }
+
+    private func settingsDifferenceCount(local: Settings, iCloud: Settings) -> Int {
+        var differences = 0
+
+        if local.hasCompletedOnboarding != iCloud.hasCompletedOnboarding { differences += 1 }
+        if local.payMode != iCloud.payMode { differences += 1 }
+        if local.hourlyRateCents != iCloud.hourlyRateCents { differences += 1 }
+        if local.monthlySalaryCents != iCloud.monthlySalaryCents { differences += 1 }
+        if local.weeklyTargetSeconds != iCloud.weeklyTargetSeconds { differences += 1 }
+        if local.weekStart != iCloud.weekStart { differences += 1 }
+        if local.vacationLookbackCount != iCloud.vacationLookbackCount { differences += 1 }
+        if local.vacationCreditingMode != iCloud.vacationCreditingMode { differences += 1 }
+        if local.vacationFixedSeconds != iCloud.vacationFixedSeconds { differences += 1 }
+        if local.countMissingAsZero != iCloud.countMissingAsZero { differences += 1 }
+        if local.strictHistoryRequired != iCloud.strictHistoryRequired { differences += 1 }
+        if local.holidayCreditingMode != iCloud.holidayCreditingMode { differences += 1 }
+        if local.holidayFixedSeconds != iCloud.holidayFixedSeconds { differences += 1 }
+        if local.scheduledWorkdaysCount != iCloud.scheduledWorkdaysCount { differences += 1 }
+        if local.themeAccent != iCloud.themeAccent { differences += 1 }
+        if local.calendarCellDisplayMode != iCloud.calendarCellDisplayMode { differences += 1 }
+        if local.calendarHoursBreakMode != iCloud.calendarHoursBreakMode { differences += 1 }
+        if local.showCalendarWeekNumbers != iCloud.showCalendarWeekNumbers { differences += 1 }
+        if local.showCalendarWeekHours != iCloud.showCalendarWeekHours { differences += 1 }
+        if local.showCalendarWeekPay != iCloud.showCalendarWeekPay { differences += 1 }
+        if local.alwaysApplyFifteenMinuteBuffer != iCloud.alwaysApplyFifteenMinuteBuffer { differences += 1 }
+        if local.holidayCountryCode != iCloud.holidayCountryCode { differences += 1 }
+        if local.holidaySubdivisionCode != iCloud.holidaySubdivisionCode { differences += 1 }
+        if local.autoSetHolidayCategory != iCloud.autoSetHolidayCategory { differences += 1 }
+        if local.markPaidHolidays != iCloud.markPaidHolidays { differences += 1 }
+        if local.paidHolidayWeekdayMask != iCloud.paidHolidayWeekdayMask { differences += 1 }
+        if local.netWageTaxPercent != iCloud.netWageTaxPercent { differences += 1 }
+        if local.netPensionPercent != iCloud.netPensionPercent { differences += 1 }
+        if local.netMonthlyAllowanceEuro != iCloud.netMonthlyAllowanceEuro { differences += 1 }
+        if local.netBonusesCSV != iCloud.netBonusesCSV { differences += 1 }
+
+        return differences
+    }
+
     private func applySnapshot(_ snapshot: CloudSnapshot) {
         let resolvedSettings = makeSettings(from: snapshot.settings)
         settings = resolvedSettings
@@ -225,10 +363,17 @@ struct ContentView: View {
             notes: payload.notes,
             segments: [],
             manualWorkedSeconds: payload.manualWorkedSeconds,
-            creditedOverrideSeconds: payload.creditedOverrideSeconds
+            creditedOverrideSeconds: payload.creditedOverrideSeconds,
+            shiftStart: payload.shiftStart,
+            shiftEnd: payload.shiftEnd,
+            breakSeconds: payload.breakSeconds,
+            alwaysApplyFifteenMinuteBuffer: payload.alwaysApplyFifteenMinuteBuffer
         )
 
-        if let start = payload.shiftStart, let end = payload.shiftEnd, end > start {
+        if payload.type == .work,
+           let start = payload.shiftStart,
+           let end = payload.shiftEnd,
+           end > start {
             entry.segments = [
                 TimeSegment(start: start, end: end, breakSeconds: max(0, payload.breakSeconds ?? 0))
             ]
@@ -303,8 +448,7 @@ struct ContentView: View {
         resolved.showCalendarWeekNumbers = incoming.showCalendarWeekNumbers
         resolved.showCalendarWeekHours = incoming.showCalendarWeekHours
         resolved.showCalendarWeekPay = incoming.showCalendarWeekPay
-        resolved.timelineMinMinute = incoming.timelineMinMinute
-        resolved.timelineMaxMinute = incoming.timelineMaxMinute
+        resolved.alwaysApplyFifteenMinuteBuffer = incoming.alwaysApplyFifteenMinuteBuffer
         resolved.holidayCountryCode = incoming.holidayCountryCode
         resolved.holidaySubdivisionCode = incoming.holidaySubdivisionCode
         resolved.autoSetHolidayCategory = incoming.autoSetHolidayCategory
@@ -347,7 +491,12 @@ struct ContentView: View {
         if lhs.shiftEnd != rhs.shiftEnd {
             return (lhs.shiftEnd ?? .distantPast) < (rhs.shiftEnd ?? .distantPast)
         }
-        return (lhs.breakSeconds ?? -1) < (rhs.breakSeconds ?? -1)
+        if lhs.breakSeconds != rhs.breakSeconds {
+            return (lhs.breakSeconds ?? -1) < (rhs.breakSeconds ?? -1)
+        }
+        let lhsFlag = lhs.alwaysApplyFifteenMinuteBuffer == true ? 1 : 0
+        let rhsFlag = rhs.alwaysApplyFifteenMinuteBuffer == true ? 1 : 0
+        return lhsFlag < rhsFlag
     }
 
     private func compareNetConfigPayloads(_ lhs: CloudSnapshot.NetWageConfigPayload, _ rhs: CloudSnapshot.NetWageConfigPayload) -> Bool {

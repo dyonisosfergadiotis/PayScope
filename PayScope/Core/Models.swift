@@ -52,6 +52,24 @@ enum DayType: String, Codable, CaseIterable, Identifiable {
     var tint: Color {
         tint(for: .blue)
     }
+
+    static func fromPersistedRaw(_ raw: String) -> DayType? {
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalized {
+        case "work", "arbeit":
+            return .work
+        case "manual", "manuell":
+            return .manual
+        case "vacation", "urlaub":
+            return .vacation
+        case "holiday", "feiertag":
+            return .holiday
+        case "sick", "krank":
+            return .sick
+        default:
+            return DayType(rawValue: normalized)
+        }
+    }
 }
 
 enum PayMode: String, Codable, CaseIterable, Identifiable {
@@ -200,6 +218,20 @@ enum CalendarHoursBreakMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum CalendarSummaryDisplayMode: String, Codable, CaseIterable, Identifiable {
+    case grossNet
+    case payOnly
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .grossNet: return "Brutto/Netto"
+        case .payOnly: return "Nur Lohn"
+        }
+    }
+}
+
 @Model
 final class TimeSegment {
     var start: Date
@@ -226,6 +258,7 @@ final class DayEntry {
     var shiftStart: Date?
     var shiftEnd: Date?
     var breakSeconds: Int?
+    var alwaysApplyFifteenMinuteBuffer: Bool?
 
     init(
         date: Date,
@@ -234,7 +267,8 @@ final class DayEntry {
         notes: String = "",
         segments: [TimeSegment] = [],
         manualWorkedSeconds: Int? = nil,
-        creditedOverrideSeconds: Int? = nil
+        creditedOverrideSeconds: Int? = nil,
+        alwaysApplyFifteenMinuteBuffer: Bool? = nil
     ) {
         self.date = date.startOfDayUTC()
         self.updatedAt = updatedAt
@@ -243,6 +277,7 @@ final class DayEntry {
         self.segments = segments
         self.manualWorkedSeconds = manualWorkedSeconds
         self.creditedOverrideSeconds = creditedOverrideSeconds
+        self.alwaysApplyFifteenMinuteBuffer = alwaysApplyFifteenMinuteBuffer
     }
 
     var isEmptyTrackedDay: Bool {
@@ -277,11 +312,12 @@ final class Settings {
     var themeAccent: ThemeAccent
     var calendarCellDisplayMode: CalendarCellDisplayMode?
     var calendarHoursBreakMode: CalendarHoursBreakMode?
+    var calendarSummaryDisplayMode: CalendarSummaryDisplayMode?
     var showCalendarWeekNumbers: Bool?
     var showCalendarWeekHours: Bool?
     var showCalendarWeekPay: Bool?
-    var timelineMinMinute: Int?
-    var timelineMaxMinute: Int?
+    var showLiveActivity: Bool?
+    var alwaysApplyFifteenMinuteBuffer: Bool?
     var holidayCountryCode: String?
     var holidaySubdivisionCode: String?
     var autoSetHolidayCategory: Bool?
@@ -291,6 +327,8 @@ final class Settings {
     var netPensionPercent: Double?
     var netMonthlyAllowanceEuro: Double?
     var netBonusesCSV: String?
+    var showTipsButton: Bool?
+    var showTipsButtonAmount: Bool?
 
     var shiftShortcut1: String
     var shiftShortcut2: String
@@ -319,11 +357,12 @@ final class Settings {
         themeAccent: ThemeAccent = .blue,
         calendarCellDisplayMode: CalendarCellDisplayMode? = .dot,
         calendarHoursBreakMode: CalendarHoursBreakMode = .withoutBreak,
+        calendarSummaryDisplayMode: CalendarSummaryDisplayMode = .grossNet,
         showCalendarWeekNumbers: Bool = false,
         showCalendarWeekHours: Bool = false,
         showCalendarWeekPay: Bool = false,
-        timelineMinMinute: Int? = 6 * 60,
-        timelineMaxMinute: Int? = 22 * 60,
+        showLiveActivity: Bool = true,
+        alwaysApplyFifteenMinuteBuffer: Bool? = false,
         holidayCountryCode: String? = "DE",
         holidaySubdivisionCode: String? = nil,
         autoSetHolidayCategory: Bool = false,
@@ -333,6 +372,8 @@ final class Settings {
         netPensionPercent: Double? = nil,
         netMonthlyAllowanceEuro: Double? = nil,
         netBonusesCSV: String? = nil,
+        showTipsButton: Bool = true,
+        showTipsButtonAmount: Bool = true,
         shiftShortcut1: String = "",
         shiftShortcut2: String = "",
         shiftShortcut3: String = "",
@@ -359,11 +400,12 @@ final class Settings {
         self.themeAccent = themeAccent
         self.calendarCellDisplayMode = calendarCellDisplayMode
         self.calendarHoursBreakMode = calendarHoursBreakMode
+        self.calendarSummaryDisplayMode = calendarSummaryDisplayMode
         self.showCalendarWeekNumbers = showCalendarWeekNumbers
         self.showCalendarWeekHours = showCalendarWeekHours
         self.showCalendarWeekPay = showCalendarWeekPay
-        self.timelineMinMinute = timelineMinMinute
-        self.timelineMaxMinute = timelineMaxMinute
+        self.showLiveActivity = showLiveActivity
+        self.alwaysApplyFifteenMinuteBuffer = alwaysApplyFifteenMinuteBuffer
         self.holidayCountryCode = holidayCountryCode
         self.holidaySubdivisionCode = holidaySubdivisionCode
         self.autoSetHolidayCategory = autoSetHolidayCategory
@@ -373,6 +415,8 @@ final class Settings {
         self.netPensionPercent = netPensionPercent
         self.netMonthlyAllowanceEuro = netMonthlyAllowanceEuro
         self.netBonusesCSV = netBonusesCSV
+        self.showTipsButton = showTipsButton
+        self.showTipsButtonAmount = showTipsButtonAmount
         self.shiftShortcut1 = shiftShortcut1
         self.shiftShortcut2 = shiftShortcut2
         self.shiftShortcut3 = shiftShortcut3
@@ -401,11 +445,12 @@ extension Settings {
         themeAccent = source.themeAccent
         calendarCellDisplayMode = source.calendarCellDisplayMode
         calendarHoursBreakMode = source.calendarHoursBreakMode
+        calendarSummaryDisplayMode = source.calendarSummaryDisplayMode
         showCalendarWeekNumbers = source.showCalendarWeekNumbers
         showCalendarWeekHours = source.showCalendarWeekHours
         showCalendarWeekPay = source.showCalendarWeekPay
-        timelineMinMinute = source.timelineMinMinute
-        timelineMaxMinute = source.timelineMaxMinute
+        showLiveActivity = source.showLiveActivity
+        alwaysApplyFifteenMinuteBuffer = source.alwaysApplyFifteenMinuteBuffer
         holidayCountryCode = source.holidayCountryCode
         holidaySubdivisionCode = source.holidaySubdivisionCode
         autoSetHolidayCategory = source.autoSetHolidayCategory
@@ -415,6 +460,8 @@ extension Settings {
         netPensionPercent = source.netPensionPercent
         netMonthlyAllowanceEuro = source.netMonthlyAllowanceEuro
         netBonusesCSV = source.netBonusesCSV
+        showTipsButton = source.showTipsButton
+        showTipsButtonAmount = source.showTipsButtonAmount
         shiftShortcut1 = source.shiftShortcut1
         shiftShortcut2 = source.shiftShortcut2
         shiftShortcut3 = source.shiftShortcut3
@@ -455,6 +502,10 @@ extension Settings {
         calendarHoursBreakMode ?? .withoutBreak
     }
 
+    var effectiveCalendarSummaryDisplayMode: CalendarSummaryDisplayMode {
+        calendarSummaryDisplayMode ?? .grossNet
+    }
+
     var effectiveShowCalendarWeekNumbers: Bool {
         showCalendarWeekNumbers ?? false
     }
@@ -465,6 +516,22 @@ extension Settings {
 
     var effectiveShowCalendarWeekPay: Bool {
         showCalendarWeekPay ?? false
+    }
+
+    var effectiveShowLiveActivity: Bool {
+        showLiveActivity ?? true
+    }
+
+    var effectiveShowTipsButton: Bool {
+        showTipsButton ?? true
+    }
+
+    var effectiveShowTipsButtonAmount: Bool {
+        showTipsButtonAmount ?? true
+    }
+
+    var effectiveAlwaysApplyFifteenMinuteBuffer: Bool {
+        alwaysApplyFifteenMinuteBuffer ?? false
     }
 
     var effectiveMarkPaidHolidays: Bool {
@@ -595,6 +662,25 @@ final class NetWageMonthConfig {
         self.pensionPercent = pensionPercent
         self.monthlyAllowanceEuro = monthlyAllowanceEuro
         self.bonusesCSV = bonusesCSV
+    }
+}
+
+struct TipEntry: Identifiable, Codable, Equatable {
+    var id: String
+    var date: Date
+    var amountCents: Int
+    var updatedAt: Date
+
+    init(
+        id: String = UUID().uuidString,
+        date: Date = Date(),
+        amountCents: Int,
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.date = date.startOfDayLocal()
+        self.amountCents = max(0, amountCents)
+        self.updatedAt = updatedAt
     }
 }
 
