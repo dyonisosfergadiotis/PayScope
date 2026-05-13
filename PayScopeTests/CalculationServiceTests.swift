@@ -99,6 +99,103 @@ final class CalculationServiceTests: XCTestCase {
         XCTAssertEqual(parsed?.hasValidTimeRange, true)
     }
 
+    func testCSVExporterCanExcludeSelectedInformation() {
+        let day = dateFrom(year: 2026, month: 5, day: 12)
+        let range = ShiftTimeRange(startMinute: 8 * 60, endClockMinute: 16 * 60)
+        let entry = DayEntry(date: day, type: .work, notes: "Intern")
+        entry.shiftStart = range?.startDate(on: day)
+        entry.shiftEnd = range?.endDate(on: day)
+        entry.breakSeconds = 30 * 60
+
+        let csv = CSVExporter().csvForMonth(
+            entries: [entry],
+            tips: [TipEntry(date: day, amountCents: 500)],
+            month: day,
+            settings: Settings(payMode: .hourly, hourlyRateCents: 2000),
+            options: MonthExportOptions(
+                includeShiftTimes: false,
+                includePay: false,
+                includeTips: false,
+                includeNotesAndWarnings: false
+            )
+        )
+
+        XCTAssertTrue(csv.hasPrefix("categoryIcon,date,type,workedHours,creditedHours"))
+        XCTAssertFalse(csv.contains("08:00"))
+        XCTAssertFalse(csv.contains("40.00"))
+        XCTAssertFalse(csv.contains("tipAmount"))
+        XCTAssertFalse(csv.contains("5.00"))
+        XCTAssertFalse(csv.contains("Intern"))
+    }
+
+    func testCSVExporterIncludesTipsAsOwnCategory() {
+        let day = dateFrom(year: 2026, month: 5, day: 12)
+        let csv = CSVExporter().csvForMonth(
+            entries: [],
+            tips: [TipEntry(date: day, amountCents: 500)],
+            month: day,
+            settings: Settings(payMode: .hourly, hourlyRateCents: 2000),
+            options: MonthExportOptions(
+                includeShiftTimes: false,
+                includePay: false,
+                includeTips: true,
+                includeNotesAndWarnings: true
+            )
+        )
+
+        XCTAssertTrue(csv.hasPrefix("categoryIcon,date,type,workedHours,creditedHours,tipAmount,notes"))
+        XCTAssertTrue(csv.contains("eurosign.circle.fill,2026-05-12,tip,0.00,0.00,5.00,Trinkgeld"))
+    }
+
+    func testTextExporterCanExcludeSelectedInformation() {
+        let day = dateFrom(year: 2026, month: 5, day: 12)
+        let range = ShiftTimeRange(startMinute: 8 * 60, endClockMinute: 16 * 60)
+        let entry = DayEntry(date: day, type: .work, notes: "Intern")
+        entry.shiftStart = range?.startDate(on: day)
+        entry.shiftEnd = range?.endDate(on: day)
+        entry.breakSeconds = 30 * 60
+
+        let text = ShiftTextExporter().textForMonth(
+            entries: [entry],
+            tips: [TipEntry(date: day, amountCents: 500)],
+            month: day,
+            settings: Settings(payMode: .hourly, hourlyRateCents: 2000),
+            options: MonthExportOptions(
+                includeShiftTimes: false,
+                includePay: false,
+                includeTips: false,
+                includeNotesAndWarnings: false
+            )
+        )
+
+        XCTAssertTrue(text.contains("Stunden:"))
+        XCTAssertFalse(text.contains("08:00"))
+        XCTAssertFalse(text.contains("Pause"))
+        XCTAssertFalse(text.contains("Lohn"))
+        XCTAssertFalse(text.contains("Trinkgeld"))
+        XCTAssertFalse(text.contains("Intern"))
+    }
+
+    func testTextExporterIncludesTipsAsOwnSection() {
+        let day = dateFrom(year: 2026, month: 5, day: 12)
+
+        let text = ShiftTextExporter().textForMonth(
+            entries: [],
+            tips: [TipEntry(date: day, amountCents: 500)],
+            month: day,
+            settings: Settings(payMode: .hourly, hourlyRateCents: 2000),
+            options: MonthExportOptions(
+                includeShiftTimes: true,
+                includePay: true,
+                includeTips: true,
+                includeNotesAndWarnings: true
+            )
+        )
+
+        XCTAssertTrue(text.contains("Trinkgeld"))
+        XCTAssertTrue(text.contains("5"))
+    }
+
     func testLegalBreakToleranceCorrectionAtSixHoursWindow() {
         let entry = DayEntry(date: Date(), type: .work, manualWorkedSeconds: 6 * 3600 + 10 * 60)
         let result = CalculationService().workedSeconds(for: entry)
@@ -240,12 +337,11 @@ final class CalculationServiceTests: XCTestCase {
         }
     }
 
-    func testWeekGroupingByWeekStart() {
+    func testWeekGroupingStartsOnMonday() {
         let service = CalculationService()
         let date = dateFrom(year: 2026, month: 2, day: 18)
-        let mondayStart = service.weekStartDate(for: date, weekStart: .monday)
-        let sundayStart = service.weekStartDate(for: date, weekStart: .sunday)
-        XCTAssertNotEqual(mondayStart, sundayStart)
+        let mondayStart = service.weekStartDate(for: date)
+        XCTAssertEqual(mondayStart, dateFrom(year: 2026, month: 2, day: 16))
     }
 
     func testHolidayCreditMode() {

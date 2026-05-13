@@ -309,7 +309,6 @@ struct ContentView: View {
         if local.hourlyRateCents != iCloud.hourlyRateCents { differences += 1 }
         if local.monthlySalaryCents != iCloud.monthlySalaryCents { differences += 1 }
         if local.weeklyTargetSeconds != iCloud.weeklyTargetSeconds { differences += 1 }
-        if local.weekStart != iCloud.weekStart { differences += 1 }
         if local.vacationLookbackCount != iCloud.vacationLookbackCount { differences += 1 }
         if local.vacationCreditingMode != iCloud.vacationCreditingMode { differences += 1 }
         if local.vacationFixedSeconds != iCloud.vacationFixedSeconds { differences += 1 }
@@ -433,7 +432,6 @@ struct ContentView: View {
         resolved.hourlyRateCents = incoming.hourlyRateCents
         resolved.monthlySalaryCents = incoming.monthlySalaryCents
         resolved.weeklyTargetSeconds = incoming.weeklyTargetSeconds
-        resolved.weekStart = incoming.weekStart
         resolved.vacationLookbackCount = incoming.vacationLookbackCount
         resolved.vacationCreditingMode = incoming.vacationCreditingMode
         resolved.vacationFixedSeconds = incoming.vacationFixedSeconds

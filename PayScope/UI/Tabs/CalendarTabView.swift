@@ -15,10 +15,10 @@ struct CalendarTabView: View {
     @State private var tipEntries: [TipEntry] = []
     @State private var netConfigs: [NetWageMonthConfig] = []
     @State private var importedHolidays: [HolidayCalendarDay] = []
+    @Binding var displayedMonth: Date
     @Bindable var settings: Settings
     let isOffline: Bool
 
-    @State private var displayedMonth = Date()
     @State private var activeSheet: CalendarSheet?
     @State private var showNetWageConfig = false
     @State private var netConfigSheetMonth = Date().startOfMonthLocal()
@@ -26,14 +26,13 @@ struct CalendarTabView: View {
     @State private var longPressTriggeredDate: Date?
     @State private var holidayImportKeys: Set<String> = []
     @State private var now = Date()
-    @State private var dayColumnsVisible = true
-    @State private var dayFlipDirection: DayFlipDirection = .fromRightToLeft
     @State private var toolbarContainerWidth: CGFloat = 0
     @State private var isLoadingData = false
     @State private var pendingLoadAfterCurrentCycle = false
     @State private var showUnsyncedIndicator = false
 
-    @State private var notificationCancellable: AnyCancellable?
+    @State private var dayEntriesNotificationCancellable: AnyCancellable?
+    @State private var tipEntriesNotificationCancellable: AnyCancellable?
     @State private var isInitialLoading = true
     @State private var initialLoadTask: Task<Void, Never>?
 
@@ -67,14 +66,11 @@ struct CalendarTabView: View {
         formatter.maximumFractionDigits = 0
         return formatter
     }()
-    private let dayColumnFlipDuration: Double = 0.3
     private let unsyncedIndicatorDebounce = RunLoop.SchedulerTimeType.Stride.milliseconds(900)
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
-                monthHeader
-                monthSummaryBar
                 weekdayHeader
                 calendarSurface
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -92,51 +88,17 @@ struct CalendarTabView: View {
                     VStack(spacing: 0) {
                         Text("PayScope")
                             .font(.headline.weight(.semibold))
-                        if showUnsyncedIndicator {
-                            Text("Nicht Synchronisiert")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
                     }
                 }
 
                 ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        activeSheet = .settings
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Einstellungen öffnen")
+                    monthHoursToolbarSummary
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    if settings.effectiveShowTipsButton {
-                        Button {
-                            activeSheet = .tips(displayedMonth.startOfMonthLocal())
-                        } label: {
-                            if settings.effectiveShowTipsButtonAmount {
-                                Label(displayedMonthTipTotalText, systemImage: "eurosign.circle")
-                            } else {
-                                Image(systemName: "eurosign.circle")
-                            }
-                        }
-                        .accessibilityLabel("Trinkgeld öffnen")
+                if settings.effectiveShowTipsButton {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        tipsToolbarButton
                     }
-                }
-
-                ToolbarItem(placement: .bottomBar) {
-                    HStack {
-                        Spacer(minLength: 0)
-                        Button {
-                            jumpToCurrentMonth()
-                            activeSheet = .today
-                        } label: {
-                            todayBottomBarPill
-                        }
-                        .buttonStyle(.plain)
-                        Spacer(minLength: 0)
-                    }
-                    .frame(maxWidth: .infinity)
                 }
             }
             .background(
@@ -157,19 +119,22 @@ struct CalendarTabView: View {
                 await runInitialLoadingSequence()
             }
             .onAppear {
-                notificationCancellable = NotificationCenter.default.publisher(for: .dayEntriesDidChange)
+                dayEntriesNotificationCancellable = NotificationCenter.default.publisher(for: .dayEntriesDidChange)
                     .sink { _ in
                         Task { await loadData(mode: .localOnly) }
                     }
+                tipEntriesNotificationCancellable = NotificationCenter.default.publisher(for: .tipEntriesDidChange)
+                    .sink { _ in
+                        Task { await loadTipsForDisplayedMonth() }
+                    }
             }
             .onDisappear {
-                notificationCancellable?.cancel()
-                notificationCancellable = nil
+                dayEntriesNotificationCancellable?.cancel()
+                dayEntriesNotificationCancellable = nil
+                tipEntriesNotificationCancellable?.cancel()
+                tipEntriesNotificationCancellable = nil
                 initialLoadTask?.cancel()
                 initialLoadTask = nil
-                withTransaction(Transaction(animation: nil)) {
-                    dayColumnsVisible = true
-                }
             }
             .onReceive(previewRefreshTimer) { value in
                 now = value
@@ -194,7 +159,8 @@ struct CalendarTabView: View {
                         entry: entry(for: date),
                         entries: entries,
                         settings: settings,
-                        onDaySaved: applyDayEditorChange
+                        onDaySaved: applyDayEditorChange,
+                        onDelete: deleteDayEntry
                     )
                 case .today:
                     TodayFocusView(settings: settings)
@@ -308,11 +274,11 @@ struct CalendarTabView: View {
 
             HStack(spacing: 12) {
                 calendarControlButton(systemImage: "chevron.left") {
-                    shiftDisplayedMonth(by: -1, flipDirection: .fromLeftToRight)
+                    shiftDisplayedMonth(by: -1)
                 }
                 Spacer()
                 calendarControlButton(systemImage: "chevron.right") {
-                    shiftDisplayedMonth(by: 1, flipDirection: .fromRightToLeft)
+                    shiftDisplayedMonth(by: 1)
                 }
             }
         }
@@ -343,6 +309,72 @@ struct CalendarTabView: View {
         PayScopeFormatters.currencyString(cents: tipEntries.reduce(0) { $0 + $1.amountCents })
     }
 
+    private var monthHoursToolbarSummary: some View {
+        let summary = displayedMonthSummary
+        let monthlyValue = monthToolbarPayValue(for: summary)
+        let monthlyLabel = monthToolbarPayLabel
+
+        return Button {
+            openNetWageConfigForDisplayedMonth()
+        } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(PayScopeFormatters.hhmmString(seconds: summary.totalSeconds) + "h")
+                    .font(.system(.subheadline, design: .rounded).weight(.black))
+                    .foregroundStyle(.primary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.76)
+
+                Text("\(monthlyLabel) \(PayScopeFormatters.currencyString(cents: monthlyValue))")
+                    .font(.system(.caption2, design: .rounded).weight(.bold))
+                    .foregroundStyle(settings.themeAccent.color).opacity(0.6)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.62)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .frame(minWidth: 96, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Monatsübersicht")
+        .accessibilityValue("\(PayScopeFormatters.hhmmString(seconds: summary.totalSeconds)), \(monthlyLabel) \(PayScopeFormatters.currencyString(cents: monthlyValue))")
+    }
+
+    private var monthToolbarPayLabel: String {
+        switch settings.effectiveCalendarSummaryDisplayMode {
+        case .net:
+            return "N:"
+        case .gross:
+            return "B:"
+        }
+    }
+
+    private func monthToolbarPayValue(for summary: TotalsSummary) -> Int {
+        switch settings.effectiveCalendarSummaryDisplayMode {
+        case .net:
+            return monthlyNetCents(for: summary)
+        case .gross:
+            return summary.totalCents
+        }
+    }
+
+    private var tipsToolbarButton: some View {
+        Button {
+            activeSheet = .tips(displayedMonth.startOfMonthLocal())
+        } label: {
+            if settings.effectiveShowTipsButtonAmount {
+                Label(displayedMonthTipTotalText, systemImage: "eurosign.circle")
+                    .labelStyle(.titleAndIcon)
+            } else {
+                Image(systemName: "eurosign.circle")
+            }
+        }
+        .id("\(settings.effectiveShowTipsButton)-\(settings.effectiveShowTipsButtonAmount)-\(displayedMonthTipTotalText)")
+        .accessibilityLabel("Trinkgeld öffnen")
+    }
+
     private var displayedMonthSummary: TotalsSummary {
         service.periodSummary(
             entries: entries,
@@ -367,9 +399,7 @@ struct CalendarTabView: View {
             )
 
             Button {
-                netConfigSheetMonth = displayedMonth.startOfMonthLocal()
-                ensureNetConfigExists(for: netConfigSheetMonth)
-                showNetWageConfig = true
+                openNetWageConfigForDisplayedMonth()
             } label: {
                 monthMetricChip(
                     title: "Netto",
@@ -379,6 +409,12 @@ struct CalendarTabView: View {
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity)
         }
+    }
+
+    private func openNetWageConfigForDisplayedMonth() {
+        netConfigSheetMonth = displayedMonth.startOfMonthLocal()
+        ensureNetConfigExists(for: netConfigSheetMonth)
+        showNetWageConfig = true
     }
 
     private func monthlyNetCents(for summary: TotalsSummary) -> Int {
@@ -527,7 +563,7 @@ struct CalendarTabView: View {
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 16, emphasis: 0.22)
+        .payScopeLiquidGlass(accent: settings.themeAccent.color, cornerRadius: 16, tintOpacity: 0.08)
     }
 
     private var weekdayHeader: some View {
@@ -568,7 +604,7 @@ struct CalendarTabView: View {
                     let weekBadgeData = shouldShowWeekBadge && index % 7 == 0
                         ? weekBadgesByDate[dayDate]
                         : nil
-                    let hiddenAngle = dayFlipDirection.hiddenAngle
+                    let hasTips = tipEntries.contains { $0.date.isSameLocalDay(as: dayDate) && $0.amountCents > 0 }
 
                     Group {
                         if Calendar.current.isDate(date, equalTo: displayedMonth, toGranularity: .month) {
@@ -578,6 +614,7 @@ struct CalendarTabView: View {
                                 entry: entry,
                                 result: dayResultsByDate[dayDate],
                                 isHoliday: isHoliday,
+                                hasTips: hasTips,
                                 weekBadgeData: weekBadgeData
                             )
                         } else if date > displayedMonthBounds.1 {
@@ -586,18 +623,6 @@ struct CalendarTabView: View {
                             adjacentMonthCell(for: dayDate, height: cellHeight, isNextMonth: false, weekBadgeData: weekBadgeData)
                         }
                     }
-                    .rotation3DEffect(
-                        .degrees(dayColumnsVisible ? 0 : hiddenAngle),
-                        axis: (x: 0, y: 1, z: 0),
-                        anchor: dayFlipDirection.flipAnchor,
-                        perspective: 0.72
-                    )
-                    .offset(x: dayColumnsVisible ? 0 : dayFlipDirection.hiddenOffset)
-                    .opacity(dayColumnsVisible ? 1 : 0)
-                    .animation(
-                        .easeOut(duration: dayColumnFlipDuration),
-                        value: dayColumnsVisible
-                    )
                 }
             }
         }
@@ -625,6 +650,7 @@ struct CalendarTabView: View {
         entry: DayEntry?,
         result: ComputationResult?,
         isHoliday: Bool,
+        hasTips: Bool,
         weekBadgeData: WeekBadgeData?
     ) -> some View {
         let visibleEntry = entry.flatMap { isVisibleInCalendarCell($0) ? $0 : nil }
@@ -663,8 +689,19 @@ struct CalendarTabView: View {
 
                 ZStack {
                     if let visibleEntry {
-                        cellMetric(for: visibleEntry, result: result)
-                            .id(metricIdentity(for: visibleEntry, result: result))
+                        cellMetric(for: visibleEntry, result: result, hasTips: hasTips)
+                            .id(metricIdentity(for: visibleEntry, result: result, hasTips: hasTips))
+                            .transition(
+                                .asymmetric(
+                                    insertion: .move(edge: .bottom).combined(with: .opacity),
+                                    removal: .move(edge: .bottom).combined(with: .opacity)
+                                )
+                            )
+                    } else if hasTips {
+                        Image(systemName: "eurosign.circle.fill")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.green)
+                            .accessibilityLabel("Trinkgeld")
                             .transition(
                                 .asymmetric(
                                     insertion: .move(edge: .bottom).combined(with: .opacity),
@@ -673,7 +710,7 @@ struct CalendarTabView: View {
                             )
                     }
                 }
-                .animation(.easeOut(duration: 0.22), value: metricAnimationKey(for: visibleEntry, result: result))
+                .animation(.easeOut(duration: 0.22), value: metricAnimationKey(for: visibleEntry, result: result, hasTips: hasTips))
 
                 if let result {
                     switch result {
@@ -950,7 +987,7 @@ struct CalendarTabView: View {
         entriesByDate: [Date: DayEntry]
     ) -> WeekBadgeData {
         let day = date.startOfDayLocal()
-        let weekStart = service.weekStartDate(for: day, weekStart: .monday)
+        let weekStart = service.weekStartDate(for: day)
         let weekEnd = weekStart.addingDays(6)
         let summary = service.periodSummary(
             entries: entries,
@@ -1005,13 +1042,19 @@ struct CalendarTabView: View {
     }
 
     @ViewBuilder
-    private func cellMetric(for entry: DayEntry, result: ComputationResult?) -> some View {
+    private func cellMetric(for entry: DayEntry, result: ComputationResult?, hasTips: Bool) -> some View {
         let hasShiftDeviation = entry.creditedOverrideSeconds != nil
         let typeIcon = Image(systemName: entry.type.icon)
             .font(.caption2)
             .foregroundStyle(entry.type.tint(for: settings.themeAccent))
         let categoryIconRow = HStack(spacing: 4) {
             typeIcon
+            if hasTips {
+                Image(systemName: "eurosign.circle.fill")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.green)
+                    .accessibilityLabel("Trinkgeld")
+            }
             if hasShiftDeviation {
                 Image(systemName: "pencil")
                     .font(.caption2.weight(.bold))
@@ -1068,12 +1111,12 @@ struct CalendarTabView: View {
         return "\(PayScopeFormatters.time.string(from: start))–\(PayScopeFormatters.time.string(from: end))"
     }
 
-    private func metricIdentity(for entry: DayEntry, result: ComputationResult?) -> String {
-        "\(entry.updatedAt.timeIntervalSinceReferenceDate)-\(metricAnimationKey(for: entry, result: result))"
+    private func metricIdentity(for entry: DayEntry, result: ComputationResult?, hasTips: Bool) -> String {
+        "\(entry.updatedAt.timeIntervalSinceReferenceDate)-\(metricAnimationKey(for: entry, result: result, hasTips: hasTips))"
     }
 
-    private func metricAnimationKey(for entry: DayEntry?, result: ComputationResult?) -> String {
-        guard let entry else { return "none" }
+    private func metricAnimationKey(for entry: DayEntry?, result: ComputationResult?, hasTips: Bool) -> String {
+        guard let entry else { return "tips-\(hasTips)" }
         let resultKey: String = {
             guard let result else { return "nil" }
             switch result {
@@ -1089,7 +1132,7 @@ struct CalendarTabView: View {
             guard let shift = shiftTimeRangeText(for: entry) else { return "no-shift" }
             return shift
         }()
-        return "\(entry.type.rawValue)-\(entry.updatedAt.timeIntervalSinceReferenceDate)-\(shiftKey)-\(resultKey)"
+        return "\(entry.type.rawValue)-\(entry.updatedAt.timeIntervalSinceReferenceDate)-\(shiftKey)-tips-\(hasTips)-\(resultKey)"
     }
 
     private func calendarCellHoursSeconds(for entry: DayEntry, result: ComputationResult?) -> Int {
@@ -1555,27 +1598,15 @@ struct CalendarTabView: View {
         }
 
         if horizontal < 0 {
-            shiftDisplayedMonth(by: 1, flipDirection: .fromRightToLeft)
+            shiftDisplayedMonth(by: 1)
         } else {
-            shiftDisplayedMonth(by: -1, flipDirection: .fromLeftToRight)
+            shiftDisplayedMonth(by: -1)
         }
     }
 
-    private func shiftDisplayedMonth(by delta: Int, flipDirection: DayFlipDirection) {
+    private func shiftDisplayedMonth(by delta: Int) {
         guard delta != 0 else { return }
-        triggerDayCardColumnFlip(direction: flipDirection)
         displayedMonth = Calendar.current.date(byAdding: .month, value: delta, to: displayedMonth) ?? displayedMonth
-    }
-
-    private func triggerDayCardColumnFlip(direction: DayFlipDirection) {
-        dayFlipDirection = direction
-
-        withTransaction(Transaction(animation: nil)) {
-            dayColumnsVisible = false
-        }
-        DispatchQueue.main.async {
-            dayColumnsVisible = true
-        }
     }
 
     private func jumpToCurrentMonth() {
@@ -1727,38 +1758,6 @@ private struct WeekBadgeData {
     let detailText: String?
 }
 
-private enum DayFlipDirection {
-    case fromRightToLeft
-    case fromLeftToRight
-
-    var hiddenAngle: Double {
-        switch self {
-        case .fromRightToLeft:
-            return -78
-        case .fromLeftToRight:
-            return 78
-        }
-    }
-
-    var flipAnchor: UnitPoint {
-        switch self {
-        case .fromRightToLeft:
-            return .trailing
-        case .fromLeftToRight:
-            return .leading
-        }
-    }
-
-    var hiddenOffset: CGFloat {
-        switch self {
-        case .fromRightToLeft:
-            return 22
-        case .fromLeftToRight:
-            return -22
-        }
-    }
-}
-
 private enum CalendarSheet: Identifiable {
     case day(Date)
     case today
@@ -1795,16 +1794,12 @@ private struct ShiftViewSheet: View {
     let entries: [DayEntry]
     @Bindable var settings: Settings
     let onDaySaved: (Date, DayEntry?) -> Void
+    let onDelete: (Date) -> Void
 
     @State private var showEditor = false
+    @State private var showDeleteConfirm = false
 
     private let service = CalculationService()
-    private static let weekdayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "de_DE")
-        formatter.dateFormat = "EEEE"
-        return formatter
-    }()
 
     private var dayStart: Date {
         date.startOfDayLocal()
@@ -1835,25 +1830,21 @@ private struct ShiftViewSheet: View {
         PayScopeFormatters.day.string(from: dayStart)
     }
 
-    private var weekdayText: String {
-        Self.weekdayFormatter.string(from: dayStart)
-    }
-
     private var notesText: String? {
         let trimmed = entry?.notes.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private var sheetHeight: CGFloat {
+        entry == nil ? 230 : 310
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    header
-
+                VStack(alignment: .leading, spacing: 12) {
                     if let entry {
-                        if hasFocusedMetrics(for: entry) {
-                            focusedMetrics(for: entry)
-                        }
+                        shiftSummaryCard(for: entry)
 
                         if let status = statusMessage {
                             infoPanel(systemImage: status.icon, title: status.title, text: status.text, tint: status.tint)
@@ -1867,8 +1858,8 @@ private struct ShiftViewSheet: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 24)
+                .padding(.top, 12)
+                .padding(.bottom, 18)
             }
             .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("")
@@ -1904,83 +1895,114 @@ private struct ShiftViewSheet: View {
                     onDaySaved: onDaySaved
                 )
             }
+            .alert("Tag löschen?", isPresented: $showDeleteConfirm) {
+                Button("Löschen", role: .destructive) {
+                    onDelete(dayStart)
+                    dismiss()
+                }
+                Button("Abbrechen", role: .cancel) { }
+            } message: {
+                Text("Dieser Tageseintrag wird gelöscht.")
+            }
         }
-        .presentationDetents([.fraction(entry == nil ? 0.38 : 0.58), .large])
+        .presentationDetents([.height(sheetHeight)])
         .presentationDragIndicator(.visible)
     }
 
-    private var header: some View {
-        HStack(alignment: .top, spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(accent.opacity(0.14))
-                Image(systemName: entry?.type.icon ?? "calendar")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(accent)
-            }
-            .frame(width: 52, height: 52)
+    private func shiftSummaryCard(for entry: DayEntry) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 10) {
+                timeColumn(
+                    label: "Schichtstart",
+                    value: startTimeText(for: entry),
+                    alignment: .leading,
+                    textAlignment: .leading,
+                    frameAlignment: .leading
+                )
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(bodyTitle)
-                    .font(.title2.weight(.bold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-                Text(weekdayText)
-                    .font(.subheadline.weight(.semibold))
+                durationColumn(for: entry)
+
+                timeColumn(
+                    label: "Ende",
+                    value: endTimeText(for: entry).time,
+                    suffix: endTimeText(for: entry).suffix,
+                    alignment: .trailing,
+                    textAlignment: .trailing,
+                    frameAlignment: .trailing
+                )
+            }
+
+            HStack(spacing: 10) {
+                Text(inlineDetailText(for: entry))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-            }
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 8)
+
+                Button(role: .destructive) {
+                    showDeleteConfirm = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 34, height: 30)
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .tint(.red)
+                .accessibilityLabel("Tag löschen")
+            }
         }
         .padding(16)
         .shiftViewPanel(accent: accent)
+        .accessibilityElement(children: .contain)
     }
 
-    @ViewBuilder
-    private func focusedMetrics(for entry: DayEntry) -> some View {
-        VStack(spacing: 10) {
-            if let timeText = timeRangeText(for: entry) {
-                metricRow(icon: "clock.fill", title: "Schicht", value: timeText, tint: accent)
-            }
+    private func timeColumn(
+        label: String,
+        value: String,
+        suffix: String? = nil,
+        alignment: HorizontalAlignment,
+        textAlignment: TextAlignment,
+        frameAlignment: Alignment
+    ) -> some View {
+        VStack(alignment: alignment, spacing: 3) {
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
 
-            if shouldShowBreak(for: entry) {
-                metricRow(
-                    icon: "cup.and.saucer.fill",
-                    title: "Pause",
-                    value: PayScopeFormatters.hhmmString(seconds: max(0, entry.breakSeconds ?? 0)),
-                    tint: .secondary
-                )
-            }
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(value)
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .multilineTextAlignment(textAlignment)
 
-            if workedSeconds > 0 || entry.manualWorkedSeconds != nil || entry.type != .work {
-                metricRow(
-                    icon: "timer",
-                    title: durationTitle(for: entry),
-                    value: "\(PayScopeFormatters.hhmmString(seconds: workedSeconds)) h",
-                    tint: accent
-                )
-            }
-
-            if payCents > 0 {
-                metricRow(
-                    icon: "banknote.fill",
-                    title: "Lohn",
-                    value: PayScopeFormatters.currencyString(cents: payCents),
-                    tint: .green
-                )
-            }
-
-            if entry.creditedOverrideSeconds != nil {
-                metricRow(
-                    icon: "pencil.line",
-                    title: "Wert",
-                    value: "Manuell überschrieben",
-                    tint: .secondary
-                )
+                if let suffix {
+                    Text(suffix)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
-        .padding(14)
-        .shiftViewPanel(accent: accent)
+        .frame(maxWidth: .infinity, alignment: frameAlignment)
+    }
+
+    private func durationColumn(for entry: DayEntry) -> some View {
+        VStack(spacing: 3) {
+            Text("Dauer")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(durationValueText(for: entry))
+                .font(.caption.weight(.bold))
+                .foregroundStyle(accent)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+        }
+        .frame(width: 74)
     }
 
     private var emptyPanel: some View {
@@ -1994,29 +2016,6 @@ private struct ShiftViewSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .shiftViewPanel(accent: settings.themeAccent.color)
-    }
-
-    private func metricRow(icon: String, title: String, value: String, tint: Color) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(tint)
-                .frame(width: 24)
-
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            Spacer(minLength: 12)
-
-            Text(value)
-                .font(.headline.weight(.bold))
-                .foregroundStyle(.primary)
-                .multilineTextAlignment(.trailing)
-                .lineLimit(2)
-                .minimumScaleFactor(0.78)
-        }
-        .padding(.vertical, 4)
     }
 
     private func infoPanel(systemImage: String, title: String, text: String, tint: Color) -> some View {
@@ -2049,37 +2048,31 @@ private struct ShiftViewSheet: View {
         }
     }
 
-    private func timeRangeText(for entry: DayEntry) -> String? {
-        guard let start = entry.shiftStart, let end = entry.shiftEnd, end > start else { return nil }
-        return ShiftTimeRange.displayRange(start: start, end: end)
+    private func startTimeText(for entry: DayEntry) -> String {
+        guard let start = entry.shiftStart else { return "-" }
+        return PayScopeFormatters.time.string(from: start)
     }
 
-    private func shouldShowBreak(for entry: DayEntry) -> Bool {
-        guard entry.type == .work else { return false }
-        return (entry.breakSeconds ?? 0) > 0
+    private func endTimeText(for entry: DayEntry) -> (time: String, suffix: String?) {
+        guard let start = entry.shiftStart, let end = entry.shiftEnd, end > start else {
+            return ("-", nil)
+        }
+
+        let suffix = Calendar.current.isDate(start, inSameDayAs: end) ? nil : "+1"
+        return (PayScopeFormatters.time.string(from: end), suffix)
     }
 
-    private func hasFocusedMetrics(for entry: DayEntry) -> Bool {
-        timeRangeText(for: entry) != nil ||
-        shouldShowBreak(for: entry) ||
-        workedSeconds > 0 ||
-        entry.manualWorkedSeconds != nil ||
-        entry.type != .work ||
-        payCents > 0 ||
-        entry.creditedOverrideSeconds != nil
+    private func durationValueText(for entry: DayEntry) -> String {
+        if workedSeconds > 0 || entry.manualWorkedSeconds != nil || entry.type != .work {
+            return "\(PayScopeFormatters.hhmmString(seconds: workedSeconds)) h"
+        }
+        return "-"
     }
 
-    private func durationTitle(for entry: DayEntry) -> String {
-        if entry.type == .work, shouldShowBreak(for: entry) {
-            return "Netto"
-        }
-        if entry.type == .manual {
-            return "Dauer"
-        }
-        if entry.type == .vacation || entry.type == .holiday || entry.type == .sick {
-            return "Anrechnung"
-        }
-        return "Dauer"
+    private func inlineDetailText(for entry: DayEntry) -> String {
+        let breakText = PayScopeFormatters.hhmmString(seconds: max(0, entry.breakSeconds ?? 0))
+        let payText = payCents > 0 ? PayScopeFormatters.currencyString(cents: payCents) : "-"
+        return "Pause \(breakText) - Lohn \(payText)"
     }
 
     private func missingDatesText(_ dates: [Date]) -> String {
@@ -2139,8 +2132,7 @@ private struct TipEntrySheet: View {
     let onTipsChanged: () -> Void
 
     @State private var tips: [TipEntry] = []
-    @State private var selectedDate: Date
-    @State private var amountText = ""
+    @State private var editorState: TipEntryEditorState?
     @State private var isLoading = false
     @State private var errorMessage: String?
 
@@ -2163,7 +2155,6 @@ private struct TipEntrySheet: View {
         self.month = normalizedMonth
         self.settings = settings
         self.onTipsChanged = onTipsChanged
-        _selectedDate = State(initialValue: normalizedMonth)
     }
 
     private var monthInterval: DateInterval {
@@ -2190,54 +2181,53 @@ private struct TipEntrySheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    LabeledContent("Monat", value: Self.monthFormatter.string(from: month))
-                    LabeledContent("Summe", value: PayScopeFormatters.currencyString(cents: totalCents))
-                }
+            VStack(spacing: 0) {
+                totalHeader
 
-                Section("Eintragen") {
-                    DatePicker("Datum", selection: $selectedDate, in: dateRange, displayedComponents: .date)
-
-                    HStack {
-                        TextField("Betrag", text: $amountText)
-                            .keyboardType(.decimalPad)
-                        Text("EUR")
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Button {
-                        addTip()
-                    } label: {
-                        Label("Trinkgeld hinzufügen", systemImage: "plus.circle.fill")
-                    }
-                    .disabled(parsedAmountCents() == nil)
-                }
-
-                Section("Einträge") {
+                List {
                     if isLoading && tips.isEmpty {
-                        ProgressView("Trinkgeld wird geladen...")
+                        Section {
+                            ProgressView("Trinkgeld wird geladen...")
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
                     } else if sortedTips.isEmpty {
-                        Text("Noch kein Trinkgeld in diesem Monat.")
-                            .foregroundStyle(.secondary)
+                        Section {
+                            Text("Noch kein Trinkgeld in diesem Monat.")
+                                .foregroundStyle(.secondary)
+                        }
                     } else {
-                        ForEach(sortedTips) { tip in
-                            HStack {
-                                Text(Self.dayFormatter.string(from: tip.date))
-                                Spacer(minLength: 12)
-                                Text(PayScopeFormatters.currencyString(cents: tip.amountCents))
-                                    .fontWeight(.semibold)
+                        Section {
+                            ForEach(sortedTips) { tip in
+                                tipRow(tip)
+                                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                        Button {
+                                            presentEditTip(tip)
+                                        } label: {
+                                            Label("Bearbeiten", systemImage: "pencil")
+                                        }
+                                        .tint(settings.themeAccent.color)
+                                    }
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                        Button(role: .destructive) {
+                                            deleteTip(tip)
+                                        } label: {
+                                            Label("Löschen", systemImage: "trash")
+                                        }
+                                    }
                             }
                         }
-                        .onDelete(perform: deleteTips)
                     }
                 }
+                .listStyle(.insetGrouped)
 
                 if let errorMessage {
-                    Section {
-                        Text(errorMessage)
-                            .foregroundStyle(.red)
-                    }
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(Color(.systemBackground).opacity(0.86))
                 }
             }
             .navigationTitle("Trinkgeld")
@@ -2251,13 +2241,112 @@ private struct TipEntrySheet: View {
                     }
                     .accessibilityLabel("Schließen")
                 }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        presentAddTip()
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("Trinkgeld hinzufügen")
+                }
             }
             .task {
                 await loadTips()
             }
+            .sheet(item: $editorState) { state in
+                TipEntryEditorSheet(
+                    title: state.title,
+                    saveAccessibilityLabel: state.saveAccessibilityLabel,
+                    dateRange: dateRange,
+                    initialDate: state.initialDate,
+                    initialAmountCents: state.initialAmountCents
+                ) { date, amountCents in
+                    saveTip(date: date, amountCents: amountCents, replacing: state.tip)
+                    editorState = nil
+                }
+                .payScopeSheetSurface(accent: settings.themeAccent.color)
+            }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+    }
+
+    private var totalHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Summe")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(PayScopeFormatters.currencyString(cents: totalCents))
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+
+                Spacer(minLength: 12)
+
+                Text(Self.monthFormatter.string(from: month))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 18)
+        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemBackground).opacity(0.86))
+    }
+
+    private func tipRow(_ tip: TipEntry) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "eurosign.circle.fill")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.green)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Self.dayFormatter.string(from: tip.date))
+                    .font(.body.weight(.semibold))
+                Text("Trinkgeld")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 12)
+
+            Text(PayScopeFormatters.currencyString(cents: tip.amountCents))
+                .font(.headline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
+
+    private var defaultTipDate: Date {
+        let today = Date().startOfDayLocal()
+        if monthInterval.contains(today) {
+            return today
+        }
+        return month
+    }
+
+    private func presentAddTip() {
+        editorState = TipEntryEditorState(
+            tip: nil,
+            initialDate: defaultTipDate,
+            initialAmountCents: nil
+        )
+    }
+
+    private func presentEditTip(_ tip: TipEntry) {
+        editorState = TipEntryEditorState(
+            tip: tip,
+            initialDate: tip.date,
+            initialAmountCents: tip.amountCents
+        )
     }
 
     @MainActor
@@ -2289,57 +2378,57 @@ private struct TipEntrySheet: View {
         onTipsChanged()
     }
 
-    private func addTip() {
-        guard let amountCents = parsedAmountCents() else { return }
-
+    private func saveTip(date: Date, amountCents: Int, replacing existingTip: TipEntry?) {
+        guard amountCents > 0 else { return }
         let tip = TipEntry(
-            date: selectedDate.startOfDayLocal(),
+            id: existingTip?.id ?? UUID().uuidString,
+            date: date.startOfDayLocal(),
             amountCents: amountCents,
             updatedAt: Date()
         )
         LocalTipEntryStore.shared.save(tip)
-        tips = mergeTipEntriesKeepingNewest(local: tips + [tip], remote: [])
-        amountText = ""
+
+        var nextTips = tips.filter { $0.id != tip.id }
+        nextTips.append(tip)
+        tips = mergeTipEntriesKeepingNewest(local: nextTips, remote: [])
         errorMessage = nil
         onTipsChanged()
 
+        syncTipSave(
+            tip,
+            offlineMessage: existingTip == nil
+                ? "Trinkgeld wurde lokal gespeichert und später synchronisiert."
+                : "Trinkgeld wurde lokal geändert und später synchronisiert."
+        )
+    }
+
+    private func syncTipSave(_ tip: TipEntry, offlineMessage: String) {
         Task {
             do {
                 try await cloudKitService.saveTipEntry(tip)
                 LocalTipEntryStore.shared.markSynced(tip)
             } catch {
                 await MainActor.run {
-                    errorMessage = "Trinkgeld wurde lokal gespeichert und später synchronisiert."
+                    errorMessage = offlineMessage
                 }
             }
         }
     }
 
-    private func deleteTips(at offsets: IndexSet) {
-        let visibleTips = sortedTips
-        for offset in offsets {
-            let tip = visibleTips[offset]
-            LocalTipEntryStore.shared.delete(tip)
-            tips.removeAll { $0.id == tip.id }
-            Task {
-                do {
-                    try await cloudKitService.deleteTipEntry(tip)
-                } catch {
-                    await MainActor.run {
-                        errorMessage = "Eintrag wurde lokal gelöscht und später synchronisiert."
-                    }
+    private func deleteTip(_ tip: TipEntry) {
+        LocalTipEntryStore.shared.delete(tip)
+        tips.removeAll { $0.id == tip.id }
+        errorMessage = nil
+        Task {
+            do {
+                try await cloudKitService.deleteTipEntry(tip)
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Eintrag wurde lokal gelöscht und später synchronisiert."
                 }
             }
         }
         onTipsChanged()
-    }
-
-    private func parsedAmountCents() -> Int? {
-        let normalized = amountText
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: ",", with: ".")
-        guard let amount = Double(normalized), amount > 0 else { return nil }
-        return Int((amount * 100).rounded())
     }
 
     private func mergeTipEntriesKeepingNewest(local: [TipEntry], remote: [TipEntry]) -> [TipEntry] {
@@ -2353,6 +2442,105 @@ private struct TipEntrySheet: View {
         }
 
         return Array(merged.values)
+    }
+}
+
+private struct TipEntryEditorState: Identifiable {
+    let id = UUID()
+    let tip: TipEntry?
+    let initialDate: Date
+    let initialAmountCents: Int?
+
+    var title: String {
+        tip == nil ? "Trinkgeld hinzufügen" : "Trinkgeld bearbeiten"
+    }
+
+    var saveAccessibilityLabel: String {
+        tip == nil ? "Hinzufügen" : "Speichern"
+    }
+}
+
+private struct TipEntryEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let title: String
+    let saveAccessibilityLabel: String
+    let dateRange: ClosedRange<Date>
+    let onSave: (Date, Int) -> Void
+
+    @State private var selectedDate: Date
+    @State private var amountText: String
+
+    init(
+        title: String,
+        saveAccessibilityLabel: String,
+        dateRange: ClosedRange<Date>,
+        initialDate: Date,
+        initialAmountCents: Int?,
+        onSave: @escaping (Date, Int) -> Void
+    ) {
+        self.title = title
+        self.saveAccessibilityLabel = saveAccessibilityLabel
+        self.dateRange = dateRange
+        self.onSave = onSave
+        _selectedDate = State(initialValue: initialDate.startOfDayLocal())
+        _amountText = State(initialValue: initialAmountCents.map(Self.amountText) ?? "")
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    DatePicker("Datum", selection: $selectedDate, in: dateRange, displayedComponents: .date)
+
+                    HStack {
+                        TextField("Betrag", text: $amountText)
+                            .keyboardType(.decimalPad)
+                        Text("EUR")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Schließen")
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        guard let amountCents = parsedAmountCents else { return }
+                        onSave(selectedDate, amountCents)
+                        dismiss()
+                    } label: {
+                        Image(systemName: "checkmark")
+                    }
+                    .disabled(parsedAmountCents == nil)
+                    .accessibilityLabel(saveAccessibilityLabel)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+    }
+
+    private var parsedAmountCents: Int? {
+        let normalized = amountText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")
+        guard let amount = Double(normalized), amount > 0 else { return nil }
+        return Int((amount * 100).rounded())
+    }
+
+    private nonisolated static func amountText(cents: Int) -> String {
+        String(format: "%.2f", Double(cents) / 100.0)
+            .replacingOccurrences(of: ".", with: ",")
     }
 }
 

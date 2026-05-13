@@ -51,8 +51,8 @@ struct DayEditorView: View {
     @State private var hasUnsavedUserChanges = false
 
     private var timelineBounds: ClosedRange<Int> {
-        let minValue = 6 * 60
-        let maxValue = 22 * 60
+        let minValue = 0
+        let maxValue = ShiftTimeRange.minutesPerDay
         return minValue...maxValue
     }
 
@@ -83,7 +83,7 @@ struct DayEditorView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     MultiSegmentTimelinePreview(
-                        segments: hasValidShiftRange ? [EditableSegment(startMinute: startMinute, endMinute: endMinute)] : [],
+                        segments: timelinePreviewSegments,
                         accent: settings.themeAccent.color,
                         bounds: timelineBounds
                     )
@@ -521,15 +521,17 @@ struct DayEditorView: View {
     }
 
     private var totalGrossSeconds: Int {
-        guard hasCompleteShiftTime else { return 0 }
-        return max(0, (endMinute - startMinute) * 60)
+        totalGrossMinutes * 60
+    }
+
+    private var totalGrossMinutes: Int {
+        shiftTimeRange?.durationMinutes ?? 0
     }
 
     private var grossDurationBadgeLabel: String {
-        guard hasCompleteShiftTime else { return "--:--" }
-        let minutes = max(0, endMinute - startMinute)
-        let hoursPart = minutes / 60
-        let minutePart = minutes % 60
+        guard totalGrossMinutes > 0 else { return "--:--" }
+        let hoursPart = totalGrossMinutes / 60
+        let minutePart = totalGrossMinutes % 60
         return String(format: "%02d:%02d", hoursPart, minutePart)
     }
 
@@ -538,7 +540,41 @@ struct DayEditorView: View {
     }
 
     private var hasValidShiftRange: Bool {
-        hasCompleteShiftTime && endMinute > startMinute
+        shiftTimeRange != nil
+    }
+
+    private var shiftTimeRange: ShiftTimeRange? {
+        guard hasCompleteShiftTime else { return nil }
+        return ShiftTimeRange(
+            startMinute: ShiftTimeRange.normalizedClockMinute(startMinute),
+            endClockMinute: endMinute
+        )
+    }
+
+    private var timelinePreviewSegments: [EditableSegment] {
+        guard let range = shiftTimeRange else { return [] }
+
+        if range.crossesMidnight {
+            var segments = [
+                EditableSegment(startMinute: range.startMinute, endMinute: ShiftTimeRange.minutesPerDay)
+            ]
+
+            if range.endMinuteOffset > ShiftTimeRange.minutesPerDay {
+                segments.append(
+                    EditableSegment(
+                        startMinute: 0,
+                        endMinute: range.endClockMinute,
+                        isNextDay: true
+                    )
+                )
+            }
+
+            return segments
+        }
+
+        return [
+            EditableSegment(startMinute: range.startMinute, endMinute: range.endMinuteOffset)
+        ]
     }
 
     private var isCreditedType: Bool {
@@ -591,7 +627,9 @@ struct DayEditorView: View {
             return service.dayComputation(for: preview, allEntries: allEntriesEffective, settings: settings)
         }
         let clampedBreakSeconds = (selectedType == .work) ? max(0, min(breakMinutes * 60, totalGrossSeconds)) : 0
-        if hasValidShiftRange, let start = dateAtMinute(startMinute), let end = dateAtMinute(endMinute), end > start {
+        if let range = shiftTimeRange,
+           let start = range.startDate(on: selectedDate),
+           let end = range.endDate(on: selectedDate) {
             preview.shiftStart = start
             preview.shiftEnd = end
             preview.breakSeconds = clampedBreakSeconds
@@ -648,7 +686,7 @@ struct DayEditorView: View {
     private var shiftValidationMessage: String? {
         guard selectedType == .work else { return nil }
         guard hasCompleteShiftTime else { return nil }
-        if endMinute <= startMinute { return "Ende muss nach Start liegen." }
+        guard hasValidShiftRange else { return "Start und Ende dürfen nicht gleich sein." }
         let gross = totalGrossSeconds
         if breakMinutes * 60 > gross { return "Pause ist länger als die gesamte Dauer." }
         return nil
@@ -928,7 +966,9 @@ struct DayEditorView: View {
             target.manualWorkedSeconds = max(0, manualWorkedSeconds)
         } else {
             // Work: whole shift
-            if hasValidShiftRange, let start = dateAtMinute(startMinute), let end = dateAtMinute(endMinute), end > start {
+            if let range = shiftTimeRange,
+               let start = range.startDate(on: selectedDate),
+               let end = range.endDate(on: selectedDate) {
                 target.shiftStart = start
                 target.shiftEnd = end
                 target.breakSeconds = max(0, breakMinutes * 60)
@@ -1088,20 +1128,6 @@ struct DayEditorView: View {
         return (components.hour ?? 0) * 60 + (components.minute ?? 0)
     }
 
-    private func dateAtMinute(_ minute: Int) -> Date? {
-        dateAtMinute(minute, on: selectedDate)
-    }
-
-    private func dateAtMinute(_ minute: Int, on baseDate: Date) -> Date? {
-        let dayStart = baseDate.startOfDayLocal()
-        if minute >= 24 * 60 {
-            return Calendar.current.date(byAdding: .day, value: 1, to: dayStart)
-        }
-        let h = max(0, minute / 60)
-        let m = max(0, minute % 60)
-        return Calendar.current.date(bySettingHour: h, minute: m, second: 0, of: dayStart)
-    }
-
     private var isEditingShortcutBinding: Binding<Bool> {
         Binding(
             get: { editingShortcutIndex != nil },
@@ -1170,7 +1196,7 @@ struct DayEditorView: View {
 
         withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
             startMinute = clamped.startMinute
-            endMinute = clamped.endMinute
+            endMinute = clamped.endClockMinute
             hasStartMinute = true
             hasEndMinute = true
             manualBreakOverrideMinutes = nil
@@ -1196,7 +1222,7 @@ struct DayEditorView: View {
         guard let shortcut = shiftShortcut(at: index) else {
             return "S\(index + 1) speichern"
         }
-        return "\(formatMinute(shortcut.startMinute))-\(formatMinute(shortcut.endMinute))"
+        return clampedShortcut(shortcut).displayRange
     }
 
     private func shortcutName(for index: Int) -> String {
@@ -1233,7 +1259,7 @@ struct DayEditorView: View {
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let earliestStart = fallback.startMinute
         let latestEnd = fallback.endMinute
-        let grossMinutes = max(0, latestEnd - earliestStart)
+        let grossMinutes = fallback.durationMinutes
         let clampedBreakMinutes = selectedType == .work ? max(0, min(breakMinutes, grossMinutes)) : 0
 
         let shouldStoreRichTemplate = selectedType != .work || !trimmedNotes.isEmpty || clampedBreakMinutes > 0
@@ -1284,28 +1310,22 @@ struct DayEditorView: View {
         }
 
         startMinute = shortcut.startMinute
-        endMinute = shortcut.endMinute
+        endMinute = shortcut.endClockMinute
         hasStartMinute = true
         hasEndMinute = true
-        inferManualBreakOverride(fromStoredBreakMinutes: max(0, min(shortcut.breakMinutes, endMinute - startMinute)))
+        inferManualBreakOverride(fromStoredBreakMinutes: max(0, min(shortcut.breakMinutes, shortcut.durationMinutes)))
     }
 
     private func clampedShortcut(_ shortcut: ShiftShortcut) -> ShiftShortcut {
-        func clampedRange(start: Int, end: Int) -> (start: Int, end: Int) {
-            let clampedStart = max(timelineBounds.lowerBound, min(timelineBounds.upperBound - 1, start))
-            let clampedEnd = min(timelineBounds.upperBound, max(clampedStart + 1, end))
-            return (clampedStart, clampedEnd)
-        }
-
-        let fallbackRange = clampedRange(start: shortcut.startMinute, end: shortcut.endMinute)
+        let range = normalizedShortcutRange(start: shortcut.startMinute, end: shortcut.endMinute)
         guard let payload = shortcut.payload else {
-            return ShiftShortcut(startMinute: fallbackRange.start, endMinute: fallbackRange.end)
+            return ShiftShortcut(startMinute: range.startMinute, endMinute: range.endMinuteOffset)
         }
 
-        let earliestStart = fallbackRange.start
-        let latestEnd = fallbackRange.end
+        let earliestStart = range.startMinute
+        let latestEnd = range.endMinuteOffset
         let dayType = (payload.dayTypeRaw.flatMap { DayType(rawValue: $0) }) ?? .work
-        let grossMinutes = max(0, latestEnd - earliestStart)
+        let grossMinutes = range.durationMinutes
 
         let normalizedPayload = ShiftShortcutPayload(
             startMinute: earliestStart,
@@ -1325,6 +1345,25 @@ struct DayEditorView: View {
         )
     }
 
+    private func normalizedShortcutRange(start: Int, end: Int) -> ShiftTimeRange {
+        let clampedStart = max(0, min(ShiftTimeRange.minutesPerDay - 1, ShiftTimeRange.normalizedClockMinute(start)))
+
+        if end >= ShiftTimeRange.minutesPerDay,
+           let range = ShiftTimeRange(
+            startMinute: clampedStart,
+            endMinuteOffset: min(end, ShiftTimeRange.maxEndMinuteOffset)
+           ) {
+            return range
+        }
+
+        if let range = ShiftTimeRange(startMinute: clampedStart, endClockMinute: end) {
+            return range
+        }
+
+        let fallbackEnd = min(ShiftTimeRange.maxEndMinuteOffset, clampedStart + 60)
+        return ShiftTimeRange(startMinute: clampedStart, endMinuteOffset: fallbackEnd)!
+    }
+
     private func defaultShortcut(for index: Int) -> ShiftShortcut {
         let defaults = [
             ShiftShortcut(startMinute: 6 * 60, endMinute: 14 * 60),
@@ -1332,13 +1371,6 @@ struct DayEditorView: View {
             ShiftShortcut(startMinute: 14 * 60, endMinute: 22 * 60)
         ]
         return clampedShortcut(defaults[min(max(index, 0), defaults.count - 1)])
-    }
-
-    private func formatMinute(_ minute: Int) -> String {
-        let clamped = max(0, min(24 * 60, minute))
-        let h = clamped / 60
-        let m = clamped % 60
-        return String(format: "%02d:%02d", h, m)
     }
 
     private var shiftCategoryMenu: some View {
@@ -1374,7 +1406,7 @@ struct DayEditorView: View {
     }
 
     private func inferManualBreakOverride(fromStoredBreakMinutes storedBreakMinutes: Int) {
-        let grossMinutes = hasCompleteShiftTime ? max(0, endMinute - startMinute) : 0
+        let grossMinutes = totalGrossMinutes
         let clampedStoredBreak = max(0, min(storedBreakMinutes, grossMinutes))
         let auto = automaticBreakBaseMinutes(for: grossMinutes)
         if clampedStoredBreak == auto {
@@ -1386,7 +1418,7 @@ struct DayEditorView: View {
 
     private func clampManualBreakOverride() {
         guard let manualBreakOverrideMinutes else { return }
-        let grossMinutes = hasCompleteShiftTime ? max(0, endMinute - startMinute) : 0
+        let grossMinutes = totalGrossMinutes
         self.manualBreakOverrideMinutes = max(0, min(manualBreakOverrideMinutes, grossMinutes))
     }
 
@@ -1396,7 +1428,7 @@ struct DayEditorView: View {
 
     private func adjustBreak(by deltaMinutes: Int) {
         let targetValue = breakMinutes + deltaMinutes
-        let grossMinutes = hasCompleteShiftTime ? max(0, endMinute - startMinute) : 0
+        let grossMinutes = totalGrossMinutes
         let clampedValue = max(0, min(targetValue, grossMinutes))
         let autoValue = automaticBreakBaseMinutes(for: grossMinutes)
         manualBreakOverrideMinutes = (clampedValue == autoValue) ? nil : clampedValue
@@ -1411,7 +1443,7 @@ struct DayEditorView: View {
 
     private var breakMinutes: Int {
         guard selectedType == .work else { return 0 }
-        let grossMinutes = hasCompleteShiftTime ? max(0, endMinute - startMinute) : 0
+        let grossMinutes = totalGrossMinutes
         if let manualBreakOverrideMinutes {
             return max(0, min(manualBreakOverrideMinutes, grossMinutes))
         }
@@ -1450,12 +1482,20 @@ private extension View {
 }
 
 private struct EditableSegment: Identifiable {
-    let id = UUID()
+    let id: String
     var startMinute: Int
     var endMinute: Int
+    var isNextDay: Bool
+
+    init(startMinute: Int, endMinute: Int, isNextDay: Bool = false) {
+        self.id = "\(startMinute)-\(endMinute)-\(isNextDay)"
+        self.startMinute = startMinute
+        self.endMinute = endMinute
+        self.isNextDay = isNextDay
+    }
 
     var validationMessage: String? {
-        if endMinute < startMinute {
+        if endMinute <= startMinute {
             return "Ende muss nach Start liegen."
         }
         return nil
@@ -1540,6 +1580,32 @@ private struct ShiftShortcut {
     var creditedOverrideSeconds: Int? {
         payload?.creditedOverrideSeconds
     }
+
+    var range: ShiftTimeRange? {
+        if endMinute >= ShiftTimeRange.minutesPerDay {
+            return ShiftTimeRange(
+                startMinute: startMinute,
+                endMinuteOffset: endMinute
+            )
+        }
+
+        return ShiftTimeRange(
+            startMinute: startMinute,
+            endClockMinute: endMinute
+        )
+    }
+
+    var endClockMinute: Int {
+        range?.endClockMinute ?? ShiftTimeRange.normalizedClockMinute(endMinute)
+    }
+
+    var durationMinutes: Int {
+        range?.durationMinutes ?? 0
+    }
+
+    var displayRange: String {
+        range?.displayRange() ?? "\(ShiftTimeRange.displayMinute(startMinute))-\(ShiftTimeRange.displayMinute(endClockMinute))"
+    }
 }
 
 private struct ShiftShortcutPayload: Codable, Equatable {
@@ -1609,17 +1675,35 @@ private struct MultiSegmentTimelinePreview: View {
                     .allowsHitTesting(false)
 
                 ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                    let segmentStartX = x(for: segment.startMinute, width: width)
+                    let segmentEndX = x(for: segment.endMinute, width: width)
+                    let segmentWidth = max(2, segmentEndX - segmentStartX)
+
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(accent.opacity(0.72))
+                        .fill(segment.isNextDay ? accent.opacity(0.42) : accent.opacity(0.72))
                         .overlay(
                             RoundedRectangle(cornerRadius: 8)
-                                .stroke(accent.opacity(0.35), lineWidth: 1)
+                                .stroke(accent.opacity(segment.isNextDay ? 0.24 : 0.35), lineWidth: 1)
                         )
+                        .overlay {
+                            if segment.isNextDay, segmentWidth >= 28 {
+                                Text("+1")
+                                    .font(.caption2.weight(.black))
+                                    .monospacedDigit()
+                                    .foregroundStyle(accent)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1)
+                                    .background(
+                                        Capsule(style: .continuous)
+                                            .fill(Color(.systemBackground).opacity(0.72))
+                                    )
+                            }
+                        }
                         .frame(
-                            width: max(2, x(for: segment.endMinute, width: width) - x(for: segment.startMinute, width: width)),
+                            width: segmentWidth,
                             height: 22
                         )
-                        .offset(x: x(for: segment.startMinute, width: width))
+                        .offset(x: segmentStartX)
                         .allowsHitTesting(false)
                 }
 
@@ -1697,8 +1781,9 @@ private struct MultiSegmentTimelinePreview: View {
     }
 
     private func formatMinute(_ minute: Int) -> String {
-        let h = minute / 60
-        let m = minute % 60
+        let clockMinute = ShiftTimeRange.normalizedClockMinute(minute)
+        let h = clockMinute / 60
+        let m = clockMinute % 60
         if useMinutePrecision {
             return String(format: "%02d:%02d", h, m)
         }
@@ -1847,9 +1932,11 @@ private struct HHMMMinuteInput: View {
         if let hasValue, !hasValue.wrappedValue {
             return
         }
-        var hours = min(24, Int(hourText) ?? 0)
+        let rawHours = Int(hourText) ?? 0
+        var hours = min(23, rawHours)
         var minutes = min(59, Int(minuteText) ?? 0)
-        if hours == 24 {
+        if rawHours >= 24 {
+            hours = 0
             minutes = 0
         }
         if minutes < 0 {
@@ -1858,7 +1945,7 @@ private struct HHMMMinuteInput: View {
         if hours < 0 {
             hours = 0
         }
-        minuteOfDay = max(0, min(24 * 60, (hours * 60) + minutes))
+        minuteOfDay = ShiftTimeRange.normalizedClockMinute((hours * 60) + minutes)
     }
 
     private func split() {
@@ -1867,9 +1954,9 @@ private struct HHMMMinuteInput: View {
             minuteText = ""
             return
         }
-        let clamped = max(0, min(24 * 60, minuteOfDay))
-        let hours = min(24, clamped / 60)
-        let minutes = (hours == 24) ? 0 : min(59, clamped % 60)
+        let clamped = max(0, min(ShiftTimeRange.minutesPerDay - 1, minuteOfDay))
+        let hours = clamped / 60
+        let minutes = min(59, clamped % 60)
         hourText = String(format: "%02d", hours)
         minuteText = String(format: "%02d", minutes)
     }

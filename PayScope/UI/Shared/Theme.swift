@@ -102,6 +102,40 @@ extension View {
     }
 }
 
+struct PayScopeLiquidGlassStyle: ViewModifier {
+    let accent: Color
+    let cornerRadius: CGFloat
+    let tintOpacity: Double
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
+        content
+            .background(
+                shape
+                    .fill(accent.opacity(tintOpacity))
+            )
+            .glassEffect(.regular.tint(accent.opacity(tintOpacity * 0.85)), in: shape)
+            .overlay(
+                shape
+                    .stroke(.white.opacity(0.3), lineWidth: 0.8)
+                    .allowsHitTesting(false)
+            )
+            .overlay(
+                shape
+                    .stroke(accent.opacity(0.18), lineWidth: 1)
+                    .allowsHitTesting(false)
+            )
+            .shadow(color: accent.opacity(0.08), radius: 10, x: 0, y: 5)
+    }
+}
+
+extension View {
+    func payScopeLiquidGlass(accent: Color, cornerRadius: CGFloat = 16, tintOpacity: Double = 0.1) -> some View {
+        modifier(PayScopeLiquidGlassStyle(accent: accent, cornerRadius: cornerRadius, tintOpacity: tintOpacity))
+    }
+}
+
 struct CardStyle: ViewModifier {
     let accent: Color
 

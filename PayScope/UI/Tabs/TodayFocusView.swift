@@ -12,6 +12,15 @@ struct TodayFocusView: View {
     private let refreshTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     private let service = CalculationService()
 
+    private struct TimelineScaleItem: Identifiable {
+        let minute: Int
+        let label: String
+        let progress: Double
+        let isBoundary: Bool
+
+        var id: String { "\(minute)-\(label)" }
+    }
+
     init(settings: Settings, entriesOverride: [DayEntry]? = nil) {
         self.settings = settings
         self.entriesOverride = entriesOverride
@@ -21,12 +30,12 @@ struct TodayFocusView: View {
         GeometryReader { geometry in
             let isCompactSheet = geometry.size.height < 700
             let isNarrow = geometry.size.width < 390
-            let horizontalPadding: CGFloat = isNarrow ? 14 : 20
-            let cardSpacing: CGFloat = isCompactSheet || isNarrow ? 10 : 14
+            let horizontalPadding: CGFloat = isNarrow ? 14 : 16
+            let cardSpacing: CGFloat = isCompactSheet || isNarrow ? 10 : 12
+            let verticalSpacing: CGFloat = isCompactSheet || isNarrow ? 12 : 16
 
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: isCompactSheet ? 12 : 18) {
-                    header(isCompact: isCompactSheet)
+                VStack(spacing: verticalSpacing) {
+                    header(isCompact: isCompactSheet || isNarrow)
 
                     shiftCard(isCompact: isCompactSheet || isNarrow)
 
@@ -34,10 +43,6 @@ struct TodayFocusView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .top)
                 .padding(.horizontal, horizontalPadding)
-                .padding(.top, isCompactSheet ? 10 : 18)
-                .padding(.bottom, isCompactSheet ? 18 : 26)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .onReceive(refreshTimer) { value in
             now = value
@@ -209,45 +214,105 @@ struct TodayFocusView: View {
         "\(PayScopeFormatters.hhmmString(seconds: displayWorkedSeconds)) h"
     }
 
-    private func header(isCompact: Bool) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(PayScopeFormatters.day.string(from: timelineAnchorStart))
-                    .font(.system(.caption, design: .serif).weight(.bold))
-                    .textCase(.uppercase)
-                    .tracking(1.4)
-                    .foregroundStyle(.secondary.opacity(0.82))
-                Text(timelineAnchorStart.isSameLocalDay(as: todayStart) ? "Heute" : "Läuft weiter")
-                    .font(.system(isCompact ? .title : .largeTitle, design: .serif).weight(.black))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
+    private var weekWorkedSeconds: Int {
+        let weekStart = service.weekStartDate(for: todayStart)
+        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
+
+        return entriesByDate.values.reduce(0) { total, day in
+            let entryDay = day.date.startOfDayLocal()
+            guard entryDay >= weekStart, entryDay <= todayStart else {
+                return total
             }
-            Spacer()
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(todayTypeColor)
-                    .frame(width: 11, height: 11)
-                Text(todayTypeLabel)
+
+            if let todayEntry, day.date.isSameLocalDay(as: todayEntry.date) {
+                return total + displayWorkedSeconds
             }
-                .font(.system(isCompact ? .caption : .callout, design: .serif).weight(.bold))
-                .foregroundStyle(todayTypeColor)
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-                .padding(.horizontal, isCompact ? 12 : 18)
-                .padding(.vertical, isCompact ? 8 : 11)
-                .background(todayTypeColor.opacity(0.18), in: Capsule())
-                .overlay(
-                    Capsule()
-                        .stroke(todayTypeColor.opacity(0.32), lineWidth: 1.4)
-                )
+
+            return total + service.dayComputation(
+                for: day,
+                entriesByDate: entriesByDate,
+                settings: settings
+            ).valueSecondsOrZero
         }
     }
 
-    private func shiftCard(isCompact: Bool) -> some View {
-        let cornerRadius: CGFloat = isCompact ? 30 : 42
+    private var weekWorkedDisplayLabel: String {
+        "\(PayScopeFormatters.hhmmString(seconds: weekWorkedSeconds)) h"
+    }
 
-        return VStack(spacing: isCompact ? 18 : 26) {
-            HStack(alignment: .firstTextBaseline) {
+    private func header(isCompact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: isCompact ? 14 : 18) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(PayScopeFormatters.day.string(from: timelineAnchorStart))
+                        .font(.system(.caption, design: .rounded).weight(.bold))
+                        .textCase(.uppercase)
+                        .foregroundStyle(.secondary.opacity(0.86))
+                    Text(timelineAnchorStart.isSameLocalDay(as: todayStart) ? "Heute" : "Läuft weiter")
+                        .font(.system(isCompact ? .title : .largeTitle, design: .rounded).weight(.black))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                }
+
+                Spacer(minLength: 10)
+
+                statusPill(isCompact: isCompact)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(workedDisplayLabel)
+                    .font(.system(size: isCompact ? 34 : 44, weight: .black, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.62)
+
+                Text("erfasst")
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 10)
+
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(shiftRemainingText)
+                        .font(.system(isCompact ? .headline : .title3, design: .rounded).weight(.black))
+                        .foregroundStyle(settings.themeAccent.color)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.68)
+                    Text("Verbleibend")
+                        .font(.system(.caption2, design: .rounded).weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+                }
+            }
+        }
+        .padding(isCompact ? 16 : 20)
+        .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: isCompact ? 24 : 28, emphasis: 0.75)
+    }
+
+    private func statusPill(isCompact: Bool) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: todayTypeIcon)
+                .font(.system(.caption, design: .rounded).weight(.black))
+            Text(todayTypeLabel)
+        }
+        .font(.system(isCompact ? .caption : .callout, design: .rounded).weight(.bold))
+        .foregroundStyle(todayTypeColor)
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+        .padding(.horizontal, isCompact ? 10 : 12)
+        .padding(.vertical, isCompact ? 7 : 9)
+        .background(todayTypeColor.opacity(0.14), in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(todayTypeColor.opacity(0.28), lineWidth: 1)
+        )
+    }
+
+    private func shiftCard(isCompact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: isCompact ? 14 : 18) {
+
+            HStack(alignment: .firstTextBaseline, spacing: isCompact ? 8 : 12) {
                 timeBlock(title: "Start", value: shiftStartLabel, isCompact: isCompact)
 
                 VStack(spacing: isCompact ? 6 : 9) {
@@ -255,7 +320,7 @@ struct TodayFocusView: View {
                         .fill(settings.themeAccent.color.opacity(0.18))
                         .frame(height: 1)
                     Text(compactDurationString(seconds: totalShiftSeconds))
-                        .font(.system(isCompact ? .callout : .title3, design: .serif).weight(.black))
+                        .font(.system(isCompact ? .callout : .title3, design: .rounded).weight(.black))
                         .foregroundStyle(settings.themeAccent.color)
                         .monospacedDigit()
                         .lineLimit(1)
@@ -270,55 +335,28 @@ struct TodayFocusView: View {
                 timeBlock(title: "Ende", value: shiftEndLabel, alignment: .trailing, isCompact: isCompact)
             }
 
-            VStack(spacing: isCompact ? 10 : 14) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(workedDisplayLabel)
-                        .font(.system(isCompact ? .title : .largeTitle, design: .serif).weight(.black))
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                    Text("erfasst")
-                        .font(.system(isCompact ? .caption : .body, design: .serif).weight(.semibold))
-                        .foregroundStyle(.secondary)
-
-                    Spacer(minLength: 12)
-
-                    Text(shiftRemainingText)
-                        .font(.system(isCompact ? .caption : .callout, design: .serif).weight(.bold))
-                        .foregroundStyle(settings.themeAccent.color)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                }
-
+            VStack(spacing: isCompact ? 9 : 12) {
                 progressTrack
 
                 timelineLabels
             }
         }
-        .padding(.horizontal, isCompact ? 18 : 28)
-        .padding(.vertical, isCompact ? 20 : 30)
+        .padding(isCompact ? 16 : 20)
         .frame(maxWidth: .infinity)
-        .background(todayCardBackground(cornerRadius: cornerRadius))
-        .overlay(
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(settings.themeAccent.color.opacity(0.35), lineWidth: 1.5)
-        )
+        .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: isCompact ? 22 : 26, emphasis: 0.48)
     }
 
     private func metricsGrid(spacing: CGFloat, isCompact: Bool) -> some View {
         let columns = [
-            GridItem(.flexible(), spacing: spacing),
-            GridItem(.flexible(), spacing: spacing),
-            GridItem(.flexible(), spacing: spacing)
+            GridItem(.adaptive(minimum: isCompact ? 96 : 108), spacing: spacing)
         ]
 
         return LazyVGrid(columns: columns, spacing: spacing) {
             metricCard(
                 icon: "stopwatch.fill",
                 iconTint: settings.themeAccent.color,
-                value: workedDisplayLabel,
-                label: "Erfasst",
+                value: weekWorkedDisplayLabel,
+                label: "Stunden in dieser Woche",
                 isCompact: isCompact
             )
             metricCard(
@@ -384,28 +422,20 @@ struct TodayFocusView: View {
     }
 
     private var shiftRemainingText: String {
+        guard todayEntry != nil else { return "kein Eintrag" }
+
         if totalShiftSeconds <= 0 {
-            return "noch -"
+            return "Ende"
         }
 
-        return "noch \(compactDurationString(seconds: shiftRemainingSeconds))"
-    }
-
-    private var timelineLabelValues: [String] {
-        guard let range = shiftTimeRange else {
-            return ["Start", "25%", "50%", "75%", "Ende"]
-        }
-
-        return (0...4).map { index in
-            let minute = range.startMinute + Int((Double(range.durationMinutes) * Double(index) / 4.0).rounded())
-            return ShiftTimeRange.displayMinute(minute)
-        }
+        return "\(compactDurationString(seconds: shiftRemainingSeconds))"
     }
 
     private var progressTrack: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
             let markerX = min(max(width * shiftProgress, 0), width)
+            let scaleItems = timelineScaleItems(for: width)
 
             ZStack(alignment: .leading) {
                 Capsule()
@@ -422,26 +452,131 @@ struct TodayFocusView: View {
                         )
                     )
                     .frame(width: markerX)
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(.white)
-                    .frame(width: 4, height: 18)
-                    .shadow(color: settings.themeAccent.color.opacity(0.45), radius: 4)
-                    .offset(x: max(0, markerX - 2))
+
+                ForEach(scaleItems) { item in
+                    let tickWidth: CGFloat = item.isBoundary ? 2 : 1
+                    let tickHeight: CGFloat = item.isBoundary ? 11 : 8
+                    let tickX = min(max(width * item.progress - tickWidth / 2, 0), max(0, width - tickWidth))
+
+                    RoundedRectangle(cornerRadius: tickWidth / 2, style: .continuous)
+                        .fill(.white.opacity(item.isBoundary ? 0.62 : 0.42))
+                        .frame(width: tickWidth, height: tickHeight)
+                        .offset(x: tickX)
+                }
+
+                Circle()
+                    .fill(Color(.systemBackground))
+                    .frame(width: 16, height: 16)
+                    .overlay(
+                        Circle()
+                            .stroke(settings.themeAccent.color, lineWidth: 3)
+                    )
+                    .shadow(color: settings.themeAccent.color.opacity(0.34), radius: 4, x: 0, y: 2)
+                    .offset(x: min(max(0, markerX - 8), max(0, width - 16)))
             }
         }
-        .frame(height: 18)
+        .frame(height: 16)
     }
 
     private var timelineLabels: some View {
-        HStack {
-            ForEach(Array(timelineLabelValues.enumerated()), id: \.offset) { _, label in
-                Text(label)
-                    .font(.system(.caption, design: .serif).weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary.opacity(0.72))
-                    .frame(maxWidth: .infinity)
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let labelWidth = timelineLabelWidth
+            let scaleItems = timelineScaleItems(for: width)
+
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(scaleItems.enumerated()), id: \.element.id) { index, item in
+                    let x = width * item.progress
+                    let isFirst = index == 0
+                    let isLast = index == scaleItems.count - 1
+                    let alignment: Alignment = isFirst ? .leading : (isLast ? .trailing : .center)
+                    let offset = isFirst ? 0 : (isLast ? max(0, width - labelWidth) : min(max(0, x - labelWidth / 2), max(0, width - labelWidth)))
+
+                    Text(item.label)
+                        .font(.system(.caption2, design: .rounded).weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary.opacity(0.72))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                        .frame(width: labelWidth, alignment: alignment)
+                        .offset(x: offset)
+                }
             }
         }
+        .frame(height: 14)
+    }
+
+    private var timelineLabelWidth: CGFloat {
+        shiftTimeRange?.crossesMidnight == true ? 68 : 52
+    }
+
+    private func timelineScaleItems(for width: CGFloat) -> [TimelineScaleItem] {
+        guard let range = shiftTimeRange else {
+            return [
+                TimelineScaleItem(minute: 0, label: "Start", progress: 0, isBoundary: true),
+                TimelineScaleItem(minute: 1, label: "50%", progress: 0.5, isBoundary: false),
+                TimelineScaleItem(minute: 2, label: "Ende", progress: 1, isBoundary: true)
+            ]
+        }
+
+        let duration = max(1, range.durationMinutes)
+        let stepMinutes = timelineScaleStepMinutes(durationMinutes: duration, width: width)
+        var minutes = [range.startMinute]
+        var tick = ((range.startMinute / stepMinutes) + 1) * stepMinutes
+
+        while tick < range.endMinuteOffset {
+            minutes.append(tick)
+            tick += stepMinutes
+        }
+
+        if minutes.last != range.endMinuteOffset {
+            minutes.append(range.endMinuteOffset)
+        }
+
+        let items = minutes.map { minute in
+            TimelineScaleItem(
+                minute: minute,
+                label: ShiftTimeRange.displayMinute(minute),
+                progress: min(max(Double(minute - range.startMinute) / Double(duration), 0), 1),
+                isBoundary: minute == range.startMinute || minute == range.endMinuteOffset
+            )
+        }
+
+        return spacedTimelineScaleItems(items, width: width)
+    }
+
+    private func timelineScaleStepMinutes(durationMinutes: Int, width: CGFloat) -> Int {
+        let minGap = max(44, timelineLabelWidth * 0.84)
+        let maxLabels = max(3, min(12, Int(width / minGap) + 1))
+        let maxInteriorLabels = max(1, maxLabels - 2)
+        let idealStep = Double(durationMinutes) / Double(maxInteriorLabels + 1)
+        let roundedStep = max(30, Int(ceil(idealStep / 30.0)) * 30)
+        let allowedSteps = [30, 60, 120, 180, 240, 360, 720]
+        return allowedSteps.first { $0 >= roundedStep } ?? 720
+    }
+
+    private func spacedTimelineScaleItems(_ items: [TimelineScaleItem], width: CGFloat) -> [TimelineScaleItem] {
+        guard items.count > 2 else { return items }
+
+        let minGap = max(44, timelineLabelWidth * 0.84)
+        let start = items[0]
+        let end = items[items.count - 1]
+        var result = [start]
+
+        for item in items.dropFirst().dropLast() {
+            let x = width * item.progress
+            let previousX = width * (result.last?.progress ?? 0)
+            let endX = width * end.progress
+
+            guard x - previousX >= minGap, endX - x >= minGap else {
+                continue
+            }
+
+            result.append(item)
+        }
+
+        result.append(end)
+        return result
     }
 
     private var pauseBlocksCount: Int {
@@ -493,25 +628,44 @@ struct TodayFocusView: View {
         return "\(PayScopeFormatters.time.string(from: now)) · \(percent)% des Tages"
     }
 
-    private func detailRow(title: String, value: String, systemImage: String) -> some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: systemImage)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(settings.themeAccent.color)
-                    .frame(width: 16)
-                Text(title)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(width: 140, alignment: .leading)
+    private func detailColumns(isCompact: Bool) -> [GridItem] {
+        [
+            GridItem(.flexible(), spacing: isCompact ? 8 : 10),
+            GridItem(.flexible(), spacing: isCompact ? 8 : 10)
+        ]
+    }
 
-            Text(value)
-                .font(.subheadline.weight(.semibold))
-                .multilineTextAlignment(.trailing)
-                .monospacedDigit()
-                .frame(maxWidth: .infinity, alignment: .trailing)
+    private func detailTile(title: String, value: String, systemImage: String) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: systemImage)
+                .font(.system(.caption, design: .rounded).weight(.black))
+                .foregroundStyle(settings.themeAccent.color)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(settings.themeAccent.color.opacity(0.13)))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(.caption2, design: .rounded).weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .lineLimit(1)
+                Text(value)
+                    .font(.system(.caption, design: .rounded).weight(.bold))
+                    .monospacedDigit()
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.72)
+            }
         }
-        .font(.subheadline)
+        .padding(10)
+        .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.systemBackground).opacity(0.58))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(settings.themeAccent.color.opacity(0.1), lineWidth: 1)
+        )
     }
 
     private func timeBlock(
@@ -522,12 +676,11 @@ struct TodayFocusView: View {
     ) -> some View {
         VStack(alignment: alignment, spacing: isCompact ? 5 : 7) {
             Text(title)
-                .font(.system(.caption, design: .serif).weight(.black))
+                .font(.system(.caption2, design: .rounded).weight(.black))
                 .textCase(.uppercase)
-                .tracking(1)
                 .foregroundStyle(.secondary.opacity(0.78))
             Text(value)
-                .font(.system(size: isCompact ? 32 : 42, weight: .black, design: .serif))
+                .font(.system(size: isCompact ? 30 : 38, weight: .black, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.58)
@@ -543,54 +696,36 @@ struct TodayFocusView: View {
         valueTint: Color = .primary,
         isCompact: Bool
     ) -> some View {
-        VStack(alignment: .leading, spacing: isCompact ? 10 : 16) {
+        VStack(alignment: .leading, spacing: isCompact ? 9 : 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: isCompact ? 11 : 14, style: .continuous)
                     .fill(iconTint.opacity(0.16))
                 Image(systemName: icon)
-                    .font(.system(isCompact ? .subheadline : .headline, design: .rounded).weight(.black))
+                    .font(.system(isCompact ? .caption : .subheadline, design: .rounded).weight(.black))
                     .foregroundStyle(iconTint)
             }
-            .frame(width: isCompact ? 38 : 48, height: isCompact ? 38 : 48)
+            .frame(width: isCompact ? 34 : 40, height: isCompact ? 34 : 40)
+
+            Spacer(minLength: 0)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(value)
-                    .font(.system(isCompact ? .headline : .title2, design: .serif).weight(.black))
+                    .font(.system(isCompact ? .headline : .title3, design: .rounded).weight(.black))
                     .foregroundStyle(valueTint)
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.58)
                 Text(label)
-                    .font(.system(.caption, design: .serif).weight(.black))
+                    .font(.system(.caption2, design: .rounded).weight(.bold))
                     .textCase(.uppercase)
-                    .tracking(0.8)
                     .foregroundStyle(.secondary.opacity(0.78))
-                    .lineLimit(1)
+                    .lineLimit(2)
                     .minimumScaleFactor(0.78)
             }
         }
-        .padding(isCompact ? 12 : 18)
-        .frame(maxWidth: .infinity, minHeight: isCompact ? 120 : 172, alignment: .topLeading)
-        .background(todayCardBackground(cornerRadius: isCompact ? 22 : 28))
-        .overlay(
-            RoundedRectangle(cornerRadius: isCompact ? 22 : 28, style: .continuous)
-                .stroke(.white.opacity(0.08), lineWidth: 1)
-        )
-    }
-
-    private func todayCardBackground(cornerRadius: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(
-                LinearGradient(
-                    colors: [
-                        Color(.secondarySystemBackground).opacity(0.68),
-                        Color(.systemBackground).opacity(0.92)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 8)
+        .padding(isCompact ? 12 : 16)
+        .frame(maxWidth: .infinity, minHeight: isCompact ? 112 : 132, alignment: .topLeading)
+        .payScopeLiquidGlass(accent: settings.themeAccent.color, cornerRadius: isCompact ? 18 : 22, tintOpacity: 0.08)
     }
 
     private func compactDurationString(seconds: Int) -> String {

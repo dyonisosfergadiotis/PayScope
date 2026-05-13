@@ -1,6 +1,25 @@
 import Foundation
 import UIKit
 
+struct MonthExportOptions: Equatable {
+    var includeShiftTimes: Bool
+    var includePay: Bool
+    var includeTips: Bool
+    var includeNotesAndWarnings: Bool
+
+    init(
+        includeShiftTimes: Bool = true,
+        includePay: Bool = true,
+        includeTips: Bool = true,
+        includeNotesAndWarnings: Bool = true
+    ) {
+        self.includeShiftTimes = includeShiftTimes
+        self.includePay = includePay
+        self.includeTips = includeTips
+        self.includeNotesAndWarnings = includeNotesAndWarnings
+    }
+}
+
 fileprivate enum ShiftMonthlyExportStatusKind {
     case warning
     case error
@@ -9,6 +28,7 @@ fileprivate enum ShiftMonthlyExportStatusKind {
 fileprivate struct ShiftMonthlyExportReport {
     let month: Date
     let rows: [ShiftMonthlyExportRow]
+    let tipRows: [ShiftMonthlyTipExportRow]
     let tipCents: Int
     let totalSeconds: Int
     let totalCents: Int
@@ -18,6 +38,12 @@ fileprivate struct ShiftMonthlyExportReport {
     var totalIncludingTipsCents: Int {
         totalCents + tipCents
     }
+}
+
+fileprivate struct ShiftMonthlyTipExportRow {
+    let dateText: String
+    let amountText: String
+    let amountCents: Int
 }
 
 fileprivate struct ShiftMonthlyExportRow {
@@ -45,7 +71,13 @@ struct ShiftTextExporter {
         self.service = CalculationService(calendar: calendar)
     }
 
-    func textForMonth(entries: [DayEntry], tips: [TipEntry], month: Date, settings: Settings) -> String {
+    func textForMonth(
+        entries: [DayEntry],
+        tips: [TipEntry],
+        month: Date,
+        settings: Settings,
+        options: MonthExportOptions = MonthExportOptions()
+    ) -> String {
         let report = reportForMonth(entries: entries, tips: tips, month: month, settings: settings)
         var lines: [String] = [
             "PayScope Export \(Self.monthFormatter.string(from: month))",
@@ -56,18 +88,32 @@ struct ShiftTextExporter {
             lines.append("Keine Schichten.")
         } else {
             for row in report.rows {
-                lines.append(line(for: row))
+                lines.append(line(for: row, options: options))
+            }
+        }
+
+        if options.includeTips && !report.tipRows.isEmpty {
+            lines.append("")
+            lines.append("Trinkgeld")
+            for row in report.tipRows {
+                lines.append("\(row.dateText) | Trinkgeld | \(row.amountText)")
             }
         }
 
         lines.append("")
         lines.append("Gesamt")
         lines.append("Stunden: \(PayScopeFormatters.hhmmString(seconds: report.totalSeconds)) h")
-        lines.append("Lohn: \(PayScopeFormatters.currencyString(cents: report.totalCents))")
-        lines.append("Trinkgeld: \(PayScopeFormatters.currencyString(cents: report.tipCents))")
-        lines.append("Gesamt inkl. Trinkgeld: \(PayScopeFormatters.currencyString(cents: report.totalIncludingTipsCents))")
+        if options.includePay {
+            lines.append("Lohn: \(PayScopeFormatters.currencyString(cents: report.totalCents))")
+        }
+        if options.includeTips {
+            lines.append("Trinkgeld: \(PayScopeFormatters.currencyString(cents: report.tipCents))")
+        }
+        if options.includePay && options.includeTips {
+            lines.append("Gesamt inkl. Trinkgeld: \(PayScopeFormatters.currencyString(cents: report.totalIncludingTipsCents))")
+        }
 
-        if report.warningCount > 0 || report.errorCount > 0 {
+        if options.includeNotesAndWarnings && (report.warningCount > 0 || report.errorCount > 0) {
             lines.append("Hinweise: \(report.warningCount) Warnungen, \(report.errorCount) nicht berechenbare Tage")
         }
 
@@ -89,12 +135,19 @@ struct ShiftTextExporter {
             .sorted { $0.date < $1.date }
         let entriesByDate = service.makeEntriesByDateLookup(from: entries)
         let rows = monthEntries.map { row(for: $0, entriesByDate: entriesByDate, settings: settings) }
-        let tipCents = monthTips.reduce(0) { $0 + $1.amountCents }
+        let tipRows = monthTips.map { tip in
+            ShiftMonthlyTipExportRow(
+                dateText: PayScopeFormatters.day.string(from: tip.date),
+                amountText: PayScopeFormatters.currencyString(cents: tip.amountCents),
+                amountCents: tip.amountCents
+            )
+        }
 
         return ShiftMonthlyExportReport(
             month: month,
             rows: rows,
-            tipCents: tipCents,
+            tipRows: tipRows,
+            tipCents: tipRows.reduce(0) { $0 + $1.amountCents },
             totalSeconds: rows.reduce(0) { $0 + $1.valueSeconds },
             totalCents: rows.reduce(0) { $0 + $1.valueCents },
             warningCount: rows.filter { $0.statusKind == .warning }.count,
@@ -129,24 +182,31 @@ struct ShiftTextExporter {
         )
     }
 
-    private func line(for row: ShiftMonthlyExportRow) -> String {
+    private func line(for row: ShiftMonthlyExportRow, options: MonthExportOptions) -> String {
         var parts = [
             row.dateText,
-            row.typeText,
-            row.timeText,
-            "Stunden \(row.hoursText)",
-            "Lohn \(row.payText)"
+            row.typeText
         ]
 
-        if row.breakText != "-" {
+        if options.includeShiftTimes {
+            parts.append(row.timeText)
+        }
+
+        parts.append("Stunden \(row.hoursText)")
+
+        if options.includePay {
+            parts.append("Lohn \(row.payText)")
+        }
+
+        if options.includeShiftTimes && row.breakText != "-" {
             parts.append("Pause \(row.breakText)")
         }
 
-        if let statusText = row.statusText {
+        if options.includeNotesAndWarnings, let statusText = row.statusText {
             parts.append(statusText)
         }
 
-        if !row.notesText.isEmpty {
+        if options.includeNotesAndWarnings && !row.notesText.isEmpty {
             parts.append("Notiz: \(row.notesText)")
         }
 
@@ -225,7 +285,13 @@ struct ShiftPDFExporter {
         self.textExporter = textExporter
     }
 
-    func pdfURLForMonth(entries: [DayEntry], tips: [TipEntry], month: Date, settings: Settings) throws -> URL {
+    func pdfURLForMonth(
+        entries: [DayEntry],
+        tips: [TipEntry],
+        month: Date,
+        settings: Settings,
+        options: MonthExportOptions = MonthExportOptions()
+    ) throws -> URL {
         let report = textExporter.reportForMonth(entries: entries, tips: tips, month: month, settings: settings)
         let fileName = "PayScope-\(Self.fileMonthFormatter.string(from: month)).pdf"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
@@ -257,20 +323,40 @@ struct ShiftPDFExporter {
         let rowBoldFont = UIFont.systemFont(ofSize: 8.5, weight: .semibold)
         let smallFont = UIFont.systemFont(ofSize: 7.5, weight: .regular)
 
-        let dateColumn: CGFloat = 68
-        let typeColumn: CGFloat = 70
-        let timeColumn: CGFloat = 74
-        let hoursColumn: CGFloat = 54
-        let payColumn: CGFloat = 68
-        let notesColumn = contentWidth - dateColumn - typeColumn - timeColumn - hoursColumn - payColumn
-        let columns: [(title: String, width: CGFloat)] = [
-            ("Datum", dateColumn),
-            ("Typ", typeColumn),
-            ("Zeit", timeColumn),
-            ("Stunden", hoursColumn),
-            ("Lohn", payColumn),
-            ("Notiz", notesColumn)
+        let dateColumnID = 0
+        let typeColumnID = 1
+        let timeColumnID = 2
+        let hoursColumnID = 3
+        let payColumnID = 4
+        let infoColumnID = 5
+
+        var baseColumns: [(id: Int, title: String, width: CGFloat)] = [
+            (dateColumnID, "Datum", 68),
+            (typeColumnID, "Typ", 70)
         ]
+        if options.includeShiftTimes {
+            baseColumns.append((timeColumnID, "Zeit", 74))
+        }
+        baseColumns.append((hoursColumnID, "Stunden", 54))
+        if options.includePay {
+            baseColumns.append((payColumnID, "Lohn", 68))
+        }
+
+        let fixedWidth = baseColumns.reduce(CGFloat(0)) { $0 + $1.width }
+        let usesInfoColumn = options.includeNotesAndWarnings || options.includeShiftTimes
+        let columns: [(id: Int, title: String, width: CGFloat)] = {
+            guard usesInfoColumn else {
+                let extraWidth = max(0, contentWidth - fixedWidth)
+                let extraPerColumn = extraWidth / CGFloat(max(1, baseColumns.count))
+                return baseColumns.map { ($0.id, $0.title, $0.width + extraPerColumn) }
+            }
+
+            var result = baseColumns
+            let infoWidth = max(72, contentWidth - fixedWidth)
+            let infoTitle = options.includeNotesAndWarnings ? "Info" : "Pause"
+            result.append((infoColumnID, infoTitle, infoWidth))
+            return result
+        }()
 
         try renderer.writePDF(to: url) { context in
             var y = margin
@@ -411,7 +497,7 @@ struct ShiftPDFExporter {
                     alignment: .right
                 )
 
-                if report.warningCount > 0 || report.errorCount > 0 {
+                if options.includeNotesAndWarnings && (report.warningCount > 0 || report.errorCount > 0) {
                     let statusText = "\(report.warningCount) Hinweise · \(report.errorCount) offen"
                     let statusColor = report.errorCount > 0 ? errorColor : warningColor
                     let statusRect = CGRect(x: pageBounds.width - margin - 128, y: y + 25, width: 128, height: 24)
@@ -430,14 +516,22 @@ struct ShiftPDFExporter {
 
             func drawSummaryCards() {
                 let gap: CGFloat = 9
-                let cardWidth = (contentWidth - (gap * 3)) / 4
                 let cardHeight: CGFloat = 56
-                let values: [(label: String, value: String, color: UIColor)] = [
-                    ("STUNDEN", "\(PayScopeFormatters.hhmmString(seconds: report.totalSeconds)) h", accentColor),
-                    ("LOHN", PayScopeFormatters.currencyString(cents: report.totalCents), greenColor),
-                    ("TRINKGELD", PayScopeFormatters.currencyString(cents: report.tipCents), warningColor),
-                    ("GESAMT", PayScopeFormatters.currencyString(cents: report.totalIncludingTipsCents), inkColor)
+                var values: [(label: String, value: String, color: UIColor)] = [
+                    ("STUNDEN", "\(PayScopeFormatters.hhmmString(seconds: report.totalSeconds)) h", accentColor)
                 ]
+                if options.includePay {
+                    values.append(("LOHN", PayScopeFormatters.currencyString(cents: report.totalCents), greenColor))
+                }
+                if options.includeTips {
+                    values.append(("TRINKGELD", PayScopeFormatters.currencyString(cents: report.tipCents), warningColor))
+                }
+                if options.includePay && options.includeTips {
+                    values.append(("GESAMT", PayScopeFormatters.currencyString(cents: report.totalIncludingTipsCents), inkColor))
+                }
+
+                let gapTotal = gap * CGFloat(max(0, values.count - 1))
+                let cardWidth = (contentWidth - gapTotal) / CGFloat(max(1, values.count))
 
                 for (index, item) in values.enumerated() {
                     let x = margin + CGFloat(index) * (cardWidth + gap)
@@ -517,11 +611,48 @@ struct ShiftPDFExporter {
                 y += 92
             }
 
+            func columnIndex(for id: Int) -> Int? {
+                columns.firstIndex { $0.id == id }
+            }
+
+            func columnFrame(
+                for id: Int,
+                rowY: CGFloat,
+                rowHeight: CGFloat,
+                xInset: CGFloat = 8,
+                yInset: CGFloat = 10
+            ) -> CGRect? {
+                guard let index = columnIndex(for: id) else { return nil }
+                let column = columns[index]
+                return CGRect(
+                    x: columnX(index) + xInset,
+                    y: rowY + yInset,
+                    width: column.width - (xInset + 5),
+                    height: rowHeight - (yInset + 4)
+                )
+            }
+
+            func infoItems(for row: ShiftMonthlyExportRow) -> [(text: String, color: UIColor)] {
+                var items: [(text: String, color: UIColor)] = []
+                if options.includeShiftTimes && row.breakText != "-" {
+                    items.append(("Pause \(row.breakText)", mutedColor))
+                }
+                if options.includeNotesAndWarnings && !row.notesText.isEmpty {
+                    items.append((row.notesText, inkColor))
+                }
+                if options.includeNotesAndWarnings, let statusText = row.statusText {
+                    items.append((statusText, statusColor(for: row.statusKind)))
+                }
+                return items
+            }
+
             func drawRow(_ row: ShiftMonthlyExportRow, index: Int) {
-                let noteWidth = max(40, notesColumn - 16)
-                let noteHeight = measuredHeight(row.notesText, width: noteWidth, font: smallFont)
-                let statusHeight = measuredHeight(row.statusText ?? "", width: noteWidth, font: smallFont)
-                let rowHeight = min(max(38, max(16, noteHeight + statusHeight + 4) + 18), 72)
+                let infoIndex = columnIndex(for: infoColumnID)
+                let infoWidth = infoIndex.map { max(40, columns[$0].width - 16) } ?? 0
+                let infoHeight = infoItems(for: row).reduce(CGFloat(0)) { partial, item in
+                    partial + measuredHeight(item.text, width: infoWidth, font: smallFont) + 2
+                }
+                let rowHeight = min(max(38, max(16, infoHeight) + 18), 82)
 
                 if y + rowHeight > contentBottom {
                     beginPage(continuation: true)
@@ -542,77 +673,90 @@ struct ShiftPDFExporter {
                     radius: 2
                 )
 
-                drawText(
-                    row.dateText,
-                    in: CGRect(x: columnX(0) + 8, y: y + 10, width: dateColumn - 13, height: rowHeight - 14),
-                    font: rowFont,
-                    color: inkColor,
-                    lineBreak: .byTruncatingTail
-                )
-
-                let chipRect = CGRect(x: columnX(1) + 7, y: y + 8, width: typeColumn - 14, height: 18)
-                fillRoundedRect(chipRect, color: category.withAlphaComponent(0.11), radius: 5)
-                drawText(
-                    row.typeText,
-                    in: chipRect.insetBy(dx: 5, dy: 4),
-                    font: smallFont,
-                    color: category,
-                    alignment: .center,
-                    lineBreak: .byTruncatingTail
-                )
-
-                drawText(
-                    row.timeText,
-                    in: CGRect(x: columnX(2) + 8, y: y + 10, width: timeColumn - 12, height: rowHeight - 14),
-                    font: rowFont,
-                    color: inkColor,
-                    lineBreak: .byTruncatingTail
-                )
-                drawText(
-                    row.hoursText,
-                    in: CGRect(x: columnX(3) + 8, y: y + 10, width: hoursColumn - 12, height: rowHeight - 14),
-                    font: rowBoldFont,
-                    color: inkColor,
-                    lineBreak: .byTruncatingTail
-                )
-                drawText(
-                    row.payText,
-                    in: CGRect(x: columnX(4) + 8, y: y + 10, width: payColumn - 12, height: rowHeight - 14),
-                    font: rowBoldFont,
-                    color: greenColor,
-                    lineBreak: .byTruncatingTail
-                )
-
-                let noteX = columnX(5) + 8
-                var noteY = y + 8
-                if row.notesText.isEmpty, row.statusText == nil {
+                if let dateFrame = columnFrame(for: dateColumnID, rowY: y, rowHeight: rowHeight) {
                     drawText(
-                        row.breakText == "-" ? " " : "Pause \(row.breakText)",
-                        in: CGRect(x: noteX, y: noteY + 3, width: noteWidth, height: 12),
-                        font: smallFont,
-                        color: mutedColor,
+                        row.dateText,
+                        in: dateFrame,
+                        font: rowFont,
+                        color: inkColor,
                         lineBreak: .byTruncatingTail
                     )
-                } else {
-                    if !row.notesText.isEmpty {
-                        let h = min(measuredHeight(row.notesText, width: noteWidth, font: smallFont), rowHeight - 16)
-                        drawText(
-                            row.notesText,
-                            in: CGRect(x: noteX, y: noteY, width: noteWidth, height: h),
-                            font: smallFont,
-                            color: inkColor
-                        )
-                        noteY += h + 2
-                    }
+                }
 
-                    if let statusText = row.statusText, noteY < y + rowHeight - 8 {
+                if let typeIndex = columnIndex(for: typeColumnID) {
+                    let typeColumn = columns[typeIndex]
+                    let chipRect = CGRect(x: columnX(typeIndex) + 7, y: y + 8, width: typeColumn.width - 14, height: 18)
+                    fillRoundedRect(chipRect, color: category.withAlphaComponent(0.11), radius: 5)
+                    drawText(
+                        row.typeText,
+                        in: chipRect.insetBy(dx: 5, dy: 4),
+                        font: smallFont,
+                        color: category,
+                        alignment: .center,
+                        lineBreak: .byTruncatingTail
+                    )
+                }
+
+                if let timeFrame = columnFrame(for: timeColumnID, rowY: y, rowHeight: rowHeight) {
+                    drawText(
+                        row.timeText,
+                        in: timeFrame,
+                        font: rowFont,
+                        color: inkColor,
+                        lineBreak: .byTruncatingTail
+                    )
+                }
+
+                if let hoursFrame = columnFrame(for: hoursColumnID, rowY: y, rowHeight: rowHeight) {
+                    drawText(
+                        row.hoursText,
+                        in: hoursFrame,
+                        font: rowBoldFont,
+                        color: inkColor,
+                        lineBreak: .byTruncatingTail
+                    )
+                }
+
+                if let payFrame = columnFrame(for: payColumnID, rowY: y, rowHeight: rowHeight) {
+                    drawText(
+                        row.payText,
+                        in: payFrame,
+                        font: rowBoldFont,
+                        color: greenColor,
+                        lineBreak: .byTruncatingTail
+                    )
+                }
+
+                if let infoIndex {
+                    let noteX = columnX(infoIndex) + 8
+                    var noteY = y + 8
+                    let items = infoItems(for: row)
+                    if items.isEmpty {
                         drawText(
-                            statusText,
-                            in: CGRect(x: noteX, y: noteY, width: noteWidth, height: y + rowHeight - 8 - noteY),
+                            " ",
+                            in: CGRect(x: noteX, y: noteY + 3, width: infoWidth, height: 12),
                             font: smallFont,
-                            color: statusColor(for: row.statusKind),
+                            color: mutedColor,
                             lineBreak: .byTruncatingTail
                         )
+                    } else {
+                        for item in items {
+                            guard noteY < y + rowHeight - 8 else { break }
+                            let remainingHeight = y + rowHeight - 8 - noteY
+                            let itemHeight = min(
+                                measuredHeight(item.text, width: infoWidth, font: smallFont),
+                                remainingHeight
+                            )
+
+                            drawText(
+                                item.text,
+                                in: CGRect(x: noteX, y: noteY, width: infoWidth, height: itemHeight),
+                                font: smallFont,
+                                color: item.color,
+                                lineBreak: .byTruncatingTail
+                            )
+                            noteY += itemHeight + 2
+                        }
                     }
                 }
 

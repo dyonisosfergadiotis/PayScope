@@ -86,20 +86,6 @@ enum PayMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-enum WeekStart: String, Codable, CaseIterable, Identifiable {
-    case monday
-    case sunday
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .monday: return "Montag"
-        case .sunday: return "Sonntag"
-        }
-    }
-}
-
 enum HolidayCreditingMode: String, Codable, CaseIterable, Identifiable {
     case fixedValue
     case lookback13Weeks
@@ -219,15 +205,15 @@ enum CalendarHoursBreakMode: String, Codable, CaseIterable, Identifiable {
 }
 
 enum CalendarSummaryDisplayMode: String, Codable, CaseIterable, Identifiable {
-    case grossNet
-    case payOnly
+    case net = "grossNet"
+    case gross = "payOnly"
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .grossNet: return "Brutto/Netto"
-        case .payOnly: return "Nur Lohn"
+        case .net: return "Netto"
+        case .gross: return "Brutto"
         }
     }
 }
@@ -300,7 +286,6 @@ final class Settings {
     var hourlyRateCents: Int?
     var monthlySalaryCents: Int?
     var weeklyTargetSeconds: Int?
-    var weekStart: WeekStart
     var vacationLookbackCount: Int
     var vacationCreditingMode: VacationCreditingMode?
     var vacationFixedSeconds: Int?
@@ -317,6 +302,9 @@ final class Settings {
     var showCalendarWeekHours: Bool?
     var showCalendarWeekPay: Bool?
     var showLiveActivity: Bool?
+    var liveActivityShowsUpcomingShift: Bool?
+    var widgetShowsNextShift: Bool?
+    var widgetShowsAllDayStatus: Bool?
     var alwaysApplyFifteenMinuteBuffer: Bool?
     var holidayCountryCode: String?
     var holidaySubdivisionCode: String?
@@ -345,7 +333,6 @@ final class Settings {
         hourlyRateCents: Int? = nil,
         monthlySalaryCents: Int? = nil,
         weeklyTargetSeconds: Int? = nil,
-        weekStart _: WeekStart = .monday,
         vacationLookbackCount: Int = 13,
         vacationCreditingMode: VacationCreditingMode = .lookback13Weeks,
         vacationFixedSeconds: Int? = nil,
@@ -357,11 +344,14 @@ final class Settings {
         themeAccent: ThemeAccent = .blue,
         calendarCellDisplayMode: CalendarCellDisplayMode? = .dot,
         calendarHoursBreakMode: CalendarHoursBreakMode = .withoutBreak,
-        calendarSummaryDisplayMode: CalendarSummaryDisplayMode = .grossNet,
+        calendarSummaryDisplayMode: CalendarSummaryDisplayMode = .net,
         showCalendarWeekNumbers: Bool = false,
         showCalendarWeekHours: Bool = false,
         showCalendarWeekPay: Bool = false,
         showLiveActivity: Bool = true,
+        liveActivityShowsUpcomingShift: Bool = true,
+        widgetShowsNextShift: Bool = true,
+        widgetShowsAllDayStatus: Bool = true,
         alwaysApplyFifteenMinuteBuffer: Bool? = false,
         holidayCountryCode: String? = "DE",
         holidaySubdivisionCode: String? = nil,
@@ -388,7 +378,6 @@ final class Settings {
         self.hourlyRateCents = hourlyRateCents
         self.monthlySalaryCents = monthlySalaryCents
         self.weeklyTargetSeconds = weeklyTargetSeconds
-        self.weekStart = .monday
         self.vacationLookbackCount = vacationLookbackCount
         self.vacationCreditingMode = vacationCreditingMode
         self.vacationFixedSeconds = vacationFixedSeconds.map { max(0, $0) }
@@ -405,6 +394,9 @@ final class Settings {
         self.showCalendarWeekHours = showCalendarWeekHours
         self.showCalendarWeekPay = showCalendarWeekPay
         self.showLiveActivity = showLiveActivity
+        self.liveActivityShowsUpcomingShift = liveActivityShowsUpcomingShift
+        self.widgetShowsNextShift = widgetShowsNextShift
+        self.widgetShowsAllDayStatus = widgetShowsAllDayStatus
         self.alwaysApplyFifteenMinuteBuffer = alwaysApplyFifteenMinuteBuffer
         self.holidayCountryCode = holidayCountryCode
         self.holidaySubdivisionCode = holidaySubdivisionCode
@@ -433,7 +425,6 @@ extension Settings {
         hourlyRateCents = source.hourlyRateCents
         monthlySalaryCents = source.monthlySalaryCents
         weeklyTargetSeconds = source.weeklyTargetSeconds
-        weekStart = .monday
         vacationLookbackCount = source.vacationLookbackCount
         vacationCreditingMode = source.vacationCreditingMode
         vacationFixedSeconds = source.vacationFixedSeconds
@@ -450,6 +441,9 @@ extension Settings {
         showCalendarWeekHours = source.showCalendarWeekHours
         showCalendarWeekPay = source.showCalendarWeekPay
         showLiveActivity = source.showLiveActivity
+        liveActivityShowsUpcomingShift = source.liveActivityShowsUpcomingShift
+        widgetShowsNextShift = source.widgetShowsNextShift
+        widgetShowsAllDayStatus = source.widgetShowsAllDayStatus
         alwaysApplyFifteenMinuteBuffer = source.alwaysApplyFifteenMinuteBuffer
         holidayCountryCode = source.holidayCountryCode
         holidaySubdivisionCode = source.holidaySubdivisionCode
@@ -503,7 +497,7 @@ extension Settings {
     }
 
     var effectiveCalendarSummaryDisplayMode: CalendarSummaryDisplayMode {
-        calendarSummaryDisplayMode ?? .grossNet
+        calendarSummaryDisplayMode ?? .net
     }
 
     var effectiveShowCalendarWeekNumbers: Bool {
@@ -520,6 +514,18 @@ extension Settings {
 
     var effectiveShowLiveActivity: Bool {
         showLiveActivity ?? true
+    }
+
+    var effectiveLiveActivityShowsUpcomingShift: Bool {
+        liveActivityShowsUpcomingShift ?? true
+    }
+
+    var effectiveWidgetShowsNextShift: Bool {
+        widgetShowsNextShift ?? true
+    }
+
+    var effectiveWidgetShowsAllDayStatus: Bool {
+        widgetShowsAllDayStatus ?? true
     }
 
     var effectiveShowTipsButton: Bool {
@@ -544,7 +550,6 @@ extension Settings {
 
     var effectivePaidHolidayWeekdayMask: Int {
         let fallbackMask = Self.defaultWeekdayMask(
-            weekStart: .monday,
             scheduledWorkdaysCount: scheduledWorkdaysCount
         )
         return Self.sanitizedWeekdayMask(paidHolidayWeekdayMask) ?? fallbackMask
@@ -580,7 +585,7 @@ extension Settings {
         return value & 0b1111111
     }
 
-    private static func defaultWeekdayMask(weekStart _: WeekStart, scheduledWorkdaysCount: Int) -> Int {
+    private static func defaultWeekdayMask(scheduledWorkdaysCount: Int) -> Int {
         let count = min(max(scheduledWorkdaysCount, 1), 7)
         let orderedWeekdays = [2, 3, 4, 5, 6, 7, 1]
 
@@ -718,4 +723,5 @@ extension Date {
 }
 extension Notification.Name {
     static let dayEntriesDidChange = Notification.Name("LocalDayEntryStore.dayEntriesDidChange")
+    static let tipEntriesDidChange = Notification.Name("LocalTipEntryStore.tipEntriesDidChange")
 }

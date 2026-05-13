@@ -7,7 +7,13 @@ struct CSVExporter {
         self.service = service
     }
 
-    func csvForMonth(entries: [DayEntry], month: Date, settings: Settings) -> String {
+    func csvForMonth(
+        entries: [DayEntry],
+        tips: [TipEntry] = [],
+        month: Date,
+        settings: Settings,
+        options: MonthExportOptions = MonthExportOptions()
+    ) -> String {
         guard
             let monthRange = Calendar.current.dateInterval(of: .month, for: month)
         else {
@@ -17,8 +23,11 @@ struct CSVExporter {
         let filtered = entries
             .filter { $0.date >= monthRange.start && $0.date < monthRange.end }
             .sorted { $0.date < $1.date }
+        let monthTips = tips
+            .filter { $0.date >= monthRange.start && $0.date < monthRange.end }
+            .sorted { $0.date < $1.date }
 
-        var lines: [String] = [ShiftCSVTransfer.exportHeader]
+        var lines: [String] = [csvHeader(options: options)]
         let entriesByDate = service.makeEntriesByDateLookup(from: entries)
         for entry in filtered {
             let result = service.exportComputation(for: entry, entriesByDate: entriesByDate, settings: settings)
@@ -51,24 +60,112 @@ struct CSVExporter {
                 creditedPay = 0
             }
 
-            let row = [
+            var fields = [
                 shiftColumns.icon,
-                shiftColumns.date,
-                shiftColumns.start,
-                shiftColumns.end,
-                shiftColumns.endDayOffset,
-                shiftColumns.breakMinutes,
+                shiftColumns.date
+            ]
+            if options.includeShiftTimes {
+                fields.append(contentsOf: [
+                    shiftColumns.start,
+                    shiftColumns.end,
+                    shiftColumns.endDayOffset,
+                    shiftColumns.breakMinutes
+                ])
+            }
+            fields.append(contentsOf: [
                 shiftColumns.type,
-                String(format: "%.2f", Double(workedSeconds) / 3600),
-                String(format: "%.2f", Double(workedPay) / 100),
-                String(format: "%.2f", Double(creditedSeconds) / 3600),
-                String(format: "%.2f", Double(creditedPay) / 100),
-                entry.notes
-            ].map(Self.csvField).joined(separator: ",")
+                String(format: "%.2f", Double(workedSeconds) / 3600)
+            ])
+            if options.includePay {
+                fields.append(String(format: "%.2f", Double(workedPay) / 100))
+            }
+            fields.append(String(format: "%.2f", Double(creditedSeconds) / 3600))
+            if options.includePay {
+                fields.append(String(format: "%.2f", Double(creditedPay) / 100))
+            }
+            if options.includeTips {
+                fields.append("")
+            }
+            if options.includeNotesAndWarnings {
+                fields.append(entry.notes)
+            }
+
+            let row = fields.map(Self.csvField).joined(separator: ",")
             lines.append(row)
         }
 
+        if options.includeTips {
+            for tip in monthTips {
+                let row = tipFields(for: tip, options: options).map(Self.csvField).joined(separator: ",")
+                lines.append(row)
+            }
+        }
+
         return lines.joined(separator: "\n")
+    }
+
+    private func csvHeader(options: MonthExportOptions) -> String {
+        var columns = [
+            "categoryIcon",
+            "date"
+        ]
+        if options.includeShiftTimes {
+            columns.append(contentsOf: [
+                "start",
+                "end",
+                "endDayOffset",
+                "breakMinutes"
+            ])
+        }
+        columns.append(contentsOf: [
+            "type",
+            "workedHours"
+        ])
+        if options.includePay {
+            columns.append("workedPay")
+        }
+        columns.append("creditedHours")
+        if options.includePay {
+            columns.append("creditedPay")
+        }
+        if options.includeTips {
+            columns.append("tipAmount")
+        }
+        if options.includeNotesAndWarnings {
+            columns.append("notes")
+        }
+        return columns.joined(separator: ",")
+    }
+
+    private func tipFields(for tip: TipEntry, options: MonthExportOptions) -> [String] {
+        var fields = [
+            "eurosign.circle.fill",
+            PayScopeFormatters.isoDay.string(from: tip.date)
+        ]
+        if options.includeShiftTimes {
+            fields.append(contentsOf: [
+                "",
+                "",
+                "",
+                ""
+            ])
+        }
+        fields.append(contentsOf: [
+            "tip",
+            "0.00"
+        ])
+        if options.includePay {
+            fields.append("")
+        }
+        fields.append("0.00")
+        if options.includePay {
+            fields.append("")
+        }
+        fields.append(String(format: "%.2f", Double(tip.amountCents) / 100))
+        if options.includeNotesAndWarnings {
+            fields.append("Trinkgeld")
+        }
+        return fields
     }
 
     private nonisolated static func csvField(_ value: String) -> String {

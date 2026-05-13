@@ -1,6 +1,5 @@
 import SwiftUI
 import Combine
-import FabBar
 import Network
 import SwiftData
 import UIKit
@@ -107,7 +106,9 @@ struct RootView: View {
             scheduleLiveActivitySync()
         }
         .onChange(of: settingsList.first?.updatedAt) { _, _ in
+            scheduleLiveActivitySync()
             scheduleWatchSnapshotSync()
+            reloadAppWidgets()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
@@ -365,6 +366,7 @@ private enum MainAppTab: Hashable {
     case calendar
     case stats
     case settings
+    case today
 }
 
 private struct MainTabNavigationView: View {
@@ -375,15 +377,30 @@ private struct MainTabNavigationView: View {
     let isOffline: Bool
 
     @State private var selection: MainAppTab = .calendar
+    @State private var displayedMonth = Date().startOfMonthLocal()
     @State private var showTodaySheet = false
 
-    private var fabBarTabs: [FabBarTab<MainAppTab>] {
-        [
-            FabBarTab(value: .calendar, title: "Kalender", systemImage: "calendar"),
-            FabBarTab(value: .stats, title: "Statistik", systemImage: "chart.bar.xaxis"),
-            FabBarTab(value: .settings, title: "Settings", systemImage: "gearshape")
-        ]
-    }
+    private static let monthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "MMMM"
+        return formatter
+    }()
+
+    private static let yearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "yyyy"
+        return formatter
+    }()
+
+    private static let monthYearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "MMMM yyyy"
+        return formatter
+    }()
+
 
     private var todayEntry: DayEntry? {
         let today = Date().startOfDayLocal()
@@ -401,18 +418,17 @@ private struct MainTabNavigationView: View {
         return "Heute"
     }
 
-    private var fabBarAction: FabBarAction {
-        FabBarAction(
-            systemImage: todayFabIcon,
-            accessibilityLabel: todayFabAccessibilityLabel
-        ) {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            showTodaySheet = true
-        }
-    }
 
     private var tabBarVisibility: Visibility {
         horizontalSizeClass == .compact ? .hidden : .visible
+    }
+
+    private var showsMonthAccessory: Bool {
+        selection == .calendar || selection == .stats
+    }
+
+    private var monthAccessoryBottomPadding: CGFloat {
+        horizontalSizeClass == .compact ? 94 : 58
     }
 
     var body: some View {
@@ -421,49 +437,101 @@ private struct MainTabNavigationView: View {
                 .payScopeBackground(accent: settings.themeAccent.color)
 
             TabView(selection: $selection) {
-                CalendarTabView(settings: settings, isOffline: isOffline)
-                    .fabBarSafeAreaPadding()
-                    .toolbarVisibility(tabBarVisibility, for: .tabBar)
-                    .tabItem {
-                        Label("Kalender", systemImage: "calendar")
-                    }
-                    .tag(MainAppTab.calendar)
+                Tab("Kalender", systemImage: "calendar", value: MainAppTab.calendar) {
+                    CalendarTabView(displayedMonth: $displayedMonth, settings: settings, isOffline: isOffline)
+                        .safeAreaPadding(.bottom, showsMonthAccessory ? 68 : 0)
+                }
 
-                StatsTabView(settings: settings, referenceMonth: Date().startOfMonthLocal())
-                    .fabBarSafeAreaPadding()
-                    .toolbarVisibility(tabBarVisibility, for: .tabBar)
-                    .tabItem {
-                        Label("Statistik", systemImage: "chart.bar.xaxis")
-                    }
-                    .tag(MainAppTab.stats)
+                Tab("Statistik", systemImage: "chart.bar.xaxis", value: MainAppTab.stats) {
+                    StatsTabView(settings: settings, referenceMonth: $displayedMonth)
+                        .safeAreaPadding(.bottom, showsMonthAccessory ? 68 : 0)
+                }
 
-                SettingsTabView(settings: settings)
-                    .fabBarSafeAreaPadding()
-                    .toolbarVisibility(tabBarVisibility, for: .tabBar)
-                    .tabItem {
-                        Label("Einstellungen", systemImage: "gearshape")
-                    }
-                    .tag(MainAppTab.settings)
+                Tab("Einstellungen", systemImage: "gearshape", value: MainAppTab.settings) {
+                    SettingsTabView(settings: settings)
+                }
+                
+                Tab("Heute", systemImage: todayFabIcon, value: MainAppTab.today, role: .search) {
+                    TodayFocusView(settings: settings, entriesOverride: entries)
+                }
             }
             .tint(settings.themeAccent.color)
             .toolbarBackground(settings.themeAccent.color.opacity(0.22), for: .tabBar)
             .toolbarBackground(.visible, for: .tabBar)
-            .fabBar(
-                selection: $selection,
-                tabs: fabBarTabs,
-                action: fabBarAction
-            )
+            .tabViewBottomAccessory(isEnabled: selection == .calendar || selection == .stats){
+               
+                            monthSelectionAccessory()
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            .tabBarMinimizeBehavior(.onScrollDown)
             .onChange(of: selection) { _, newSelection in
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
             }
-            .sheet(isPresented: $showTodaySheet) {
-                TodayFocusView(settings: settings, entriesOverride: entries)
-                    .presentationDetents([.fraction(0.68), .large])
-                    .presentationDragIndicator(.visible)
-                    .payScopeSheetSurface(accent: settings.themeAccent.color)
-            }
         }
         .tint(settings.themeAccent.color)
+    }
+
+    private func monthSelectionAccessory() -> some View {
+        HStack(spacing: 10) {
+            monthControlButton(systemImage: "chevron.left") {
+                shiftDisplayedMonth(by: -1)
+            }
+            Spacer()
+
+            Button {
+                displayedMonth = Date().startOfMonthLocal()
+            } label: {
+                VStack(spacing: 1) {
+                    Text(Self.monthFormatter.string(from: displayedMonth))
+                        .font(.system(.headline, design: .rounded).weight(.bold))
+                        .textCase(.uppercase)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .tint(settings.themeAccent.color)
+
+                    Text(Self.yearFormatter.string(from: displayedMonth))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .tint(settings.themeAccent.color).opacity(0.4)
+                }
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Zum aktuellen Monat springen")
+            .accessibilityValue(Self.monthYearFormatter.string(from: displayedMonth))
+
+            Spacer()
+            
+            monthControlButton(systemImage: "chevron.right") {
+                shiftDisplayedMonth(by: 1)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        //.payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 18, emphasis: 0.2)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func monthControlButton(systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.subheadline.weight(.bold))
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func monthSelectionAccessoryWidth(containerWidth: CGFloat) -> CGFloat {
+        let proposedWidth = containerWidth * 0.82
+        return min(max(proposedWidth, 250), 340)
+    }
+
+    private func shiftDisplayedMonth(by delta: Int) {
+        guard delta != 0 else { return }
+        displayedMonth = Calendar.current.date(byAdding: .month, value: delta, to: displayedMonth) ?? displayedMonth
     }
 }
 
@@ -606,3 +674,4 @@ extension WatchSnapshotBridge: WCSessionDelegate {
         }
     }
 }
+

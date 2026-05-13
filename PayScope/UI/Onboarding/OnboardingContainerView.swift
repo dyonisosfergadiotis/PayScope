@@ -121,7 +121,6 @@ private struct OnboardingFlowView: View {
             weeklyHours = settings.weeklyTargetSeconds.map { String(format: "%.1f", Double($0) / 3600) } ?? ""
             holidayCountryCode = settings.holidayCountryCode ?? "DE"
             holidaySubdivisionCode = settings.holidaySubdivisionCode ?? ""
-            settings.weekStart = .monday
         }
     }
 
@@ -136,7 +135,7 @@ private struct OnboardingFlowView: View {
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 bullet("Bezahlungsmodell und Betrag")
-                bullet("Arbeitswoche und Arbeitstage")
+                bullet("Arbeitstage pro Woche")
                 bullet("Wöchentliche Sollstunden")
                 bullet("Land/Bundesland für Feiertage")
                 bullet("Regeln für 13-Wochen-Berechnung")
@@ -188,20 +187,13 @@ private struct OnboardingFlowView: View {
     private var workweekPage: some View {
         OnboardingPageShell(
             title: "Arbeitswoche",
-            subtitle: "Wochenstart ist fest auf Montag gesetzt.",
+            subtitle: "Lege fest, wie viele Arbeitstage deine Woche hat.",
             step: page + 1,
             total: pageCount,
             icon: "calendar",
             accent: settings.themeAccent.color
         ) {
             VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Text("Wochenbeginn")
-                    Spacer()
-                    Text("Montag")
-                        .foregroundStyle(.secondary)
-                }
-
                 Stepper(
                     "Arbeitstage pro Woche: \(settings.scheduledWorkdaysCount)",
                     value: Binding(
@@ -388,7 +380,6 @@ private struct OnboardingFlowView: View {
             settings.monthlySalaryCents = value
             settings.hourlyRateCents = nil
         }
-        settings.weekStart = .monday
         settings.weeklyTargetSeconds = parseHoursToSeconds(weeklyHours)
         settings.holidayCountryCode = normalizedHolidayCountryCode
         settings.holidaySubdivisionCode = normalizedHolidaySubdivisionCode

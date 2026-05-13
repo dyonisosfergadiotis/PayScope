@@ -32,7 +32,6 @@ enum CloudKitRecordKeys {
         case hourlyRateCents
         case monthlySalaryCents
         case weeklyTargetSeconds
-        case weekStart
         case vacationLookbackCount
         case vacationCreditingMode
         case vacationFixedSeconds
@@ -49,6 +48,9 @@ enum CloudKitRecordKeys {
         case showCalendarWeekHours
         case showCalendarWeekPay
         case showLiveActivity
+        case liveActivityShowsUpcomingShift
+        case widgetShowsNextShift
+        case widgetShowsAllDayStatus
         case alwaysApplyFifteenMinuteBuffer
         case holidayCountryCode
         case holidaySubdivisionCode
@@ -675,8 +677,6 @@ final class CloudKitService: ObservableObject {
         let monthlyCents = (record[CloudKitRecordKeys.Settings.monthlySalaryCents.rawValue] as? NSNumber)?.intValue
         let weeklyTargetSeconds = (record[CloudKitRecordKeys.Settings.weeklyTargetSeconds.rawValue] as? NSNumber)?.intValue
 
-        let weekStart: WeekStart = .monday
-
         let themeAccentString = record[CloudKitRecordKeys.Settings.themeAccent.rawValue] as? String
         let themeAccent = ThemeAccent(rawValue: themeAccentString ?? "") ?? .blue
 
@@ -707,6 +707,9 @@ final class CloudKitService: ObservableObject {
         let showCalendarWeekHours = (record[CloudKitRecordKeys.Settings.showCalendarWeekHours.rawValue] as? NSNumber)?.boolValue
         let showCalendarWeekPay = (record[CloudKitRecordKeys.Settings.showCalendarWeekPay.rawValue] as? NSNumber)?.boolValue
         let showLiveActivity = (record[CloudKitRecordKeys.Settings.showLiveActivity.rawValue] as? NSNumber)?.boolValue
+        let liveActivityShowsUpcomingShift = (record[CloudKitRecordKeys.Settings.liveActivityShowsUpcomingShift.rawValue] as? NSNumber)?.boolValue
+        let widgetShowsNextShift = (record[CloudKitRecordKeys.Settings.widgetShowsNextShift.rawValue] as? NSNumber)?.boolValue
+        let widgetShowsAllDayStatus = (record[CloudKitRecordKeys.Settings.widgetShowsAllDayStatus.rawValue] as? NSNumber)?.boolValue
         let alwaysApplyFifteenMinuteBuffer = (record[CloudKitRecordKeys.Settings.alwaysApplyFifteenMinuteBuffer.rawValue] as? NSNumber)?.boolValue
         let holidayCountryCode = record[CloudKitRecordKeys.Settings.holidayCountryCode.rawValue] as? String
         let holidaySubdivisionCode = record[CloudKitRecordKeys.Settings.holidaySubdivisionCode.rawValue] as? String
@@ -734,7 +737,6 @@ final class CloudKitService: ObservableObject {
             hourlyRateCents: hourlyCents,
             monthlySalaryCents: monthlyCents,
             weeklyTargetSeconds: weeklyTargetSeconds,
-            weekStart: weekStart,
             vacationLookbackCount: vacationLookbackCount,
             vacationCreditingMode: vacationCreditingMode ?? .lookback13Weeks,
             vacationFixedSeconds: vacationFixedSeconds,
@@ -746,11 +748,14 @@ final class CloudKitService: ObservableObject {
             themeAccent: themeAccent,
             calendarCellDisplayMode: calendarCellDisplayMode ?? .dot,
             calendarHoursBreakMode: calendarHoursBreakMode ?? .withoutBreak,
-            calendarSummaryDisplayMode: calendarSummaryDisplayMode ?? .grossNet,
+            calendarSummaryDisplayMode: calendarSummaryDisplayMode ?? .net,
             showCalendarWeekNumbers: showCalendarWeekNumbers ?? false,
             showCalendarWeekHours: showCalendarWeekHours ?? false,
             showCalendarWeekPay: showCalendarWeekPay ?? false,
             showLiveActivity: showLiveActivity ?? true,
+            liveActivityShowsUpcomingShift: liveActivityShowsUpcomingShift ?? true,
+            widgetShowsNextShift: widgetShowsNextShift ?? true,
+            widgetShowsAllDayStatus: widgetShowsAllDayStatus ?? true,
             alwaysApplyFifteenMinuteBuffer: alwaysApplyFifteenMinuteBuffer ?? false,
             holidayCountryCode: holidayCountryCode,
             holidaySubdivisionCode: holidaySubdivisionCode,
@@ -778,6 +783,9 @@ final class CloudKitService: ObservableObject {
         settings.showCalendarWeekHours = showCalendarWeekHours
         settings.showCalendarWeekPay = showCalendarWeekPay
         settings.showLiveActivity = showLiveActivity
+        settings.liveActivityShowsUpcomingShift = liveActivityShowsUpcomingShift
+        settings.widgetShowsNextShift = widgetShowsNextShift
+        settings.widgetShowsAllDayStatus = widgetShowsAllDayStatus
         settings.alwaysApplyFifteenMinuteBuffer = alwaysApplyFifteenMinuteBuffer
         settings.autoSetHolidayCategory = autoSetHolidayCategory
         settings.markPaidHolidays = markPaidHolidays
@@ -887,7 +895,6 @@ final class CloudKitService: ObservableObject {
         } else {
             record[CloudKitRecordKeys.Settings.weeklyTargetSeconds.rawValue] = nil
         }
-        record[CloudKitRecordKeys.Settings.weekStart.rawValue] = WeekStart.monday.rawValue
         let sanitizedVacationLookbackCount = max(1, settings.vacationLookbackCount)
         record[CloudKitRecordKeys.Settings.vacationLookbackCount.rawValue] = NSNumber(value: sanitizedVacationLookbackCount)
         if let vacationMode = settings.vacationCreditingMode {
@@ -948,6 +955,21 @@ final class CloudKitService: ObservableObject {
             record[CloudKitRecordKeys.Settings.showLiveActivity.rawValue] = NSNumber(value: showLiveActivity)
         } else {
             record[CloudKitRecordKeys.Settings.showLiveActivity.rawValue] = nil
+        }
+        if let liveActivityShowsUpcomingShift = settings.liveActivityShowsUpcomingShift {
+            record[CloudKitRecordKeys.Settings.liveActivityShowsUpcomingShift.rawValue] = NSNumber(value: liveActivityShowsUpcomingShift)
+        } else {
+            record[CloudKitRecordKeys.Settings.liveActivityShowsUpcomingShift.rawValue] = nil
+        }
+        if let widgetShowsNextShift = settings.widgetShowsNextShift {
+            record[CloudKitRecordKeys.Settings.widgetShowsNextShift.rawValue] = NSNumber(value: widgetShowsNextShift)
+        } else {
+            record[CloudKitRecordKeys.Settings.widgetShowsNextShift.rawValue] = nil
+        }
+        if let widgetShowsAllDayStatus = settings.widgetShowsAllDayStatus {
+            record[CloudKitRecordKeys.Settings.widgetShowsAllDayStatus.rawValue] = NSNumber(value: widgetShowsAllDayStatus)
+        } else {
+            record[CloudKitRecordKeys.Settings.widgetShowsAllDayStatus.rawValue] = nil
         }
         if let alwaysApplyFifteenMinuteBuffer = settings.alwaysApplyFifteenMinuteBuffer {
             record[CloudKitRecordKeys.Settings.alwaysApplyFifteenMinuteBuffer.rawValue] = NSNumber(value: alwaysApplyFifteenMinuteBuffer)

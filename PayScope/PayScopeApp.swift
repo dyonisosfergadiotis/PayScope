@@ -16,7 +16,7 @@ struct PayScopeApp: App {
     )
 
     @MainActor
-    private static let localModelContainer: ModelContainer = {
+    static let localModelContainer: ModelContainer = {
         let primaryStoreName = "LocalStore_v2"
         let recoveryStoreName = "LocalStore_v3"
         let recoveryFlagKey = "swiftdata.useRecoveryStore"
@@ -173,7 +173,7 @@ enum PayScopeLiveActivityManager {
                 shiftStart: payload.timelineStart,
                 shiftEnd: payload.timelineEnd,
                 shiftDurationSeconds: max(0, Int(payload.timelineEnd.timeIntervalSince(payload.timelineStart))),
-                nextShiftStart: payload.nextShiftStart,
+                nextShiftStart: settings.effectiveWidgetShowsNextShift ? payload.nextShiftStart : nil,
                 isAllDayStatus: nil,
                 allDayYear: nil,
                 allDayMonth: nil,
@@ -181,7 +181,7 @@ enum PayScopeLiveActivityManager {
             )
         }
 
-        if let allDayEntry = entries.first(where: {
+        if settings.effectiveWidgetShowsAllDayStatus, let allDayEntry = entries.first(where: {
             $0.date.isSameLocalDay(as: dayStart) &&
             ($0.type == .vacation || $0.type == .holiday || $0.type == .sick)
         }) {
@@ -194,7 +194,7 @@ enum PayScopeLiveActivityManager {
                 shiftStart: nil,
                 shiftEnd: nil,
                 shiftDurationSeconds: 0,
-                nextShiftStart: nextUpcomingShiftStart(after: now, entries: entries),
+                nextShiftStart: settings.effectiveWidgetShowsNextShift ? nextUpcomingShiftStart(after: now, entries: entries) : nil,
                 isAllDayStatus: true,
                 allDayYear: dayComponents.year,
                 allDayMonth: dayComponents.month,
@@ -202,7 +202,7 @@ enum PayScopeLiveActivityManager {
             )
         }
 
-        if let payload {
+        if let payload, settings.effectiveWidgetShowsNextShift {
             let isShiftActive = now >= payload.timelineStart && now < payload.timelineEnd
             return RectangularWidgetSnapshot(
                 themeAccentRawValue: payload.themeAccentRawValue,
@@ -220,7 +220,7 @@ enum PayScopeLiveActivityManager {
             )
         }
 
-        let nextShiftStart = nextUpcomingShiftStart(after: now, entries: entries)
+        let nextShiftStart = settings.effectiveWidgetShowsNextShift ? nextUpcomingShiftStart(after: now, entries: entries) : nil
         let nextShiftCategoryIcon: String?
         let nextShiftCategoryTitle: String?
         if let nextShiftStart {
@@ -338,6 +338,9 @@ enum PayScopeLiveActivityManager {
 
         let timelineStart = focusShift.start
         let timelineEnd = focusShift.end
+        guard now >= timelineStart && now < timelineEnd || settings.effectiveLiveActivityShowsUpcomingShift else {
+            return nil
+        }
         let effectiveNow = min(max(now, timelineStart), timelineEnd)
         let focusShiftWorkedSeconds = workedSeconds(until: effectiveNow, for: focusShift.entry)
         let workedReferenceStart = max(

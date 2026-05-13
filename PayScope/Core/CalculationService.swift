@@ -526,10 +526,10 @@ struct CalculationService {
         return nil
     }
 
-    func weekStartDate(for date: Date, weekStart: WeekStart) -> Date {
+    func weekStartDate(for date: Date) -> Date {
         let normalized = date.startOfDayLocal(calendar: calendar)
         let weekday = calendar.component(.weekday, from: normalized)
-        let desired: Int = weekStart == .monday ? 2 : 1
+        let desired = 2
         let diff = (weekday - desired + 7) % 7
         return normalized.addingDays(-diff, calendar: calendar)
     }

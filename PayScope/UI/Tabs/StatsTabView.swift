@@ -12,7 +12,7 @@ struct StatsTabView: View {
 
     @EnvironmentObject private var cloudKitService: CloudKitService
     @Bindable var settings: Settings
-    let referenceMonth: Date
+    @Binding var referenceMonth: Date
 
     @State private var entries: [DayEntry] = []
     @State private var isLoadingData = false

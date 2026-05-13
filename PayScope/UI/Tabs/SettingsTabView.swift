@@ -1,12 +1,30 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+import PDFKit
+import ActivityKit
+import WidgetKit
+
+private enum SettingsScope: String, CaseIterable, Identifiable {
+    case basic
+    case advanced
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .basic: return "Basis"
+        case .advanced: return "Erweitert"
+        }
+    }
+}
 
 struct SettingsTabView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var cloudKitService: CloudKitService
     @ObservedObject private var appleCalendarSync = AppleCalendarSyncService.shared
     @State private var settings: Settings
+    @State private var selectedScope: SettingsScope = .basic
     @State private var showResetConfirmation = false
     @State private var showResetResultAlert = false
     @State private var resetResultMessage = ""
@@ -18,146 +36,20 @@ struct SettingsTabView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Arbeit") {
-                    NavigationLink {
-                        PaySettingsView(settings: $settings)
-                    } label: {
-                        SettingsMenuRow(
-                            title: "Vergütung",
-                            subtitle: "Abrechnungsmodell und Gehaltswert einstellen",
-                            systemImage: "eurosign.circle"
-                        )
+                Section {
+                    Picker("Einstellungsebene", selection: $selectedScope) {
+                        ForEach(SettingsScope.allCases) { scope in
+                            Text(scope.title).tag(scope)
+                        }
                     }
-
-                    NavigationLink {
-                        NetDefaultsSettingsView(settings: $settings)
-                    } label: {
-                        SettingsMenuRow(
-                            title: "Netto-Standardwerte",
-                            subtitle: "Abgaben und Zuschläge für Netto-Berechnungen verwalten",
-                            systemImage: "percent"
-                        )
-                    }
-
-                    NavigationLink {
-                        TipsSettingsView(settings: $settings)
-                    } label: {
-                        SettingsMenuRow(
-                            title: "Trinkgeld",
-                            subtitle: tipsSettingsSubtitle,
-                            systemImage: "eurosign.circle"
-                        )
-                    }
-
-                    NavigationLink {
-                        WorkweekSettingsView(settings: $settings)
-                    } label: {
-                        SettingsMenuRow(
-                            title: "Arbeitswoche",
-                            subtitle: "Wochenbeginn und Arbeitstage pro Woche festlegen",
-                            systemImage: "calendar.badge.clock"
-                        )
-                    }
-
-                    NavigationLink {
-                        WeeklyTargetSettingsView(settings: $settings)
-                    } label: {
-                        SettingsMenuRow(
-                            title: "Wochenstunden",
-                            subtitle: "Sollstunden pro Woche hinterlegen",
-                            systemImage: "clock"
-                        )
-                    }
-
-                    NavigationLink {
-                        RulesSettingsView(settings: $settings)
-                    } label: {
-                        SettingsMenuRow(
-                            title: "Berechnungsregeln",
-                            subtitle: "Gutschriften und Referenzlogik konfigurieren",
-                            systemImage: "slider.horizontal.3"
-                        )
-                    }
-
-                    NavigationLink {
-                        ShiftShortcutsSettingsView(settings: $settings)
-                    } label: {
-                        SettingsMenuRow(
-                            title: "Schichtvorlagen",
-                            subtitle: "Namen und Zeiten für schnelle Schichten bearbeiten",
-                            systemImage: "clock.badge"
-                        )
-                    }
+                    .pickerStyle(.segmented)
                 }
 
-                Section("Darstellung") {
-                    NavigationLink {
-                        AppearanceSettingsView(settings: $settings)
-                    } label: {
-                        SettingsMenuRow(
-                            title: "Erscheinungsbild",
-                            subtitle: "Akzentfarbe der App auswählen",
-                            systemImage: "paintpalette"
-                        )
-                    }
-
-                    NavigationLink {
-                        CalendarSettingsView(settings: $settings)
-                    } label: {
-                        SettingsMenuRow(
-                            title: "Kalender",
-                            subtitle: "Kalenderzellen und Wocheninfos anpassen",
-                            systemImage: "rectangle.3.group"
-                        )
-                    }
-                }
-
-                Section("Daten") {
-                    NavigationLink {
-                        HolidayImportSettingsView(settings: $settings)
-                    } label: {
-                        SettingsMenuRow(
-                            title: "Feiertage",
-                            subtitle: "Region, Import und automatische Markierung einstellen",
-                            systemImage: "flag"
-                        )
-                    }
-
-                    NavigationLink {
-                        AppleCalendarSettingsView(settings: settings)
-                    } label: {
-                        SettingsMenuRow(
-                            title: "Apple Kalender",
-                            subtitle: appleCalendarSubtitle,
-                            systemImage: "calendar.badge.plus"
-                        )
-                    }
-
-                    NavigationLink {
-                        ExportSettingsView(settings: $settings)
-                    } label: {
-                        SettingsMenuRow(
-                            title: "Export",
-                            subtitle: "Monatsdaten als CSV, Text oder PDF teilen",
-                            systemImage: "square.and.arrow.up"
-                        )
-                    }
-                }
-
-                Section("App") {
-                    NavigationLink {
-                        AppInfoSettingsView()
-                    } label: {
-                        SettingsMenuRow(
-                            title: "Info & Entwickler",
-                            subtitle: "App-Version und Entwicklerangaben ansehen",
-                            systemImage: "info.circle"
-                        )
-                    }
-
-                    Button("App zurücksetzen", role: .destructive) {
-                        showResetConfirmation = true
-                    }
+                switch selectedScope {
+                case .basic:
+                    basicSettingsSections
+                case .advanced:
+                    advancedSettingsSections
                 }
             }
             .navigationTitle("Einstellungen")
@@ -177,6 +69,156 @@ struct SettingsTabView: View {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(resetResultMessage)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var basicSettingsSections: some View {
+        Section("Arbeit") {
+            NavigationLink {
+                PaySettingsView(settings: $settings)
+            } label: {
+                SettingsMenuRow(
+                    title: "Vergütung",
+                    subtitle: "Abrechnungsmodell und Gehaltswert einstellen",
+                    systemImage: "eurosign.circle"
+                )
+            }
+
+            NavigationLink {
+                TipsSettingsView(settings: $settings)
+            } label: {
+                SettingsMenuRow(
+                    title: "Trinkgeld",
+                    subtitle: tipsSettingsSubtitle,
+                    systemImage: "eurosign.circle"
+                )
+            }
+
+            NavigationLink {
+                WorkweekSettingsView(settings: $settings)
+            } label: {
+                SettingsMenuRow(
+                    title: "Arbeitswoche",
+                    subtitle: "Arbeitstage pro Woche festlegen",
+                    systemImage: "calendar.badge.clock"
+                )
+            }
+
+            NavigationLink {
+                WeeklyTargetSettingsView(settings: $settings)
+            } label: {
+                SettingsMenuRow(
+                    title: "Wochenstunden",
+                    subtitle: "Sollstunden pro Woche hinterlegen",
+                    systemImage: "clock"
+                )
+            }
+        }
+
+        Section("Darstellung") {
+            NavigationLink {
+                AppearanceSettingsView(settings: $settings)
+            } label: {
+                SettingsMenuRow(
+                    title: "Erscheinungsbild",
+                    subtitle: "Akzentfarbe der App auswählen",
+                    systemImage: "paintpalette"
+                )
+            }
+
+            NavigationLink {
+                CalendarSettingsView(settings: $settings)
+            } label: {
+                SettingsMenuRow(
+                    title: "Kalender",
+                    subtitle: "Kalenderzellen und Wocheninfos anpassen",
+                    systemImage: "rectangle.3.group"
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var advancedSettingsSections: some View {
+        Section("Arbeit") {
+            NavigationLink {
+                RulesSettingsView(settings: $settings)
+            } label: {
+                SettingsMenuRow(
+                    title: "Berechnungsregeln",
+                    subtitle: "Gutschriften und Referenzlogik konfigurieren",
+                    systemImage: "slider.horizontal.3"
+                )
+            }
+
+            NavigationLink {
+                ShiftShortcutsSettingsView(settings: $settings)
+            } label: {
+                SettingsMenuRow(
+                    title: "Schichtvorlagen",
+                    subtitle: "Namen und Zeiten für schnelle Schichten bearbeiten",
+                    systemImage: "clock.badge"
+                )
+            }
+        }
+
+        Section("Integrationen") {
+            NavigationLink {
+                WidgetLiveActivitySettingsView(settings: $settings)
+            } label: {
+                SettingsMenuRow(
+                    title: "Widgets und Live Activity",
+                    subtitle: "Lock-Screen-Widgets, Live Activity und Aktualisierung",
+                    systemImage: "rectangle.inset.filled.and.person.filled"
+                )
+            }
+
+            NavigationLink {
+                HolidayImportSettingsView(settings: $settings)
+            } label: {
+                SettingsMenuRow(
+                    title: "Feiertage",
+                    subtitle: "Region, Import und automatische Markierung einstellen",
+                    systemImage: "flag"
+                )
+            }
+
+            NavigationLink {
+                AppleCalendarSettingsView(settings: settings)
+            } label: {
+                SettingsMenuRow(
+                    title: "Apple Kalender",
+                    subtitle: appleCalendarSubtitle,
+                    systemImage: "calendar.badge.plus"
+                )
+            }
+        }
+
+        Section("Daten & App") {
+            NavigationLink {
+                ExportSettingsView(settings: $settings)
+            } label: {
+                SettingsMenuRow(
+                    title: "Export",
+                    subtitle: "Monatsdaten als CSV, Text oder PDF teilen",
+                    systemImage: "square.and.arrow.up"
+                )
+            }
+
+            NavigationLink {
+                AppInfoSettingsView()
+            } label: {
+                SettingsMenuRow(
+                    title: "Info & Entwickler",
+                    subtitle: "App-Version und Entwicklerangaben ansehen",
+                    systemImage: "info.circle"
+                )
+            }
+
+            Button("App zurücksetzen", role: .destructive) {
+                showResetConfirmation = true
             }
         }
     }
@@ -268,6 +310,18 @@ private struct PaySettingsView: View {
                     }label:{
                         Image(systemName: "checkmark")
                     }
+                }
+            }
+
+            Section("Netto") {
+                NavigationLink {
+                    NetDefaultsSettingsView(settings: $settings)
+                } label: {
+                    SettingsMenuRow(
+                        title: "Netto-Standardwerte",
+                        subtitle: "Abgaben und Zuschläge für Netto-Berechnungen verwalten",
+                        systemImage: "percent"
+                    )
                 }
             }
         }
@@ -472,13 +526,6 @@ private struct WorkweekSettingsView: View {
                 header: Text("Arbeitswoche"),
                 footer: Text("Steuert Sollzeit und den Standardwert für feste Feiertagsgutschrift.")
             ) {
-                HStack {
-                    Text("Wochenbeginn")
-                    Spacer()
-                    Text("Montag")
-                        .foregroundStyle(.secondary)
-                }
-
                 Stepper(
                     "Arbeitstage pro Woche: \(settings.scheduledWorkdaysCount)",
                     value: Binding(
@@ -493,16 +540,6 @@ private struct WorkweekSettingsView: View {
             }
         }
         .navigationTitle("Arbeitswoche")
-        .onAppear {
-            var didNormalize = false
-            if settings.weekStart != .monday {
-                settings.weekStart = .monday
-                didNormalize = true
-            }
-            if didNormalize {
-                Task { try? await cloudKitService.saveSettings(settings) }
-            }
-        }
     }
 }
 
@@ -796,40 +833,39 @@ private struct CalendarSettingsView: View {
         Form {
             Section(
                 header: Text("Kalenderdarstellung"),
-                footer: Text("Diese Einstellungen beeinflussen, wie sich der Kalender zeigt.")) {
-                Picker("Tageszelle", selection: calendarDisplayModeBinding) {
-                    ForEach(CalendarCellDisplayMode.allCases) { mode in
-                        Text(mode.label).tag(mode)
-                    }
-                }
-
-                if calendarDisplayModeBinding.wrappedValue == .hours {
-                    Picker("Stundenvergleich", selection: calendarHoursBreakModeBinding) {
-                        ForEach(CalendarHoursBreakMode.allCases) { mode in
+                footer: Text("Diese Einstellungen legen fest, welche Informationen im Kalender zu sehen sind.")) {
+                    Picker("Tageszelle", selection: calendarDisplayModeBinding) {
+                        ForEach(CalendarCellDisplayMode.allCases) { mode in
                             Text(mode.label).tag(mode)
                         }
                     }
-                    .pickerStyle(.segmented)
-                }
-
-                Picker("Monatsübersicht", selection: calendarSummaryDisplayModeBinding) {
-                    ForEach(CalendarSummaryDisplayMode.allCases) { mode in
-                        Text(mode.label).tag(mode)
+                    
+                    if calendarDisplayModeBinding.wrappedValue == .hours {
+                        Picker("Stundenvergleich", selection: calendarHoursBreakModeBinding) {
+                            ForEach(CalendarHoursBreakMode.allCases) { mode in
+                                Text(mode.label).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
                     }
+                    
+                    Toggle("Kalenderwochen", isOn: showCalendarWeekNumbersBinding)
+                    Toggle("Wochenstunden", isOn: showCalendarWeekHoursBinding)
+                    Toggle("Wochenverdienst", isOn: showCalendarWeekPayBinding)
                 }
-                .pickerStyle(.segmented)
-
-                Toggle("Kalenderwochen", isOn: showCalendarWeekNumbersBinding)
-                Toggle("Wochenstunden", isOn: showCalendarWeekHoursBinding)
-                Toggle("Wochenverdienst", isOn: showCalendarWeekPayBinding)
-            }
-
+            
             Section(
-                header: Text("Live Activity"),
-                footer: Text("Wenn aktiv, startet PayScope eine Live Activity für den aktuellen Arbeitstag.")
-            ) {
-                Toggle("Zeige Live Activity", isOn: showLiveActivityBinding)
+                header: Text("Monatsinformationen"),
+                footer: Text("Gibt an, ob der monatliche Überblick den Brutto- oder Nettolohn zeigt.")
+        )
+                {
+                    Picker("Monatswert", selection: calendarSummaryDisplayModeBinding) {
+                        ForEach(CalendarSummaryDisplayMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
             }
+            .pickerStyle(.segmented)
+        }
         }
         .navigationTitle("Kalender")
     }
@@ -893,15 +929,145 @@ private struct CalendarSettingsView: View {
             }
         )
     }
+}
+
+private struct WidgetLiveActivitySettingsView: View {
+    @EnvironmentObject private var cloudKitService: CloudKitService
+    @Binding var settings: Settings
+    @State private var lastWidgetRefreshDate: Date?
+
+    private static let refreshFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter
+    }()
+
+    var body: some View {
+        Form {
+            Section(
+                header: Text("Live Activity"),
+                footer: Text(liveActivityFooter)
+            ) {
+                Toggle("Automatisch starten", isOn: showLiveActivityBinding)
+                Toggle("Nächste Schicht anzeigen", isOn: liveActivityShowsUpcomingShiftBinding)
+                    .disabled(!settings.effectiveShowLiveActivity)
+            }
+
+            Section(
+                header: Text("Lock-Screen-Widgets"),
+                footer: Text("Gilt für das rechteckige und das Inline-Widget.")
+            ) {
+                Toggle("Nächste Schicht anzeigen", isOn: widgetShowsNextShiftBinding)
+                Toggle("Ganztagsstatus anzeigen", isOn: widgetShowsAllDayStatusBinding)
+            }
+
+            Section(
+                header: Text("Darstellung"),
+                footer: Text("Die Akzentfarbe wird auch für Widgets und Live Activity verwendet.")
+            ) {
+                HStack {
+                    Text("Akzentfarbe")
+                    Spacer()
+                    Menu {
+                        ForEach(ThemeAccent.allCases) { accent in
+                            Button {
+                                settings.themeAccent = accent
+                                saveAndRefreshWidgets()
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Circle()
+                                        .fill(accent.color)
+                                        .frame(width: 10, height: 10)
+                                    Text(accent.label)
+                                        .foregroundStyle(accent.color)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(settings.themeAccent.color)
+                                .frame(width: 10, height: 10)
+                            Text(settings.themeAccent.label)
+                                .foregroundStyle(settings.themeAccent.color.opacity(0.6))
+                        }
+                    }
+                }
+            }
+
+            Section("Aktualisierung") {
+                Button {
+                    refreshWidgets()
+                } label: {
+                    Label("Widgets jetzt aktualisieren", systemImage: "arrow.clockwise")
+                }
+
+                if let lastWidgetRefreshDate {
+                    Text("Zuletzt aktualisiert: \(Self.refreshFormatter.string(from: lastWidgetRefreshDate))")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .navigationTitle("Widgets und Live Activity")
+    }
+
+    private var liveActivityFooter: String {
+        ActivityAuthorizationInfo().areActivitiesEnabled
+            ? "PayScope startet die Live Activity für geplante Schichten automatisch."
+            : "Live Activities sind in den iOS-Systemeinstellungen deaktiviert."
+    }
 
     private var showLiveActivityBinding: Binding<Bool> {
         Binding(
             get: { settings.effectiveShowLiveActivity },
             set: {
                 settings.showLiveActivity = $0
-                Task { try? await cloudKitService.saveSettings(settings) }
+                saveAndRefreshWidgets()
             }
         )
+    }
+
+    private var liveActivityShowsUpcomingShiftBinding: Binding<Bool> {
+        Binding(
+            get: { settings.effectiveLiveActivityShowsUpcomingShift },
+            set: {
+                settings.liveActivityShowsUpcomingShift = $0
+                saveAndRefreshWidgets()
+            }
+        )
+    }
+
+    private var widgetShowsNextShiftBinding: Binding<Bool> {
+        Binding(
+            get: { settings.effectiveWidgetShowsNextShift },
+            set: {
+                settings.widgetShowsNextShift = $0
+                saveAndRefreshWidgets()
+            }
+        )
+    }
+
+    private var widgetShowsAllDayStatusBinding: Binding<Bool> {
+        Binding(
+            get: { settings.effectiveWidgetShowsAllDayStatus },
+            set: {
+                settings.widgetShowsAllDayStatus = $0
+                saveAndRefreshWidgets()
+            }
+        )
+    }
+
+    private func saveAndRefreshWidgets() {
+        Task { try? await cloudKitService.saveSettings(settings) }
+        refreshWidgets()
+    }
+
+    private func refreshWidgets() {
+        WidgetCenter.shared.reloadAllTimelines()
+        lastWidgetRefreshDate = .now
     }
 }
 
@@ -1481,14 +1647,176 @@ private struct AppleCalendarSettingsView: View {
     }
 }
 
+private enum MonthExportPreviewContent {
+    case text(String, isMonospaced: Bool)
+    case pdf(URL)
+}
+
+private struct MonthExportPreview: Identifiable {
+    let id = UUID()
+    let title: String
+    let subtitle: String
+    let detail: String
+    let content: MonthExportPreviewContent
+    let shareItems: [Any]
+}
+
+private struct MonthExportPreviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let preview: MonthExportPreview
+
+    @State private var showShare = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                previewHeader
+                Divider()
+                previewBody
+            }
+            .safeAreaInset(edge: .bottom) {
+                shareBar
+            }
+            .navigationTitle(preview.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Schließen")
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+        .sheet(isPresented: $showShare) {
+            ShareSheet(items: preview.shareItems)
+        }
+    }
+
+    private var previewHeader: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(preview.subtitle)
+                .font(.headline.weight(.semibold))
+            Text(preview.detail)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+        .background(Color(.systemBackground))
+    }
+
+    @ViewBuilder
+    private var previewBody: some View {
+        switch preview.content {
+        case let .text(text, isMonospaced):
+            ScrollView {
+                Text(text.isEmpty ? "Keine exportierbaren Inhalte." : text)
+                    .font(.system(.footnote, design: isMonospaced ? .monospaced : .default))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+            }
+            .background(Color(.secondarySystemBackground))
+        case let .pdf(url):
+            PDFPreviewView(url: url)
+                .background(Color(.secondarySystemBackground))
+        }
+    }
+
+    private var shareBar: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 20){
+                
+            }
+            Divider()
+            Button {
+                showShare = true
+            } label: {
+                Label("Teilen", systemImage: "square.and.arrow.up")
+                    .font(.headline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(preview.shareItems.isEmpty)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+        .background(.bar)
+    }
+}
+
+private struct PDFPreviewView: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context _: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.displayMode = .singlePageContinuous
+        view.displayDirection = .vertical
+        view.backgroundColor = .secondarySystemBackground
+        view.document = PDFDocument(url: url)
+        return view
+    }
+
+    func updateUIView(_ uiView: PDFView, context _: Context) {
+        if uiView.document?.documentURL != url {
+            uiView.document = PDFDocument(url: url)
+        }
+        uiView.autoScales = true
+    }
+}
+
+private struct ExportFormatButton: View {
+    let title: String
+    let systemImage: String
+    let isDisabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 7) {
+                Image(systemName: systemImage)
+                    .font(.title3.weight(.semibold))
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .frame(maxWidth: .infinity, minHeight: 74)
+            .foregroundStyle(isDisabled ? .secondary : Color.accentColor)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(.secondarySystemGroupedBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.accentColor.opacity(isDisabled ? 0.12 : 0.26), lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.55 : 1)
+    }
+}
+
 private struct ExportSettingsView: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
     @Binding var settings: Settings
 
     @State private var exportMonthNumber = Calendar.current.component(.month, from: Date())
     @State private var exportYear = Calendar.current.component(.year, from: Date())
-    @State private var shareItems: [Any] = []
-    @State private var showShare = false
+    @State private var exportPreview: MonthExportPreview?
     @State private var showFileImporter = false
     @State private var showImportSheet = false
     @State private var importedRows: [ShiftCSVImportRowDraft] = []
@@ -1498,6 +1826,7 @@ private struct ExportSettingsView: View {
     @State private var isSavingImportRows = false
     @State private var isPreparingExport = false
     @State private var exportErrorMessage: String?
+    @State private var exportOptions = MonthExportOptions()
 
     private let csvExporter = CSVExporter()
     private let textExporter = ShiftTextExporter()
@@ -1507,53 +1836,37 @@ private struct ExportSettingsView: View {
         calendar.locale = Locale(identifier: "de_DE")
         return calendar.monthSymbols
     }()
+    private static let monthYearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "LLLL yyyy"
+        return formatter
+    }()
 
     var body: some View {
         Form {
-            Section(header: Text("Export"), footer: Text("Der Export enthält alle Tage des gewählten Monats inklusive Kategorien, Zeiten, Summen und Trinkgeld.")) {
-                HStack {
-                    Picker("Monat", selection: $exportMonthNumber) {
-                        ForEach(1...12, id: \.self) { month in
-                            Text(Self.germanMonthSymbols[month - 1]).tag(month)
-                        }
-                    }
-                    Picker("Jahr", selection: $exportYear) {
-                        ForEach(selectableYears, id: \.self) { year in
-                            Text("\(year)").tag(year)
-                        }
-                    }
-                }
+            Section(header: Text("Zeitraum"), footer: Text("Wähle links den Monat und rechts das Jahr.")) {
+                exportWheelPickers
+                    .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
+            }
 
-                Button("CSV erstellen") {
-                    Task {
-                        await shareCSVExport()
-                    }
-                }
-                .disabled(isPreparingExport)
+            
 
-                Button("Text exportieren") {
-                    Task {
-                        await shareTextExport()
+            Section(header: Text("Dateiart"), footer: Text("Erstellt eine Vorschau, die danach geteilt werden kann.")) {
+                HStack(spacing: 10) {
+                    ExportFormatButton(title: "CSV", systemImage: "tablecells", isDisabled: isPreparingExport) {
+                        Task { await previewCSVExport() }
+                    }
+                    ExportFormatButton(title: "Text", systemImage: "doc.text", isDisabled: isPreparingExport) {
+                        Task { await previewTextExport() }
+                    }
+                    ExportFormatButton(title: "PDF", systemImage: "doc.richtext", isDisabled: isPreparingExport) {
+                        Task { await previewPDFExport() }
                     }
                 }
-                .disabled(isPreparingExport)
+                .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
 
-                Button("PDF exportieren") {
-                    Task {
-                        await sharePDFExport()
-                    }
-                }
-                .disabled(isPreparingExport)
-
-                if isPreparingExport {
-                    ProgressView()
-                }
-
-                if let exportErrorMessage {
-                    Text(exportErrorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
+                
             }
 
             Section(header: Text("CSV-Import"), footer: Text("Der Import garantiert keine Datenverluste.")) {
@@ -1575,8 +1888,8 @@ private struct ExportSettingsView: View {
             }
         }
         .navigationTitle("Export")
-        .sheet(isPresented: $showShare) {
-            ShareSheet(items: shareItems)
+        .sheet(item: $exportPreview) { preview in
+            MonthExportPreviewSheet(preview: preview)
         }
         .fileImporter(
             isPresented: $showFileImporter,
@@ -1591,6 +1904,44 @@ private struct ExportSettingsView: View {
                 onSave: { await saveImportedRows() }
             )
         }
+    }
+
+    private var exportWheelPickers: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(spacing: 4) {
+                Text("Monat")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Picker("Monat", selection: $exportMonthNumber) {
+                    ForEach(1...12, id: \.self) { month in
+                        Text(Self.germanMonthSymbols[month - 1]).tag(month)
+                    }
+                }
+                .pickerStyle(.wheel)
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+                .clipped()
+            }
+
+            Divider()
+                .frame(height: 150)
+
+            VStack(spacing: 4) {
+                Text("Jahr")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Picker("Jahr", selection: $exportYear) {
+                    ForEach(selectableYears, id: \.self) { year in
+                        Text("\(year)").tag(year)
+                    }
+                }
+                .pickerStyle(.wheel)
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+                .clipped()
+            }
+        }
+        .frame(height: 178)
     }
 
     private var selectableYears: [Int] {
@@ -1621,52 +1972,76 @@ private struct ExportSettingsView: View {
     }
 
     @MainActor
-    private func shareCSVExport() async {
-        await prepareShare {
+    private func previewCSVExport() async {
+        await prepareExportPreview {
             let data = await loadExportData()
-            let payload = csvExporter.csvForMonth(entries: data.entries, month: selectedExportMonthDate, settings: settings)
-            return payload.isEmpty ? [] : [payload]
+            let payload = csvExporter.csvForMonth(
+                entries: data.entries,
+                tips: data.tips,
+                month: selectedExportMonthDate,
+                settings: settings,
+                options: exportOptions
+            )
+            return MonthExportPreview(
+                title: "CSV-Vorschau",
+                subtitle: Self.monthYearFormatter.string(from: selectedExportMonthDate),
+                detail: "Monatsübersicht als CSV",
+                content: .text(payload, isMonospaced: true),
+                shareItems: payload.isEmpty ? [] : [payload]
+            )
         }
     }
 
     @MainActor
-    private func shareTextExport() async {
-        await prepareShare {
+    private func previewTextExport() async {
+        await prepareExportPreview {
             let data = await loadExportData()
             let payload = textExporter.textForMonth(
                 entries: data.entries,
                 tips: data.tips,
                 month: selectedExportMonthDate,
-                settings: settings
+                settings: settings,
+                options: exportOptions
             )
-            return [payload]
+            return MonthExportPreview(
+                title: "Text-Vorschau",
+                subtitle: Self.monthYearFormatter.string(from: selectedExportMonthDate),
+                detail: "Monatsübersicht als Text",
+                content: .text(payload, isMonospaced: false),
+                shareItems: [payload]
+            )
         }
     }
 
     @MainActor
-    private func sharePDFExport() async {
-        await prepareShare {
+    private func previewPDFExport() async {
+        await prepareExportPreview {
             let data = await loadExportData()
             let url = try pdfExporter.pdfURLForMonth(
                 entries: data.entries,
                 tips: data.tips,
                 month: selectedExportMonthDate,
-                settings: settings
+                settings: settings,
+                options: exportOptions
             )
-            return [url]
+            return MonthExportPreview(
+                title: "PDF-Vorschau",
+                subtitle: Self.monthYearFormatter.string(from: selectedExportMonthDate),
+                detail: "Monatsübersicht als PDF",
+                content: .pdf(url),
+                shareItems: [url]
+            )
         }
     }
 
     @MainActor
-    private func prepareShare(_ builder: @escaping () async throws -> [Any]) async {
+    private func prepareExportPreview(_ builder: @escaping () async throws -> MonthExportPreview) async {
         isPreparingExport = true
         exportErrorMessage = nil
         defer { isPreparingExport = false }
 
         do {
-            let items = try await builder()
-            shareItems = items
-            showShare = !items.isEmpty
+            exportPreview = try await builder()
         } catch {
             exportErrorMessage = "Export fehlgeschlagen: \(error.localizedDescription)"
         }

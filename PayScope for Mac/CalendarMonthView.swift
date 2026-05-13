@@ -14,7 +14,7 @@ struct CalendarMonthView: View {
 
     private var calendar: Calendar {
         var c = Calendar.current
-        c.firstWeekday = settings?.weekStart == .sunday ? 1 : 2
+        c.firstWeekday = 2
         return c
     }
 

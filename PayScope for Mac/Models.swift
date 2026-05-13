@@ -78,20 +78,6 @@ enum PayMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-enum WeekStart: String, Codable, CaseIterable, Identifiable {
-    case monday
-    case sunday
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .monday: return "Montag"
-        case .sunday: return "Sonntag"
-        }
-    }
-}
-
 enum HolidayCreditingMode: String, Codable, CaseIterable, Identifiable {
     case fixedValue
     case lookback13Weeks
@@ -259,7 +245,6 @@ final class Settings {
     var hourlyRateCents: Int?
     var monthlySalaryCents: Int?
     var weeklyTargetSeconds: Int?
-    var weekStart: WeekStart = WeekStart.monday
     var vacationLookbackCount: Int = 13
     var vacationCreditingMode: VacationCreditingMode?
     var vacationFixedSeconds: Int?
@@ -291,7 +276,6 @@ final class Settings {
         hourlyRateCents: Int? = nil,
         monthlySalaryCents: Int? = nil,
         weeklyTargetSeconds: Int? = nil,
-        weekStart: WeekStart = .monday,
         vacationLookbackCount: Int = 13,
         vacationCreditingMode: VacationCreditingMode = .lookback13Weeks,
         vacationFixedSeconds: Int? = nil,
@@ -322,7 +306,6 @@ final class Settings {
         self.hourlyRateCents = hourlyRateCents
         self.monthlySalaryCents = monthlySalaryCents
         self.weeklyTargetSeconds = weeklyTargetSeconds
-        self.weekStart = weekStart
         self.vacationLookbackCount = vacationLookbackCount
         self.vacationCreditingMode = vacationCreditingMode
         self.vacationFixedSeconds = vacationFixedSeconds.map { max(0, $0) }
@@ -414,7 +397,6 @@ extension Settings {
 
     var effectivePaidHolidayWeekdayMask: Int {
         let fallbackMask = Self.defaultWeekdayMask(
-            weekStart: weekStart,
             scheduledWorkdaysCount: scheduledWorkdaysCount
         )
         return Self.sanitizedWeekdayMask(paidHolidayWeekdayMask) ?? fallbackMask
@@ -450,11 +432,9 @@ extension Settings {
         return value & 0b1111111
     }
 
-    private static func defaultWeekdayMask(weekStart: WeekStart, scheduledWorkdaysCount: Int) -> Int {
+    private static func defaultWeekdayMask(scheduledWorkdaysCount: Int) -> Int {
         let count = min(max(scheduledWorkdaysCount, 1), 7)
-        let orderedWeekdays = weekStart == .sunday
-            ? [1, 2, 3, 4, 5, 6, 7]
-            : [2, 3, 4, 5, 6, 7, 1]
+        let orderedWeekdays = [2, 3, 4, 5, 6, 7, 1]
 
         var mask = 0
         for weekday in orderedWeekdays.prefix(count) {

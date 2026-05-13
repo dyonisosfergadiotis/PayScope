@@ -30,7 +30,6 @@ enum CloudKitReadRecordKeys {
         case hourlyRateCents
         case monthlySalaryCents
         case weeklyTargetSeconds
-        case weekStart
         case vacationLookbackCount
         case vacationCreditingMode
         case vacationFixedSeconds
@@ -100,7 +99,6 @@ struct CloudSnapshot: Codable, Equatable {
         let hourlyRateCents: Int?
         let monthlySalaryCents: Int?
         let weeklyTargetSeconds: Int?
-        let weekStart: WeekStart
         let vacationLookbackCount: Int
         let vacationCreditingMode: VacationCreditingMode?
         let vacationFixedSeconds: Int?
@@ -559,7 +557,6 @@ actor CloudKitReadService {
         let hourlyRateCents = (record[CloudKitReadRecordKeys.Settings.hourlyRateCents.rawValue] as? NSNumber)?.intValue
         let monthlySalaryCents = (record[CloudKitReadRecordKeys.Settings.monthlySalaryCents.rawValue] as? NSNumber)?.intValue
         let weeklyTargetSeconds = (record[CloudKitReadRecordKeys.Settings.weeklyTargetSeconds.rawValue] as? NSNumber)?.intValue
-        let weekStart = WeekStart(rawValue: record[CloudKitReadRecordKeys.Settings.weekStart.rawValue] as? String ?? "") ?? .monday
         let vacationLookbackCount = max(1, (record[CloudKitReadRecordKeys.Settings.vacationLookbackCount.rawValue] as? NSNumber)?.intValue ?? 13)
         let vacationCreditingMode = VacationCreditingMode(rawValue: record[CloudKitReadRecordKeys.Settings.vacationCreditingMode.rawValue] as? String ?? "")
         let vacationFixedSeconds = (record[CloudKitReadRecordKeys.Settings.vacationFixedSeconds.rawValue] as? NSNumber)?.intValue
@@ -592,7 +589,6 @@ actor CloudKitReadService {
             hourlyRateCents: hourlyRateCents,
             monthlySalaryCents: monthlySalaryCents,
             weeklyTargetSeconds: weeklyTargetSeconds,
-            weekStart: weekStart,
             vacationLookbackCount: vacationLookbackCount,
             vacationCreditingMode: vacationCreditingMode,
             vacationFixedSeconds: vacationFixedSeconds,

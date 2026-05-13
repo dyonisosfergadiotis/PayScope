@@ -53,6 +53,7 @@ final class LocalTipEntryStore {
             upsert(tip)
             clearDeletionTombstoneIfPresent(for: tip.id)
         }
+        notifyChange()
     }
 
     func upsertMany(_ tips: [TipEntry], markSynced: Bool = true) {
@@ -78,6 +79,7 @@ final class LocalTipEntryStore {
                 clearSyncedMarkerIfPresent(for: tip.id)
             }
         }
+        notifyChange()
     }
 
     func markSynced(_ tip: TipEntry) {
@@ -126,6 +128,19 @@ final class LocalTipEntryStore {
                 try? fileManager.removeItem(at: directoryURL)
             }
             try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        }
+        notifyChange()
+    }
+
+    private func notifyChange() {
+        let send = {
+            NotificationCenter.default.post(name: .tipEntriesDidChange, object: nil)
+        }
+
+        if Thread.isMainThread {
+            send()
+        } else {
+            DispatchQueue.main.async(execute: send)
         }
     }
 
