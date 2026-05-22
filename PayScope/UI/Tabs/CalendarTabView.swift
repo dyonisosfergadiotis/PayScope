@@ -2941,8 +2941,9 @@ private struct ShiftViewPopover: View {
         isTinted: Bool = false,
         columnAlignment: PopoverColumnAlignment
     ) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
 
-        VStack(alignment: columnAlignment.horizontal, spacing: 4) {
+        return VStack(alignment: columnAlignment.horizontal, spacing: 4) {
 
             HStack(spacing: 4) {
                 Image(systemName: systemImage)
@@ -2974,8 +2975,19 @@ private struct ShiftViewPopover: View {
         }
         .frame(maxWidth: .infinity, alignment: columnAlignment.frame)
         .padding(8)
+        .background(
+            shape
+                .fill(accent.opacity(isTinted ? 0.038 : 0.026))
+        )
+        .glassEffect(
+            .regular
+                .tint(accent.opacity(isTinted ? 0.06 : 0.042))
+                .interactive(true),
+            in: shape
+        )
+        .payScopeLiquidGlassTapFeedback(accent: accent, in: shape, tintOpacity: 0.048, pressedScale: 0.99)
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            shape
                 .stroke(isTinted ? accent.opacity(0.26) : .white.opacity(0.12), lineWidth: 0.8)
         )
     }
