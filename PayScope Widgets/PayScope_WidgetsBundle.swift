@@ -11,7 +11,12 @@ import SwiftUI
 @main
 struct PayScope_WidgetsBundle: WidgetBundle {
     var body: some Widget {
+        PayScopeStartShiftControl()
+        PayScopeEndShiftControl()
+        PayScopeAddTipControl()
+        PayScopeMarkTodaySickControl()
         PayScope_WidgetsControl()
+        PayScope_CurrentShiftCardWidget()
         PayScope_WidgetsLiveActivity()
         PayScope_WidgetsRectangularLockScreen()
         PayScope_WidgetsInlineLockScreen()

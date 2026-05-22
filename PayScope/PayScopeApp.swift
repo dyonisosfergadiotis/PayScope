@@ -9,6 +9,7 @@ import os
 @main
 struct PayScopeApp: App {
     @StateObject private var cloudKitService = CloudKitService.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     private static let startupLogger = Logger(
         subsystem: "com.dyonisos.paysco",
@@ -87,7 +88,64 @@ struct PayScopeApp: App {
                 .environment(\.locale, Locale(identifier: "de_DE"))
                 .environmentObject(cloudKitService)
                 .modelContainer(Self.localModelContainer)
+                .task {
+                    await handlePendingControlCenterAction()
+                }
+                .onChange(of: scenePhase) { _, newPhase in
+                    guard newPhase == .active else { return }
+                    Task {
+                        await handlePendingControlCenterAction()
+                    }
+                }
         }
+    }
+
+    @MainActor
+    private func handlePendingControlCenterAction() async {
+        guard let action = PayScopeControlCenterActionStore.takePendingAction() else { return }
+
+        switch action.kind {
+        case .startShift:
+            _ = await PayScopeIntentActionService.startShift()
+        case .endShift:
+            _ = await PayScopeIntentActionService.endShift()
+        case .addTip:
+            guard let amountEuro = action.amountEuro else { return }
+            _ = await PayScopeIntentActionService.addTip(amountEuro: amountEuro)
+        case .markTodaySick:
+            await PayScopeIntentActionService.markTodaySick()
+        }
+    }
+}
+
+enum PayScopeControlCenterActionKind: String, Codable {
+    case startShift
+    case endShift
+    case addTip
+    case markTodaySick
+}
+
+struct PayScopeControlCenterAction: Codable {
+    var id: String
+    var kind: PayScopeControlCenterActionKind
+    var amountEuro: Double?
+}
+
+enum PayScopeControlCenterActionStore {
+    private static let appGroupIdentifier = "group.DyonisosFergadiotis.PayScope"
+    private static let pendingActionKey = "payscope.controlCenter.pendingAction.v1"
+
+    static func takePendingAction() -> PayScopeControlCenterAction? {
+        guard
+            let defaults = UserDefaults(suiteName: appGroupIdentifier),
+            let data = defaults.data(forKey: pendingActionKey),
+            let action = try? JSONDecoder().decode(PayScopeControlCenterAction.self, from: data)
+        else {
+            return nil
+        }
+
+        defaults.removeObject(forKey: pendingActionKey)
+        return action
     }
 }
 
@@ -124,6 +182,9 @@ enum PayScopeLiveActivityManager {
         let shiftStart: Date?
         let shiftEnd: Date?
         let shiftDurationSeconds: Int
+        let workedReferenceStart: Date?
+        let workedTodaySeconds: Int?
+        let completedPayCents: Int?
         let nextShiftStart: Date?
         let isAllDayStatus: Bool?
         let allDayYear: Int?
@@ -173,6 +234,9 @@ enum PayScopeLiveActivityManager {
                 shiftStart: payload.timelineStart,
                 shiftEnd: payload.timelineEnd,
                 shiftDurationSeconds: max(0, Int(payload.timelineEnd.timeIntervalSince(payload.timelineStart))),
+                workedReferenceStart: payload.workedReferenceStart,
+                workedTodaySeconds: payload.workedTodaySeconds,
+                completedPayCents: payload.completedPayCents,
                 nextShiftStart: settings.effectiveWidgetShowsNextShift ? payload.nextShiftStart : nil,
                 isAllDayStatus: nil,
                 allDayYear: nil,
@@ -194,6 +258,9 @@ enum PayScopeLiveActivityManager {
                 shiftStart: nil,
                 shiftEnd: nil,
                 shiftDurationSeconds: 0,
+                workedReferenceStart: nil,
+                workedTodaySeconds: nil,
+                completedPayCents: nil,
                 nextShiftStart: settings.effectiveWidgetShowsNextShift ? nextUpcomingShiftStart(after: now, entries: entries) : nil,
                 isAllDayStatus: true,
                 allDayYear: dayComponents.year,
@@ -212,6 +279,9 @@ enum PayScopeLiveActivityManager {
                 shiftStart: payload.timelineStart,
                 shiftEnd: payload.timelineEnd,
                 shiftDurationSeconds: max(0, Int(payload.timelineEnd.timeIntervalSince(payload.timelineStart))),
+                workedReferenceStart: payload.workedReferenceStart,
+                workedTodaySeconds: payload.workedTodaySeconds,
+                completedPayCents: payload.completedPayCents,
                 nextShiftStart: payload.nextShiftStart,
                 isAllDayStatus: nil,
                 allDayYear: nil,
@@ -241,6 +311,9 @@ enum PayScopeLiveActivityManager {
             shiftStart: nil,
             shiftEnd: nil,
             shiftDurationSeconds: 0,
+            workedReferenceStart: nil,
+            workedTodaySeconds: nil,
+            completedPayCents: nil,
             nextShiftStart: nextShiftStart,
             isAllDayStatus: nil,
             allDayYear: nil,
@@ -342,19 +415,27 @@ enum PayScopeLiveActivityManager {
             return nil
         }
         let effectiveNow = min(max(now, timelineStart), timelineEnd)
-        let focusShiftWorkedSeconds = workedSeconds(until: effectiveNow, for: focusShift.entry)
+        let focusShiftWorkedSeconds = workedSeconds(
+            until: effectiveNow,
+            for: focusShift.entry,
+            calculateBreaks: settings.effectiveCalculateBreaks
+        )
         let workedReferenceStart = max(
             timelineStart,
             effectiveNow.addingTimeInterval(TimeInterval(-focusShiftWorkedSeconds))
         )
         let workedReferenceShift = todayShift ?? activeShift ?? focusShift
         let todayEffectiveNow = min(max(now, workedReferenceShift.start), workedReferenceShift.end)
-        let workedTodaySeconds = workedSeconds(until: todayEffectiveNow, for: workedReferenceShift.entry)
+        let workedTodaySeconds = workedSeconds(
+            until: todayEffectiveNow,
+            for: workedReferenceShift.entry,
+            calculateBreaks: settings.effectiveCalculateBreaks
+        )
         let completedPayCents = service.payCents(for: workedTodaySeconds, settings: settings)
         let isCompleted = now >= timelineEnd
         let shiftCategoryIcon = shiftIcon(for: focusShift.entry?.type)
         let shiftCategoryTitle = shiftTitle(for: focusShift.entry?.type)
-        let nextShift = nextShift(after: focusShift.dayStart, entries: entries)
+        let nextShift = nextShift(after: focusShift.dayStart, entries: entries, settings: settings)
         let title = focusShift.dayStart.isSameLocalDay(as: dayStart) ? "\(shiftCategoryTitle) heute" : "\(shiftCategoryTitle) läuft"
         let staleDate = nextShift?.start ?? timelineEnd.addingTimeInterval(60)
 
@@ -438,14 +519,23 @@ enum PayScopeLiveActivityManager {
         return nil
     }
 
-    private static func nextShift(after dayStart: Date, entries: [DayEntry]) -> (start: Date, durationSeconds: Int)? {
+    private static func nextShift(
+        after dayStart: Date,
+        entries: [DayEntry],
+        settings: Settings
+    ) -> (start: Date, durationSeconds: Int)? {
         guard let candidate = nextShiftCandidate(after: dayStart, entries: entries) else {
             return nil
         }
 
         return (
             candidate.start,
-            shiftDurationSeconds(for: candidate.entry, start: candidate.start, end: candidate.end)
+            shiftDurationSeconds(
+                for: candidate.entry,
+                start: candidate.start,
+                end: candidate.end,
+                calculateBreaks: settings.effectiveCalculateBreaks
+            )
         )
     }
 
@@ -470,13 +560,19 @@ enum PayScopeLiveActivityManager {
         return nil
     }
 
-    private static func shiftDurationSeconds(for day: DayEntry?, start: Date, end: Date) -> Int {
+    private static func shiftDurationSeconds(
+        for day: DayEntry?,
+        start: Date,
+        end: Date,
+        calculateBreaks: Bool
+    ) -> Int {
         let rawSeconds = max(0, Int(end.timeIntervalSince(start)))
+        guard calculateBreaks else { return rawSeconds }
         let breakSeconds = max(0, day?.breakSeconds ?? 0)
         return max(0, rawSeconds - breakSeconds)
     }
 
-    private static func workedSeconds(until now: Date, for day: DayEntry?) -> Int {
+    private static func workedSeconds(until now: Date, for day: DayEntry?, calculateBreaks: Bool) -> Int {
         guard let day else { return 0 }
 
         // Manual override
@@ -489,6 +585,7 @@ enum PayScopeLiveActivityManager {
         // Only count within the shift window
         let effectiveNow = min(max(now, start), end)
         let rawSeconds = max(0, Int(effectiveNow.timeIntervalSince(start)))
+        guard calculateBreaks else { return rawSeconds }
         let breakSeconds = max(0, day.breakSeconds ?? 0)
 
         // Simple model: break is subtracted from worked time.

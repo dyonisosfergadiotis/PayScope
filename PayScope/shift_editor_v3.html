@@ -1,0 +1,322 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+:root{--display-radius:38px;--modal-edge-padding:10px;--sheet-radius:clamp(24px,calc(var(--display-radius) - var(--modal-edge-padding)),34px);--card-radius:clamp(15px,calc(var(--sheet-radius) - var(--modal-edge-padding)),25px);--popover-radius:20px;}
+body{font-family:-apple-system,'SF Pro Text',BlinkMacSystemFont,sans-serif;background:#111;display:flex;justify-content:center;align-items:flex-end;min-height:640px;}
+.wrap{width:390px;height:640px;position:relative;overflow:hidden;background:linear-gradient(160deg,#0d1b2e 0%,#0a0f1e 60%,#1a0e2a 100%);}
+.cal-bg{position:absolute;inset:0;display:grid;grid-template-columns:repeat(7,1fr);gap:2px;padding:12px;opacity:0.07;pointer-events:none;}
+.cal-bg div{background:rgba(255,255,255,0.5);border-radius:3px;}
+.sheet{position:absolute;bottom:0;left:0;right:0;border-radius:var(--sheet-radius) var(--sheet-radius) 0 0;background:transparent;display:flex;flex-direction:column;height:100%;}
+.handle{width:36px;height:4px;border-radius:2px;background:rgba(255,255,255,0.22);margin:8px auto 0;flex-shrink:0;}
+.nav-bar{display:flex;align-items:center;padding:8px 6px 6px;flex-shrink:0;}
+.nav-btn{width:38px;height:38px;border-radius:50%;border:none;background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.7);font-size:17px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all 0.15s;flex-shrink:0;}
+.nav-btn:active{transform:scale(0.92);background:rgba(255,255,255,0.16);}
+.nav-btn.blue{background:rgba(0,122,255,0.18);color:#4A9EFF;}
+.nav-btn.red{background:rgba(255,59,48,0.15);color:#FF453A;}
+.nav-title{flex:1;text-align:center;font-size:15px;font-weight:600;color:#fff;letter-spacing:-0.2px;}
+
+.preview-card{margin:4px var(--modal-edge-padding) 0;border-radius:var(--card-radius);background:rgba(255,255,255,0.065);border:0.5px solid rgba(255,255,255,0.11);padding:13px 16px 12px;display:flex;align-items:center;gap:14px;flex-shrink:0;}
+.day-col{display:flex;flex-direction:column;align-items:center;min-width:48px;}
+.day-num{font-size:44px;font-weight:700;line-height:1;letter-spacing:-2px;color:#fff;}
+.day-name{font-size:11px;color:rgba(255,255,255,0.35);font-weight:500;text-transform:uppercase;letter-spacing:0.5px;margin-top:1px;}
+.preview-right{flex:1;min-width:0;}
+.p-type-row{display:flex;align-items:center;gap:7px;margin-bottom:7px;}
+.p-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+.p-type-name{font-size:15px;font-weight:600;color:#fff;}
+.p-midnight{font-size:10px;background:rgba(175,82,222,0.22);color:#BF5AF2;border-radius:5px;padding:2px 6px;border:0.5px solid rgba(175,82,222,0.3);}
+.p-metrics{display:flex;gap:16px;align-items:baseline;}
+.p-metric-val{font-size:13px;font-weight:600;color:rgba(255,255,255,0.75);font-variant-numeric:tabular-nums;}
+.p-metric-unit{font-size:11px;font-weight:400;color:rgba(255,255,255,0.35);margin-left:1px;}
+.p-metric-sep{font-size:11px;color:rgba(255,255,255,0.2);}
+
+.scroll{flex:1;overflow-y:auto;padding:10px var(--modal-edge-padding) 6px;display:flex;flex-direction:column;gap:9px;}
+.scroll::-webkit-scrollbar{display:none;}
+.sec-hdr{font-size:11px;font-weight:600;color:rgba(255,255,255,0.28);text-transform:uppercase;letter-spacing:0.7px;padding:0 4px 5px;}
+.panel{background:rgba(255,255,255,0.065);border:0.5px solid rgba(255,255,255,0.1);border-radius:var(--card-radius);overflow:hidden;}
+.prow{display:flex;align-items:center;padding:11px 14px;gap:10px;}
+.prow+.prow{border-top:0.5px solid rgba(255,255,255,0.07);}
+.rlbl{font-size:14px;color:rgba(255,255,255,0.45);flex-shrink:0;}
+.rval{flex:1;text-align:right;font-size:14px;font-weight:500;color:#fff;}
+
+.type-sel{display:flex;gap:6px;padding:10px 12px;}
+.type-btn{flex:1;padding:8px 4px;border-radius:11px;border:0.5px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;transition:all 0.15s;}
+.type-btn.on{border-color:var(--c,#007AFF);background:rgba(var(--cr,0,122,255),0.16);}
+.type-btn .ticon{font-size:17px;}
+.type-btn .tlbl{font-size:10px;font-weight:600;color:rgba(255,255,255,0.5);}
+.type-btn.on .tlbl{color:var(--c,#007AFF);}
+
+.time-wrap{padding:10px 12px 8px;}
+.time-row{display:flex;align-items:center;gap:0;}
+.time-pill{flex:1;background:rgba(255,255,255,0.08);border:0.5px solid rgba(255,255,255,0.11);border-radius:12px;padding:10px 0 8px;text-align:center;cursor:pointer;transition:background 0.15s;}
+.time-pill:active{background:rgba(255,255,255,0.14);}
+.tlbl2{font-size:11px;color:rgba(255,255,255,0.35);margin-bottom:2px;}
+.time-val{font-size:24px;font-weight:600;color:#fff;font-variant-numeric:tabular-nums;letter-spacing:-1px;}
+.dur-mid{display:flex;flex-direction:column;align-items:center;justify-content:center;width:58px;flex-shrink:0;gap:2px;}
+.dur-mid-val{font-size:12px;font-weight:600;color:#4A9EFF;font-variant-numeric:tabular-nums;letter-spacing:-0.2px;}
+.dur-mid-unit{font-size:10px;color:rgba(74,158,255,0.55);margin-top:-2px;}
+.dur-arrow{font-size:13px;color:rgba(255,255,255,0.22);}
+.valid-err{font-size:12px;color:#FF453A;padding:4px 14px 6px;display:none;}
+
+.break-prow{display:flex;align-items:center;padding:11px 14px;gap:10px;}
+.break-val-lbl{flex:1;font-size:15px;font-weight:500;color:#fff;}
+.break-edit-btn{width:32px;height:32px;border-radius:9px;background:rgba(255,255,255,0.08);border:0.5px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.6);font-size:14px;display:flex;align-items:center;justify-content:center;cursor:pointer;position:relative;}
+.popover{position:absolute;right:0;top:40px;background:transparent;border:none;border-radius:var(--popover-radius);padding:0;display:none;z-index:100;width:220px;}
+.popover.open{display:block;}
+.pop-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;padding:10px;background:rgba(32,32,38,0.98);border:0.5px solid rgba(255,255,255,0.15);border-radius:var(--popover-radius);}
+.pbtn{padding:7px 4px;border-radius:9px;border:0.5px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.07);font-size:12px;font-weight:600;color:rgba(255,255,255,0.75);cursor:pointer;text-align:center;font-family:inherit;transition:all 0.13s;}
+.pbtn:active{background:rgba(255,255,255,0.18);transform:scale(0.94);}
+.pbtn.auto{color:#4A9EFF;border-color:rgba(0,122,255,0.3);background:rgba(0,122,255,0.12);}
+
+.shortcuts{display:flex;gap:7px;padding:8px 12px;}
+.sc-btn{flex:1;padding:10px 6px;background:rgba(255,255,255,0.055);border:0.5px solid rgba(255,255,255,0.1);border-radius:12px;text-align:center;cursor:pointer;transition:all 0.15s;}
+.sc-btn:active{transform:scale(0.95);background:rgba(255,255,255,0.12);}
+.sc-time{font-size:13px;font-weight:600;color:#fff;}
+.sc-lbl{font-size:10px;color:rgba(255,255,255,0.3);margin-top:2px;}
+
+.manual-row{display:flex;gap:10px;padding:10px 14px;}
+.dur-field{flex:1;background:rgba(255,255,255,0.08);border:0.5px solid rgba(255,255,255,0.12);border-radius:11px;padding:9px 0;text-align:center;}
+.df-lbl{font-size:11px;color:rgba(255,255,255,0.35);margin-bottom:3px;}
+.dur-field input{background:transparent;border:none;outline:none;font-size:22px;font-weight:600;color:#fff;width:100%;text-align:center;font-family:inherit;font-variant-numeric:tabular-nums;}
+
+.credited-panel .prow:last-child{flex-direction:column;align-items:stretch;gap:7px;padding-bottom:12px;}
+.override-wrap{display:flex;gap:8px;align-items:center;}
+.override-input{flex:1;background:rgba(255,255,255,0.08);border:0.5px solid rgba(255,255,255,0.12);border-radius:9px;padding:8px 11px;font-size:14px;color:#fff;font-family:inherit;outline:none;}
+.override-input::placeholder{color:rgba(255,255,255,0.25);}
+.ov-clear{font-size:13px;color:#FF453A;background:none;border:none;font-family:inherit;cursor:pointer;white-space:nowrap;padding:4px 0;}
+
+.hidden{display:none!important;}
+</style>
+
+<div class="wrap">
+  <div class="cal-bg" id="calBg"></div>
+  <div class="sheet">
+    <div class="handle"></div>
+    <div class="nav-bar">
+      <button class="nav-btn" onclick="closeSheet()" aria-label="Schließen"><i class="ti ti-x" style="font-size:17px;"></i></button>
+      <div class="nav-title" id="navTitle">Do, 21. Mai</div>
+      <button class="nav-btn blue" onclick="saveEntry()" aria-label="Speichern"><i class="ti ti-check" style="font-size:18px;"></i></button>
+      <button class="nav-btn red" style="margin-left:6px;" onclick="deleteEntry()" aria-label="Löschen"><i class="ti ti-trash" style="font-size:16px;"></i></button>
+    </div>
+
+    <div class="preview-card">
+      <div class="day-col">
+        <div class="day-num" id="pDay">21</div>
+        <div class="day-name" id="pDayName">Do</div>
+      </div>
+      <div class="preview-right">
+        <div class="p-type-row">
+          <div class="p-dot" id="pDot" style="background:#007AFF;"></div>
+          <div class="p-type-name" id="pTypeName">Schicht</div>
+          <div class="p-midnight hidden" id="pMidnight">+1</div>
+        </div>
+        <div class="p-metrics">
+          <div style="display:flex;align-items:baseline;gap:2px;">
+            <span class="p-metric-val" id="pNet">7:30</span>
+            <span class="p-metric-unit">h netto</span>
+          </div>
+          <span class="p-metric-sep" id="pWageSep">·</span>
+          <div style="display:flex;align-items:baseline;gap:2px;" id="pWageWrap">
+            <span class="p-metric-val" id="pWage">109,25</span>
+            <span class="p-metric-unit">€</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="scroll">
+      <div>
+        <div class="sec-hdr">Schichttyp</div>
+        <div class="type-sel" id="typeSel">
+          <div class="type-btn on" data-t="work" style="--c:#007AFF;--cr:0,122,255" onclick="setType('work',this)"><span class="ticon">🏢</span><span class="tlbl">Schicht</span></div>
+          <div class="type-btn" data-t="manual" style="--c:#FF9500;--cr:255,149,0" onclick="setType('manual',this)"><span class="ticon">⏱️</span><span class="tlbl">Manuell</span></div>
+          <div class="type-btn" data-t="vacation" style="--c:#34C759;--cr:52,199,89" onclick="setType('vacation',this)"><span class="ticon">🌴</span><span class="tlbl">Urlaub</span></div>
+          <div class="type-btn" data-t="holiday" style="--c:#FF9500;--cr:255,149,0" onclick="setType('holiday',this)"><span class="ticon">🎉</span><span class="tlbl">Feiertag</span></div>
+          <div class="type-btn" data-t="sick" style="--c:#FF3B30;--cr:255,59,48" onclick="setType('sick',this)"><span class="ticon">🤒</span><span class="tlbl">Krank</span></div>
+        </div>
+      </div>
+
+      <div id="workSection">
+        <div class="sec-hdr">Arbeitszeit</div>
+        <div class="panel">
+          <div class="time-wrap">
+            <div class="time-row">
+              <div class="time-pill" onclick="openTimePicker('sInput')">
+                <div class="tlbl2">Start</div>
+                <div class="time-val" id="sDisp">08:00</div>
+                <input type="time" id="sInput" value="08:00" oninput="onTC()" style="position:absolute;opacity:0;pointer-events:none;width:1px;height:1px;">
+              </div>
+              <div class="dur-mid">
+                <div class="dur-mid-val" id="durMid">8:00</div>
+                <div class="dur-mid-unit">h brutto</div>
+                <div class="dur-arrow"><i class="ti ti-arrow-right" style="font-size:13px;"></i></div>
+              </div>
+              <div class="time-pill" onclick="openTimePicker('eInput')">
+                <div class="tlbl2">Ende</div>
+                <div class="time-val" id="eDisp">16:00</div>
+                <input type="time" id="eInput" value="16:00" oninput="onTC()" style="position:absolute;opacity:0;pointer-events:none;width:1px;height:1px;">
+              </div>
+            </div>
+            <div class="valid-err" id="validErr"><i class="ti ti-alert-circle" style="font-size:13px;vertical-align:-1px;margin-right:4px;"></i>Start und Ende dürfen nicht gleich sein.</div>
+          </div>
+          <div style="border-top:0.5px solid rgba(255,255,255,0.07);">
+            <div class="break-prow">
+              <div class="rlbl">Pause</div>
+              <div class="break-val-lbl" id="breakLbl">30 Min.</div>
+              <div class="break-edit-btn" id="breakEditBtn" onclick="togglePopover(event)">
+                <i class="ti ti-pencil" style="font-size:13px;"></i>
+                <div class="popover" id="breakPopover" onclick="event.stopPropagation()">
+                  <div class="pop-grid">
+                    <button class="pbtn" onclick="adjBreak(-10)">-10</button>
+                    <button class="pbtn" onclick="adjBreak(-5)">-5</button>
+                    <button class="pbtn" onclick="adjBreak(-1)">-1</button>
+                    <button class="pbtn auto" onclick="autoBreak()">Auto</button>
+                    <button class="pbtn" onclick="adjBreak(1)">+1</button>
+                    <button class="pbtn" onclick="adjBreak(5)">+5</button>
+                    <button class="pbtn" onclick="adjBreak(10)">+10</button>
+                    <button class="pbtn" onclick="closePopover()" style="color:rgba(255,255,255,0.3);font-size:10px;">Fertig</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:9px;">
+          <div class="sec-hdr">Vorlagen</div>
+          <div class="panel">
+            <div class="shortcuts">
+              <div class="sc-btn" onclick="applyShortcut(0)"><div class="sc-time">06–14</div><div class="sc-lbl">Früh</div></div>
+              <div class="sc-btn" onclick="applyShortcut(1)"><div class="sc-time">08–16</div><div class="sc-lbl">Tag</div></div>
+              <div class="sc-btn" onclick="applyShortcut(2)"><div class="sc-time">14–22</div><div class="sc-lbl">Spät</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="manualSection" class="hidden">
+        <div class="sec-hdr">Dauer eingeben</div>
+        <div class="panel">
+          <div class="manual-row">
+            <div class="dur-field"><div class="df-lbl">Stunden</div><input type="number" min="0" max="23" value="8" id="mH" oninput="onManual()"></div>
+            <div class="dur-field"><div class="df-lbl">Minuten</div><input type="number" min="0" max="59" value="0" id="mM" oninput="onManual()"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="creditedSection" class="hidden">
+        <div class="sec-hdr">Gutschrift</div>
+        <div class="panel credited-panel">
+          <div class="prow">
+            <div class="rlbl">Standard</div>
+            <div class="rval">8:00 h</div>
+          </div>
+          <div class="prow" style="flex-direction:column;align-items:stretch;gap:8px;padding-bottom:13px;">
+            <div class="rlbl" style="font-size:12px;color:rgba(255,255,255,0.3);">Abweichung (HH:MM)</div>
+            <div class="override-wrap">
+              <input class="override-input" type="text" placeholder="06:30" id="ovInput" oninput="onOverride()" maxlength="5">
+              <button class="ov-clear" onclick="clearOv()">Entfernen</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="height:10px;"></div>
+    </div>
+  </div>
+  <div id="toast" style="position:absolute;top:20px;left:50%;transform:translateX(-50%) translateY(-8px);background:rgba(40,40,46,0.97);color:#fff;padding:8px 18px;border-radius:20px;font-size:13px;font-weight:500;opacity:0;transition:opacity 0.2s,transform 0.2s;pointer-events:none;white-space:nowrap;border:0.5px solid rgba(255,255,255,0.14);"></div>
+</div>
+
+<script>
+(function(){
+  const sc=[{s:'06:00',e:'14:00',b:30},{s:'08:00',e:'16:00',b:30},{s:'14:00',e:'22:00',b:30}];
+  const tcfg={work:{n:'Schicht',c:'#007AFF'},manual:{n:'Manuell',c:'#FF9500'},vacation:{n:'Urlaub',c:'#34C759'},holiday:{n:'Feiertag',c:'#FF9500'},sick:{n:'Krank',c:'#FF3B30'}};
+  let ctype='work', brk=30, popOpen=false;
+
+  const calBg=document.getElementById('calBg');
+  for(let i=0;i<49;i++){const d=document.createElement('div');calBg.appendChild(d);}
+
+  function pt(s){const[h,m]=(s||'00:00').split(':').map(Number);return h*60+m;}
+  function fh(m){if(m<=0)return'0:00';const h=Math.floor(m/60),mn=m%60;return h+':'+(mn<10?'0':'')+mn;}
+  function gross(){const s=pt(document.getElementById('sInput').value),e=pt(document.getElementById('eInput').value);let d=e-s;if(d<0)d+=1440;return d;}
+
+  window.onTC=function(){
+    const sv=document.getElementById('sInput').value||'08:00';
+    const ev=document.getElementById('eInput').value||'16:00';
+    document.getElementById('sDisp').textContent=sv;
+    document.getElementById('eDisp').textContent=ev;
+    const g=gross();
+    document.getElementById('durMid').textContent=fh(g);
+    const err=document.getElementById('validErr');
+    err.style.display=(g===0)?'block':'none';
+    if(brk>Math.max(0,g-1))brk=Math.max(0,g-1);
+    renderBreak();renderPreview();
+  };
+
+  function renderBreak(){document.getElementById('breakLbl').textContent=brk===0?'Keine':brk+' Min.';}
+
+  window.adjBreak=function(d){const g=gross();brk=Math.max(0,Math.min(brk+d,g>0?g-1:0));renderBreak();renderPreview();};
+  window.autoBreak=function(){const g=gross();brk=g>=360?30:g>=240?15:0;renderBreak();renderPreview();};
+  window.togglePopover=function(e){e.stopPropagation();popOpen=!popOpen;document.getElementById('breakPopover').classList.toggle('open',popOpen);};
+  window.closePopover=function(){popOpen=false;document.getElementById('breakPopover').classList.remove('open');};
+  document.addEventListener('click',function(){if(popOpen){popOpen=false;document.getElementById('breakPopover').classList.remove('open');}});
+
+  window.setType=function(t,el){
+    ctype=t;
+    document.querySelectorAll('.type-btn').forEach(b=>b.classList.remove('on'));
+    el.classList.add('on');
+    document.getElementById('workSection').classList.toggle('hidden',t!=='work');
+    document.getElementById('manualSection').classList.toggle('hidden',t!=='manual');
+    document.getElementById('creditedSection').classList.toggle('hidden',!['vacation','holiday','sick'].includes(t));
+    renderPreview();
+  };
+
+  window.onManual=function(){renderPreview();};
+  window.onOverride=function(){renderPreview();};
+  window.clearOv=function(){document.getElementById('ovInput').value='';renderPreview();};
+
+  function netMins(){
+    if(ctype==='work')return Math.max(0,gross()-brk);
+    if(ctype==='manual'){const h=parseInt(document.getElementById('mH').value)||0,m=parseInt(document.getElementById('mM').value)||0;return h*60+m;}
+    const ov=document.getElementById('ovInput').value;
+    return ov&&ov.includes(':')?pt(ov)||480:480;
+  }
+
+  function renderPreview(){
+    const cfg=tcfg[ctype];
+    document.getElementById('pDot').style.background=cfg.c;
+    document.getElementById('pTypeName').textContent=cfg.n;
+    const net=netMins();
+    document.getElementById('pNet').textContent=fh(net);
+    const wage=(net/60*14.5);
+    const showWage=net>0;
+    document.getElementById('pWageWrap').style.display=showWage?'flex':'none';
+    document.getElementById('pWageSep').style.display=showWage?'inline':'none';
+    document.getElementById('pWage').textContent=wage>0?wage.toFixed(2).replace('.',','):'—';
+    const sv=document.getElementById('sInput').value,ev=document.getElementById('eInput').value;
+    document.getElementById('pMidnight').classList.toggle('hidden',!(ctype==='work'&&pt(ev)<pt(sv)&&pt(ev)>0));
+  }
+
+  window.applyShortcut=function(i){
+    const s=sc[i];
+    document.getElementById('sInput').value=s.s;
+    document.getElementById('eInput').value=s.e;
+    brk=s.b;
+    if(ctype!=='work')setType('work',document.querySelector('[data-t="work"]'));
+    onTC();toast('Vorlage angewendet');
+  };
+
+  window.openTimePicker=function(id){
+    const el=document.getElementById(id);
+    el.style.cssText='position:static;opacity:1;pointer-events:auto;width:2px;height:2px;overflow:hidden;background:transparent;border:none;color:transparent;font-size:1px;';
+    el.focus();el.click();
+    el.addEventListener('blur',function(){el.style.cssText='position:absolute;opacity:0;pointer-events:none;width:1px;height:1px;';},{once:true});
+  };
+
+  window.saveEntry=function(){toast('Gespeichert ✓');};
+  window.deleteEntry=function(){toast('Gelöscht');};
+  window.closeSheet=function(){toast('Abgebrochen');};
+
+  function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.opacity='1';t.style.transform='translateX(-50%) translateY(0)';setTimeout(()=>{t.style.opacity='0';t.style.transform='translateX(-50%) translateY(-8px)';},2000);}
+
+  onTC();
+})();
+</script>

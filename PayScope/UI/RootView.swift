@@ -2,9 +2,9 @@ import SwiftUI
 import Combine
 import Network
 import SwiftData
-import UIKit
 import WatchConnectivity
 import WidgetKit
+import Notelet
 
 struct RootView: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
@@ -28,6 +28,7 @@ struct RootView: View {
     @StateObject private var watchSnapshotBridge = WatchSnapshotBridge()
 
     @State private var isLoadingData = false
+    @State private var isShowingLaunchSplash = true
 
     var body: some View {
         Group {
@@ -88,7 +89,21 @@ struct RootView: View {
                         }
                         await refreshSettingsFromCloud(pushLocalIfMissing: true)
                         isResolvingOnboardingGate = false
-                    }
+                }
+            }
+        }
+        .overlay {
+            if isShowingLaunchSplash {
+                PayScopeLaunchSplashView(accent: settingsList.first?.themeAccent.color ?? .blue)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.24), value: isShowingLaunchSplash)
+        .task {
+            guard isShowingLaunchSplash else { return }
+            try? await Task.sleep(nanoseconds: 1_350_000_000)
+            await MainActor.run {
+                isShowingLaunchSplash = false
             }
         }
         .onReceive(
@@ -173,7 +188,8 @@ struct RootView: View {
 
     private func liveActivitySyncInterval(reference: Date = .now) -> DateInterval {
         let dayStart = reference.startOfDayLocal()
-        return DateInterval(start: dayStart.addingDays(-2), end: dayStart.addingDays(35))
+        let weekStart = calculationService.weekStartDate(for: dayStart)
+        return DateInterval(start: weekStart, end: dayStart.addingDays(35))
     }
 
     private func watchSnapshotSyncInterval(reference: Date = .now) -> DateInterval {
@@ -264,7 +280,16 @@ struct RootView: View {
         }
 
         do {
-            let cloudEntries = try await cloudKitService.fetchDayEntries(in: interval)
+            let tombstonesByDay = Dictionary(
+                localStore.loadDeletionTombstones().map { (dayKey($0.date), $0.lastModified) },
+                uniquingKeysWith: { current, incoming in
+                    incoming > current ? incoming : current
+                }
+            )
+            let cloudEntries = try await cloudKitService.fetchDayEntries(in: interval).filter { cloudEntry in
+                guard let deletedAt = tombstonesByDay[dayKey(cloudEntry.date)] else { return true }
+                return deletedAt < cloudEntry.updatedAt
+            }
             let merged = Dictionary(
                 (localEntries + cloudEntries).map { ($0.date.startOfDayLocal(), $0) },
                 uniquingKeysWith: { existing, candidate in
@@ -280,6 +305,14 @@ struct RootView: View {
             #endif
             scheduleWatchSnapshotSync()
         }
+    }
+
+    private func dayKey(_ date: Date) -> String {
+        let day = date.startOfDayLocal()
+        let year = Calendar.current.component(.year, from: day)
+        let month = Calendar.current.component(.month, from: day)
+        let dayOfMonth = Calendar.current.component(.day, from: day)
+        return String(format: "%04d-%02d-%02d", year, month, dayOfMonth)
     }
 
     @MainActor
@@ -364,6 +397,7 @@ private final class ConnectivityMonitor: ObservableObject {
 
 private enum MainAppTab: Hashable {
     case calendar
+    case hoursAccount
     case stats
     case settings
     case today
@@ -379,28 +413,9 @@ private struct MainTabNavigationView: View {
     @State private var selection: MainAppTab = .calendar
     @State private var displayedMonth = Date().startOfMonthLocal()
     @State private var showTodaySheet = false
-
-    private static let monthFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "de_DE")
-        formatter.dateFormat = "MMMM"
-        return formatter
-    }()
-
-    private static let yearFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "de_DE")
-        formatter.dateFormat = "yyyy"
-        return formatter
-    }()
-
-    private static let monthYearFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "de_DE")
-        formatter.dateFormat = "MMMM yyyy"
-        return formatter
-    }()
-
+    @State private var tabSelectionFeedbackTrigger = 0
+    @State private var todayActionFeedbackTrigger = 0
+    @AppStorage(FeatureSplashNotes.storageKey) private var hasSeenFeatureSplash = false
 
     private var todayEntry: DayEntry? {
         let today = Date().startOfDayLocal()
@@ -423,14 +438,6 @@ private struct MainTabNavigationView: View {
         horizontalSizeClass == .compact ? .hidden : .visible
     }
 
-    private var showsMonthAccessory: Bool {
-        selection == .calendar || selection == .stats
-    }
-
-    private var monthAccessoryBottomPadding: CGFloat {
-        horizontalSizeClass == .compact ? 94 : 58
-    }
-
     var body: some View {
         ZStack {
             Color.clear
@@ -439,100 +446,72 @@ private struct MainTabNavigationView: View {
             TabView(selection: $selection) {
                 Tab("Kalender", systemImage: "calendar", value: MainAppTab.calendar) {
                     CalendarTabView(displayedMonth: $displayedMonth, settings: settings, isOffline: isOffline)
-                        .safeAreaPadding(.bottom, showsMonthAccessory ? 68 : 0)
+                }
+
+                if !settings.effectiveAushilfeModeEnabled {
+                    Tab("Stundenkonto", systemImage: "plusminus.circle", value: MainAppTab.hoursAccount) {
+                        HoursAccountTabView(settings: settings, referenceMonth: $displayedMonth)
+                    }
                 }
 
                 Tab("Statistik", systemImage: "chart.bar.xaxis", value: MainAppTab.stats) {
                     StatsTabView(settings: settings, referenceMonth: $displayedMonth)
-                        .safeAreaPadding(.bottom, showsMonthAccessory ? 68 : 0)
                 }
 
                 Tab("Einstellungen", systemImage: "gearshape", value: MainAppTab.settings) {
                     SettingsTabView(settings: settings)
                 }
                 
-                Tab("Heute", systemImage: todayFabIcon, value: MainAppTab.today, role: .search) {
-                    TodayFocusView(settings: settings, entriesOverride: entries)
+                Tab(value: MainAppTab.today, role: .search) {
+                    Color.clear
+                } label: {
+                    Label("Heute", systemImage: todayFabIcon)
                 }
             }
             .tint(settings.themeAccent.color)
             .toolbarBackground(settings.themeAccent.color.opacity(0.22), for: .tabBar)
             .toolbarBackground(.visible, for: .tabBar)
-            .tabViewBottomAccessory(isEnabled: selection == .calendar || selection == .stats){
-               
-                            monthSelectionAccessory()
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
             .tabBarMinimizeBehavior(.onScrollDown)
-            .onChange(of: selection) { _, newSelection in
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            .onChange(of: selection) { oldSelection, newSelection in
+                if newSelection == .today {
+                    todayActionFeedbackTrigger += 1
+                    selection = oldSelection
+                    showTodaySheet = true
+                } else {
+                    tabSelectionFeedbackTrigger += 1
+                }
+            }
+            .onChange(of: settings.effectiveAushilfeModeEnabled) { _, isEnabled in
+                if isEnabled, selection == .hoursAccount {
+                    selection = .calendar
+                }
+            }
+            .sensoryFeedback(.selection, trigger: tabSelectionFeedbackTrigger)
+            .sensoryFeedback(.selection, trigger: todayActionFeedbackTrigger)
+            .sheet(isPresented: $showTodaySheet) {
+                TodayFocusView(
+                    settings: settings,
+                    entriesOverride: entries
+                )
+                .presentationDetents([.fraction(0.58)])
+                .payScopeSheetSurface(accent: settings.themeAccent.color)
             }
         }
         .tint(settings.themeAccent.color)
+        .noteletSheet(
+            notes: FeatureSplashNotes.notes,
+            version: hasSeenFeatureSplash ? nil : .v(FeatureSplashNotes.version),
+            onDismiss: {
+                hasSeenFeatureSplash = true
+            },
+            configuration: NoteletConfiguration(
+                nextButtonLabel: "Weiter",
+                doneButtonLabel: "Loslegen",
+                accentColor: settings.themeAccent.color
+            )
+        )
     }
 
-    private func monthSelectionAccessory() -> some View {
-        HStack(spacing: 10) {
-            monthControlButton(systemImage: "chevron.left") {
-                shiftDisplayedMonth(by: -1)
-            }
-            Spacer()
-
-            Button {
-                displayedMonth = Date().startOfMonthLocal()
-            } label: {
-                VStack(spacing: 1) {
-                    Text(Self.monthFormatter.string(from: displayedMonth))
-                        .font(.system(.headline, design: .rounded).weight(.bold))
-                        .textCase(.uppercase)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .tint(settings.themeAccent.color)
-
-                    Text(Self.yearFormatter.string(from: displayedMonth))
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .tint(settings.themeAccent.color).opacity(0.4)
-                }
-                .frame(maxWidth: .infinity)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Zum aktuellen Monat springen")
-            .accessibilityValue(Self.monthYearFormatter.string(from: displayedMonth))
-
-            Spacer()
-            
-            monthControlButton(systemImage: "chevron.right") {
-                shiftDisplayedMonth(by: 1)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
-        //.payScopeSurface(accent: settings.themeAccent.color, cornerRadius: 18, emphasis: 0.2)
-        .accessibilityElement(children: .contain)
-    }
-
-    private func monthControlButton(systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.subheadline.weight(.bold))
-                .frame(width: 40, height: 40)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func monthSelectionAccessoryWidth(containerWidth: CGFloat) -> CGFloat {
-        let proposedWidth = containerWidth * 0.82
-        return min(max(proposedWidth, 250), 340)
-    }
-
-    private func shiftDisplayedMonth(by delta: Int) {
-        guard delta != 0 else { return }
-        displayedMonth = Calendar.current.date(byAdding: .month, value: delta, to: displayedMonth) ?? displayedMonth
-    }
 }
 
 private enum WatchSnapshotBridgeKeys {
@@ -638,6 +617,41 @@ private final class WatchSnapshotBridge: NSObject, ObservableObject {
     }
 }
 
+#Preview("Root") {
+    let container = try! ModelContainer(
+        for: Settings.self,
+            DayEntry.self,
+            HolidayCalendarDay.self,
+            NetWageMonthConfig.self,
+            TimeSegment.self,
+        configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+    )
+
+    let settings = Settings(
+        hasCompletedOnboarding: true,
+        payMode: .hourly,
+        hourlyRateCents: 1450,
+        weeklyTargetSeconds: 20 * 3600,
+        holidayFixedSeconds: 8 * 3600,
+        scheduledWorkdaysCount: 5,
+        themeAccent: .teal,
+        showCalendarWeekNumbers: true,
+        showLiveActivity: false,
+        shiftShortcut1: "540-1020",
+        shiftShortcut2: "720-1080",
+        shiftShortcut3: "1080-1440",
+        shiftShortcutName1: "Früh",
+        shiftShortcutName2: "Mitte",
+        shiftShortcutName3: "Spät"
+    )
+    container.mainContext.insert(settings)
+
+    return RootView()
+        .environment(\.locale, Locale(identifier: "de_DE"))
+        .environmentObject(CloudKitService.shared)
+        .modelContainer(container)
+}
+
 extension WatchSnapshotBridge: WCSessionDelegate {
     func session(
         _: WCSession,
@@ -674,4 +688,3 @@ extension WatchSnapshotBridge: WCSessionDelegate {
         }
     }
 }
-

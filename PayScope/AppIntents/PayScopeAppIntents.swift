@@ -73,24 +73,6 @@ struct AddTipIntent: AppIntent {
     }
 }
 
-struct AddTwelveEuroTipIntent: AppIntent {
-    nonisolated static var title: LocalizedStringResource { "Trinkgeld 12 Euro hinzufügen" }
-    nonisolated static var description: IntentDescription {
-        IntentDescription("Fügt für heute 12 Euro Trinkgeld in PayScope hinzu.")
-    }
-    nonisolated static var openAppWhenRun: Bool { false }
-
-    @MainActor
-    func perform() async throws -> some IntentResult & ProvidesDialog {
-        switch await PayScopeIntentActionService.addTip(amountEuro: 12) {
-        case .added:
-            return .result(dialog: "12 Euro Trinkgeld hinzugefügt.")
-        case .invalidAmount:
-            return .result(dialog: "Bitte gib ein Trinkgeld größer als null an.")
-        }
-    }
-}
-
 struct MarkTodaySickIntent: AppIntent {
     nonisolated static var title: LocalizedStringResource { "Heute krank markieren" }
     nonisolated static var description: IntentDescription {
@@ -116,7 +98,7 @@ struct PayScopeAppShortcuts: AppShortcutsProvider {
                 "Schicht mit \(.applicationName) starten"
             ],
             shortTitle: "Schicht starten",
-            systemImageName: "play.circle.fill"
+            systemImageName: "briefcase.fill"
         )
         AppShortcut(
             intent: EndShiftIntent(),
@@ -125,16 +107,16 @@ struct PayScopeAppShortcuts: AppShortcutsProvider {
                 "Schicht mit \(.applicationName) beenden"
             ],
             shortTitle: "Schicht beenden",
-            systemImageName: "stop.circle.fill"
+            systemImageName: "checkmark.circle.fill"
         )
         AppShortcut(
-            intent: AddTwelveEuroTipIntent(),
+            intent: AddTipIntent(),
             phrases: [
-                "\(.applicationName) Trinkgeld 12 Euro hinzufügen",
-                "Trinkgeld 12 Euro mit \(.applicationName) hinzufügen",
-                "12 Euro Trinkgeld in \(.applicationName) hinzufügen"
+                "\(.applicationName) Trinkgeld hinzufügen",
+                "Trinkgeld mit \(.applicationName) hinzufügen",
+                "Trinkgeld in \(.applicationName) eintragen"
             ],
-            shortTitle: "12 Euro Trinkgeld",
+            shortTitle: "Trinkgeld",
             systemImageName: "eurosign.circle.fill"
         )
         AppShortcut(
@@ -150,7 +132,7 @@ struct PayScopeAppShortcuts: AppShortcutsProvider {
 }
 
 @MainActor
-private enum PayScopeIntentActionService {
+enum PayScopeIntentActionService {
     enum StartShiftOutcome {
         case started
         case alreadyRunning
@@ -195,7 +177,7 @@ private enum PayScopeIntentActionService {
         target.date = utcDate(forLocalDay: dayStart)
         target.updatedAt = now
         target.type = .work
-        target.notes = existing?.notes ?? ""
+        target.notes = ""
         target.manualWorkedSeconds = nil
         target.creditedOverrideSeconds = nil
         target.shiftStart = now
@@ -258,12 +240,28 @@ private enum PayScopeIntentActionService {
         let tip = TipEntry(date: now.startOfDayLocal(), amountCents: cents, updatedAt: now)
         localTipStore.save(tip)
 
+        let dayStart = now.startOfDayLocal()
+        let target = localDayStore.load(on: dayStart) ?? DayEntry(date: utcDate(forLocalDay: dayStart))
+        target.date = utcDate(forLocalDay: dayStart)
+        target.updatedAt = now
+        target.tipAmountCents = max(0, target.tipAmountCents ?? 0) + cents
+        localDayStore.save(target)
+
         do {
             try await cloudKitService.saveTipEntry(tip)
             localTipStore.markSynced(tip)
         } catch {
             #if DEBUG
             print("CloudKit tip save failed, persisted locally as fallback: \(error)")
+            #endif
+        }
+
+        do {
+            try await cloudKitService.saveDayEntry(target)
+            localDayStore.save(target)
+        } catch {
+            #if DEBUG
+            print("CloudKit day tip save failed, persisted locally as fallback: \(error)")
             #endif
         }
 
@@ -280,7 +278,7 @@ private enum PayScopeIntentActionService {
         target.date = utcDate(forLocalDay: dayStart)
         target.updatedAt = now
         target.type = .sick
-        target.notes = existing?.notes ?? ""
+        target.notes = ""
         target.shiftStart = nil
         target.shiftEnd = nil
         target.breakSeconds = 0

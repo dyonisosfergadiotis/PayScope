@@ -140,7 +140,7 @@ enum ThemeAccent: String, Codable, CaseIterable, Identifiable {
         case .green: return .green
         case .purple: return .purple
         case .orange: return .orange
-        case .pink: return .pink
+        case .pink: return Color(red: 1.0, green: 0.36, blue: 0.64)
         case .teal: return .teal
         case .red: return .red
         case .indigo: return .indigo
@@ -174,10 +174,58 @@ enum ThemeAccent: String, Codable, CaseIterable, Identifiable {
     ]
 }
 
+enum ShiftCategoryColor: String, Codable, CaseIterable, Identifiable {
+    case mint
+    case sage
+    case sky
+    case aqua
+    case lavender
+    case lilac
+    case blush
+    case peach
+    case butter
+    case coral
+
+    var id: String { rawValue }
+
+    var color: Color {
+        switch self {
+        case .mint: return Color(red: 0.22, green: 0.78, blue: 0.56)
+        case .sage: return Color(red: 0.46, green: 0.72, blue: 0.30)
+        case .sky: return Color(red: 0.24, green: 0.58, blue: 0.92)
+        case .aqua: return Color(red: 0.16, green: 0.72, blue: 0.78)
+        case .lavender: return Color(red: 0.52, green: 0.42, blue: 0.88)
+        case .lilac: return Color(red: 0.70, green: 0.38, blue: 0.86)
+        case .blush: return Color(red: 0.90, green: 0.32, blue: 0.54)
+        case .peach: return Color(red: 0.94, green: 0.52, blue: 0.30)
+        case .butter: return Color(red: 0.88, green: 0.70, blue: 0.16)
+        case .coral: return Color(red: 0.90, green: 0.34, blue: 0.30)
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .mint: return "Mint"
+        case .sage: return "Salbei"
+        case .sky: return "Himmel"
+        case .aqua: return "Aqua"
+        case .lavender: return "Lavendel"
+        case .lilac: return "Flieder"
+        case .blush: return "Rosa"
+        case .peach: return "Pfirsich"
+        case .butter: return "Butter"
+        case .coral: return "Koralle"
+        }
+    }
+}
+
 enum CalendarCellDisplayMode: String, Codable, CaseIterable, Identifiable {
     case dot
     case hours
     case pay
+    case startTime
+    case endTime
+    case startAndEndTime
 
     var id: String { rawValue }
 
@@ -186,6 +234,9 @@ enum CalendarCellDisplayMode: String, Codable, CaseIterable, Identifiable {
         case .dot: return "Icon"
         case .hours: return "Stunden"
         case .pay: return "Geld"
+        case .startTime: return "Startzeit"
+        case .endTime: return "Endzeit"
+        case .startAndEndTime: return "Start & Ende"
         }
     }
 }
@@ -245,6 +296,7 @@ final class DayEntry {
     var shiftEnd: Date?
     var breakSeconds: Int?
     var alwaysApplyFifteenMinuteBuffer: Bool?
+    var tipAmountCents: Int?
 
     init(
         date: Date,
@@ -254,16 +306,18 @@ final class DayEntry {
         segments: [TimeSegment] = [],
         manualWorkedSeconds: Int? = nil,
         creditedOverrideSeconds: Int? = nil,
-        alwaysApplyFifteenMinuteBuffer: Bool? = nil
+        alwaysApplyFifteenMinuteBuffer: Bool? = nil,
+        tipAmountCents: Int? = nil
     ) {
         self.date = date.startOfDayUTC()
         self.updatedAt = updatedAt
         self.type = type
-        self.notes = notes
+        self.notes = ""
         self.segments = segments
         self.manualWorkedSeconds = manualWorkedSeconds
         self.creditedOverrideSeconds = creditedOverrideSeconds
         self.alwaysApplyFifteenMinuteBuffer = alwaysApplyFifteenMinuteBuffer
+        self.tipAmountCents = tipAmountCents.map { max(0, $0) }
     }
 
     var isEmptyTrackedDay: Bool {
@@ -291,6 +345,8 @@ final class Settings {
     var vacationFixedSeconds: Int?
     var countMissingAsZero: Bool
     var strictHistoryRequired: Bool
+    var calculateBreaks: Bool?
+    var aushilfeModeEnabled: Bool?
     var holidayCreditingMode: HolidayCreditingMode
     var holidayFixedSeconds: Int?
     var scheduledWorkdaysCount: Int
@@ -317,6 +373,10 @@ final class Settings {
     var netBonusesCSV: String?
     var showTipsButton: Bool?
     var showTipsButtonAmount: Bool?
+    var manualCategoryColor: ShiftCategoryColor?
+    var vacationCategoryColor: ShiftCategoryColor?
+    var holidayCategoryColor: ShiftCategoryColor?
+    var sickCategoryColor: ShiftCategoryColor?
 
     var shiftShortcut1: String
     var shiftShortcut2: String
@@ -338,6 +398,8 @@ final class Settings {
         vacationFixedSeconds: Int? = nil,
         countMissingAsZero: Bool = true,
         strictHistoryRequired: Bool = true,
+        calculateBreaks: Bool = true,
+        aushilfeModeEnabled: Bool = false,
         holidayCreditingMode: HolidayCreditingMode = .fixedValue,
         holidayFixedSeconds: Int? = nil,
         scheduledWorkdaysCount: Int = 5,
@@ -364,6 +426,10 @@ final class Settings {
         netBonusesCSV: String? = nil,
         showTipsButton: Bool = true,
         showTipsButtonAmount: Bool = true,
+        manualCategoryColor: ShiftCategoryColor? = .lavender,
+        vacationCategoryColor: ShiftCategoryColor? = .mint,
+        holidayCategoryColor: ShiftCategoryColor? = .peach,
+        sickCategoryColor: ShiftCategoryColor? = .blush,
         shiftShortcut1: String = "",
         shiftShortcut2: String = "",
         shiftShortcut3: String = "",
@@ -383,6 +449,8 @@ final class Settings {
         self.vacationFixedSeconds = vacationFixedSeconds.map { max(0, $0) }
         self.countMissingAsZero = countMissingAsZero
         self.strictHistoryRequired = strictHistoryRequired
+        self.calculateBreaks = calculateBreaks
+        self.aushilfeModeEnabled = aushilfeModeEnabled
         self.holidayCreditingMode = holidayCreditingMode
         self.holidayFixedSeconds = holidayFixedSeconds.map { max(0, $0) }
         self.scheduledWorkdaysCount = min(max(scheduledWorkdaysCount, 1), 7)
@@ -409,6 +477,10 @@ final class Settings {
         self.netBonusesCSV = netBonusesCSV
         self.showTipsButton = showTipsButton
         self.showTipsButtonAmount = showTipsButtonAmount
+        self.manualCategoryColor = manualCategoryColor
+        self.vacationCategoryColor = vacationCategoryColor
+        self.holidayCategoryColor = holidayCategoryColor
+        self.sickCategoryColor = sickCategoryColor
         self.shiftShortcut1 = shiftShortcut1
         self.shiftShortcut2 = shiftShortcut2
         self.shiftShortcut3 = shiftShortcut3
@@ -430,6 +502,8 @@ extension Settings {
         vacationFixedSeconds = source.vacationFixedSeconds
         countMissingAsZero = source.countMissingAsZero
         strictHistoryRequired = source.strictHistoryRequired
+        calculateBreaks = source.calculateBreaks
+        aushilfeModeEnabled = source.aushilfeModeEnabled
         holidayCreditingMode = source.holidayCreditingMode
         holidayFixedSeconds = source.holidayFixedSeconds
         scheduledWorkdaysCount = source.scheduledWorkdaysCount
@@ -456,6 +530,10 @@ extension Settings {
         netBonusesCSV = source.netBonusesCSV
         showTipsButton = source.showTipsButton
         showTipsButtonAmount = source.showTipsButtonAmount
+        manualCategoryColor = source.manualCategoryColor
+        vacationCategoryColor = source.vacationCategoryColor
+        holidayCategoryColor = source.holidayCategoryColor
+        sickCategoryColor = source.sickCategoryColor
         shiftShortcut1 = source.shiftShortcut1
         shiftShortcut2 = source.shiftShortcut2
         shiftShortcut3 = source.shiftShortcut3
@@ -490,6 +568,14 @@ extension Settings {
             return 0
         }
         return distributedHolidaySeconds
+    }
+
+    var effectiveCalculateBreaks: Bool {
+        calculateBreaks ?? true
+    }
+
+    var effectiveAushilfeModeEnabled: Bool {
+        aushilfeModeEnabled ?? false
     }
 
     var effectiveCalendarHoursBreakMode: CalendarHoursBreakMode {
@@ -534,6 +620,67 @@ extension Settings {
 
     var effectiveShowTipsButtonAmount: Bool {
         showTipsButtonAmount ?? true
+    }
+
+    var effectiveManualCategoryColor: ShiftCategoryColor {
+        manualCategoryColor ?? .lavender
+    }
+
+    var effectiveVacationCategoryColor: ShiftCategoryColor {
+        vacationCategoryColor ?? .mint
+    }
+
+    var effectiveHolidayCategoryColor: ShiftCategoryColor {
+        holidayCategoryColor ?? .peach
+    }
+
+    var effectiveSickCategoryColor: ShiftCategoryColor {
+        sickCategoryColor ?? .blush
+    }
+
+    func categoryColor(for type: DayType) -> Color {
+        switch type {
+        case .work:
+            return themeAccent.color
+        case .manual:
+            return effectiveManualCategoryColor.color
+        case .vacation:
+            return effectiveVacationCategoryColor.color
+        case .holiday:
+            return effectiveHolidayCategoryColor.color
+        case .sick:
+            return effectiveSickCategoryColor.color
+        }
+    }
+
+    func categoryColorSelection(for type: DayType) -> ShiftCategoryColor? {
+        switch type {
+        case .work:
+            return nil
+        case .manual:
+            return effectiveManualCategoryColor
+        case .vacation:
+            return effectiveVacationCategoryColor
+        case .holiday:
+            return effectiveHolidayCategoryColor
+        case .sick:
+            return effectiveSickCategoryColor
+        }
+    }
+
+    func setCategoryColor(_ color: ShiftCategoryColor, for type: DayType) {
+        switch type {
+        case .work:
+            break
+        case .manual:
+            manualCategoryColor = color
+        case .vacation:
+            vacationCategoryColor = color
+        case .holiday:
+            holidayCategoryColor = color
+        case .sick:
+            sickCategoryColor = color
+        }
     }
 
     var effectiveAlwaysApplyFifteenMinuteBuffer: Bool {

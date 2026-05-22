@@ -56,7 +56,7 @@ struct ShiftCSVImportParseResult {
 }
 
 enum ShiftCSVTransfer {
-    static let exportHeader = "categoryIcon,date,start,end,endDayOffset,breakMinutes,type,workedHours,workedPay,creditedHours,creditedPay,notes"
+    static let exportHeader = "categoryIcon,date,start,end,endDayOffset,breakMinutes,type,workedHours,workedPay,creditedHours,creditedPay"
 
     static func exportColumns(for entry: DayEntry) -> (icon: String, date: String, start: String, end: String, endDayOffset: String, breakMinutes: String, type: String) {
         let icon = entry.type.icon
@@ -64,7 +64,7 @@ enum ShiftCSVTransfer {
         let type = entry.type.rawValue
 
         guard let shiftStart = entry.shiftStart, let shiftEnd = entry.shiftEnd, shiftEnd > shiftStart else {
-            return (icon, date, "", "", "", "", type)
+            return (icon, date, "-", "-", "-", "-", type)
         }
 
         let start = timeFormatter.string(from: shiftStart)

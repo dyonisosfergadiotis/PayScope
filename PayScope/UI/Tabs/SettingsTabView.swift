@@ -5,17 +5,50 @@ import PDFKit
 import ActivityKit
 import WidgetKit
 
-private enum SettingsScope: String, CaseIterable, Identifiable {
-    case basic
-    case advanced
+private enum SettingsRoute: Hashable {
+    case pay
+    case netDefaults
+    case tips
+    case workweek
+    case weeklyTarget
+    case appearance
+    case calendar
+    case export
+    case appInfo
+    case rules
+    case shiftShortcuts
+    case widgetsLiveActivity
+    case holidays
+    case appleCalendar
+}
 
-    var id: Self { self }
+private struct SettingsSearchItem: Identifiable {
+    let route: SettingsRoute
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    let keywords: [String]
 
-    var title: String {
-        switch self {
-        case .basic: return "Basis"
-        case .advanced: return "Erweitert"
-        }
+    var id: SettingsRoute { route }
+
+    func matches(_ searchText: String) -> Bool {
+        let queryTokens = Self.normalized(searchText)
+            .split(separator: " ")
+            .map(String.init)
+
+        guard !queryTokens.isEmpty else { return false }
+
+        let searchableText = Self.normalized(
+            ([title, subtitle] + keywords).joined(separator: " ")
+        )
+
+        return queryTokens.allSatisfy { searchableText.contains($0) }
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "de_DE"))
+            .lowercased()
     }
 }
 
@@ -24,10 +57,12 @@ struct SettingsTabView: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
     @ObservedObject private var appleCalendarSync = AppleCalendarSyncService.shared
     @State private var settings: Settings
-    @State private var selectedScope: SettingsScope = .basic
+    @State private var isAdvancedSettingsExpanded = false
     @State private var showResetConfirmation = false
     @State private var showResetResultAlert = false
     @State private var resetResultMessage = ""
+    @State private var searchText = ""
+    @State private var resetWarningFeedbackTrigger = 0
 
     init(settings: Settings) {
         _settings = State(initialValue: settings)
@@ -36,23 +71,17 @@ struct SettingsTabView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    Picker("Einstellungsebene", selection: $selectedScope) {
-                        ForEach(SettingsScope.allCases) { scope in
-                            Text(scope.title).tag(scope)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                switch selectedScope {
-                case .basic:
-                    basicSettingsSections
-                case .advanced:
-                    advancedSettingsSections
-                }
+                settingsSearchResultsSection
+                basicSettingsSections
+                dataAndAppSettingsSection
+                advancedSettingsSection
             }
             .navigationTitle("Einstellungen")
+            .searchable(text: $searchText, prompt: "Suchen")
+            .navigationDestination(for: SettingsRoute.self) { route in
+                settingsDestination(for: route)
+            }
+            .sensoryFeedback(.warning, trigger: resetWarningFeedbackTrigger)
             .confirmationDialog(
                 "Lokale App-Daten zurücksetzen?",
                 isPresented: $showResetConfirmation,
@@ -74,151 +103,293 @@ struct SettingsTabView: View {
     }
 
     @ViewBuilder
-    private var basicSettingsSections: some View {
-        Section("Arbeit") {
-            NavigationLink {
-                PaySettingsView(settings: $settings)
-            } label: {
-                SettingsMenuRow(
-                    title: "Vergütung",
-                    subtitle: "Abrechnungsmodell und Gehaltswert einstellen",
-                    systemImage: "eurosign.circle"
-                )
-            }
+    private var settingsSearchResultsSection: some View {
+        let trimmedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            NavigationLink {
-                TipsSettingsView(settings: $settings)
-            } label: {
-                SettingsMenuRow(
-                    title: "Trinkgeld",
-                    subtitle: tipsSettingsSubtitle,
-                    systemImage: "eurosign.circle"
-                )
-            }
+        if !trimmedSearchText.isEmpty {
+            let results = settingsSearchItems.filter { $0.matches(trimmedSearchText) }
 
-            NavigationLink {
-                WorkweekSettingsView(settings: $settings)
-            } label: {
-                SettingsMenuRow(
-                    title: "Arbeitswoche",
-                    subtitle: "Arbeitstage pro Woche festlegen",
-                    systemImage: "calendar.badge.clock"
-                )
-            }
-
-            NavigationLink {
-                WeeklyTargetSettingsView(settings: $settings)
-            } label: {
-                SettingsMenuRow(
-                    title: "Wochenstunden",
-                    subtitle: "Sollstunden pro Woche hinterlegen",
-                    systemImage: "clock"
-                )
-            }
-        }
-
-        Section("Darstellung") {
-            NavigationLink {
-                AppearanceSettingsView(settings: $settings)
-            } label: {
-                SettingsMenuRow(
-                    title: "Erscheinungsbild",
-                    subtitle: "Akzentfarbe der App auswählen",
-                    systemImage: "paintpalette"
-                )
-            }
-
-            NavigationLink {
-                CalendarSettingsView(settings: $settings)
-            } label: {
-                SettingsMenuRow(
-                    title: "Kalender",
-                    subtitle: "Kalenderzellen und Wocheninfos anpassen",
-                    systemImage: "rectangle.3.group"
-                )
+            Section("Treffer") {
+                if results.isEmpty {
+                    Label("Keine passenden Einstellungen", systemImage: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(results) { item in
+                        settingsNavigationLink(
+                            route: item.route,
+                            title: item.title,
+                            subtitle: item.subtitle,
+                            systemImage: item.systemImage
+                        )
+                    }
+                }
             }
         }
     }
 
+    private func settingsNavigationLink(
+        route: SettingsRoute,
+        title: String,
+        subtitle: String,
+        systemImage: String
+    ) -> some View {
+        NavigationLink(value: route) {
+            SettingsMenuRow(
+                title: title,
+                subtitle: subtitle,
+                systemImage: systemImage
+            )
+        }
+    }
+
     @ViewBuilder
-    private var advancedSettingsSections: some View {
+    private func settingsDestination(for route: SettingsRoute) -> some View {
+        switch route {
+        case .pay:
+            PaySettingsView(settings: $settings)
+        case .netDefaults:
+            NetDefaultsSettingsView(settings: $settings)
+        case .tips:
+            TipsSettingsView(settings: $settings)
+        case .workweek:
+            WorkweekSettingsView(settings: $settings)
+        case .weeklyTarget:
+            WeeklyTargetSettingsView(settings: $settings)
+        case .appearance:
+            AppearanceSettingsView(settings: $settings)
+        case .calendar:
+            CalendarSettingsView(settings: $settings)
+        case .export:
+            ExportSettingsView(settings: $settings)
+        case .appInfo:
+            AppInfoSettingsView()
+        case .rules:
+            RulesSettingsView(settings: $settings)
+        case .shiftShortcuts:
+            ShiftShortcutsSettingsView(settings: $settings)
+        case .widgetsLiveActivity:
+            WidgetLiveActivitySettingsView(settings: $settings)
+        case .holidays:
+            HolidayImportSettingsView(settings: $settings)
+        case .appleCalendar:
+            AppleCalendarSettingsView(settings: settings)
+        }
+    }
+
+    private var settingsSearchItems: [SettingsSearchItem] {
+        [
+            SettingsSearchItem(
+                route: .pay,
+                title: "Vergütung",
+                subtitle: "Abrechnungsmodell und Gehaltswert einstellen",
+                systemImage: "eurosign.circle",
+                keywords: ["Lohn", "Gehalt", "Stundenlohn", "Monatslohn", "Brutto", "Abrechnung"]
+            ),
+            SettingsSearchItem(
+                route: .netDefaults,
+                title: "Netto",
+                subtitle: "Steuern, Abgaben, Freibetrag und Zuschläge hinterlegen",
+                systemImage: "percent",
+                keywords: ["Lohnsteuer", "Rente", "Rentenversicherung", "Abgaben", "Bonus", "Zuschläge"]
+            ),
+            SettingsSearchItem(
+                route: .tips,
+                title: "Trinkgeld",
+                subtitle: tipsSettingsSubtitle,
+                systemImage: "eurosign.circle",
+                keywords: ["Tips", "Monatsbetrag", "Button", "Betrag"]
+            ),
+            SettingsSearchItem(
+                route: .workweek,
+                title: "Arbeitswoche",
+                subtitle: "Arbeitstage pro Woche festlegen",
+                systemImage: "calendar.badge.clock",
+                keywords: ["Wochentage", "Arbeitstage", "Woche"]
+            ),
+            SettingsSearchItem(
+                route: .weeklyTarget,
+                title: "Wochenstunden",
+                subtitle: "Sollstunden pro Woche hinterlegen",
+                systemImage: "clock",
+                keywords: ["Soll", "Ziel", "Stunden", "Wochenziel"]
+            ),
+            SettingsSearchItem(
+                route: .appearance,
+                title: "Erscheinungsbild",
+                subtitle: "Akzentfarbe der App auswählen",
+                systemImage: "paintpalette",
+                keywords: ["Farbe", "Design", "Theme", "Akzent"]
+            ),
+            SettingsSearchItem(
+                route: .calendar,
+                title: "Kalender",
+                subtitle: "Kalenderzellen und Wocheninfos anpassen",
+                systemImage: "rectangle.3.group",
+                keywords: ["Zellen", "Wochenstunden", "Wochenverdienst", "Kalenderwochen", "Anzeige"]
+            ),
+            SettingsSearchItem(
+                route: .export,
+                title: "Export",
+                subtitle: "Monatsdaten als CSV, Text oder PDF teilen",
+                systemImage: "square.and.arrow.up",
+                keywords: ["CSV", "PDF", "Teilen", "Import", "Datei", "Monat"]
+            ),
+            SettingsSearchItem(
+                route: .appInfo,
+                title: "Info & Entwickler",
+                subtitle: "App-Version und Entwicklerangaben ansehen",
+                systemImage: "info.circle",
+                keywords: ["Version", "Entwickler", "Impressum", "Kontakt"]
+            ),
+            SettingsSearchItem(
+                route: .rules,
+                title: "Berechnungsregeln",
+                subtitle: "Pausen, Gutschriften und Referenzlogik konfigurieren",
+                systemImage: "slider.horizontal.3",
+                keywords: ["Pause", "Pausen", "Urlaub", "Feiertag", "Krank", "13 Wochen", "Historie", "Aushilfe", "Stundenkonto"]
+            ),
+            SettingsSearchItem(
+                route: .shiftShortcuts,
+                title: "Schichtvorlagen",
+                subtitle: "Namen und Zeiten für schnelle Schichten bearbeiten",
+                systemImage: "clock.badge",
+                keywords: ["Vorlagen", "Shortcut", "Shortcuts", "Start", "Ende", "Schnell"]
+            ),
+            SettingsSearchItem(
+                route: .widgetsLiveActivity,
+                title: "Widgets und Live Activity",
+                subtitle: "Lock-Screen-Widgets, Live Activity und Aktualisierung",
+                systemImage: "rectangle.inset.filled.and.person.filled",
+                keywords: ["Widget", "Widgets", "Live Activity", "Dynamic Island", "Lock Screen", "Aktualisieren"]
+            ),
+            SettingsSearchItem(
+                route: .holidays,
+                title: "Feiertage",
+                subtitle: "Region, Import und automatische Markierung einstellen",
+                systemImage: "flag",
+                keywords: ["Feiertag", "Feiertage", "Region", "Bundesland", "Import", "Markierung"]
+            ),
+            SettingsSearchItem(
+                route: .appleCalendar,
+                title: "Apple Kalender",
+                subtitle: appleCalendarSubtitle,
+                systemImage: "calendar.badge.plus",
+                keywords: ["Kalender", "Apple", "Export", "Synchronisieren", "Event", "Termin"]
+            )
+        ]
+    }
+
+    @ViewBuilder
+    private var basicSettingsSections: some View {
         Section("Arbeit") {
-            NavigationLink {
-                RulesSettingsView(settings: $settings)
-            } label: {
-                SettingsMenuRow(
+            settingsNavigationLink(
+                route: .pay,
+                title: "Vergütung",
+                subtitle: "Abrechnungsmodell und Gehaltswert einstellen",
+                systemImage: "eurosign.circle"
+            )
+
+            settingsNavigationLink(
+                route: .tips,
+                title: "Trinkgeld",
+                subtitle: tipsSettingsSubtitle,
+                systemImage: "eurosign.circle"
+            )
+
+            settingsNavigationLink(
+                route: .workweek,
+                title: "Arbeitswoche",
+                subtitle: "Arbeitstage pro Woche festlegen",
+                systemImage: "calendar.badge.clock"
+            )
+
+            settingsNavigationLink(
+                route: .weeklyTarget,
+                title: "Wochenstunden",
+                subtitle: "Sollstunden pro Woche hinterlegen",
+                systemImage: "clock"
+            )
+        }
+
+        Section("Darstellung") {
+            settingsNavigationLink(
+                route: .appearance,
+                title: "Erscheinungsbild",
+                subtitle: "Akzentfarbe der App auswählen",
+                systemImage: "paintpalette"
+            )
+
+            settingsNavigationLink(
+                route: .calendar,
+                title: "Kalender",
+                subtitle: "Kalenderzellen und Wocheninfos anpassen",
+                systemImage: "rectangle.3.group"
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var dataAndAppSettingsSection: some View {
+        Section("Daten & App") {
+            settingsNavigationLink(
+                route: .export,
+                title: "Export",
+                subtitle: "Monatsdaten als CSV, Text oder PDF teilen",
+                systemImage: "square.and.arrow.up"
+            )
+
+            settingsNavigationLink(
+                route: .appInfo,
+                title: "Info & Entwickler",
+                subtitle: "App-Version und Entwicklerangaben ansehen",
+                systemImage: "info.circle"
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var advancedSettingsSection: some View {
+        Section {
+            DisclosureGroup("Erweitert", isExpanded: $isAdvancedSettingsExpanded) {
+                settingsNavigationLink(
+                    route: .rules,
                     title: "Berechnungsregeln",
-                    subtitle: "Gutschriften und Referenzlogik konfigurieren",
+                    subtitle: "Pausen, Gutschriften und Referenzlogik konfigurieren",
                     systemImage: "slider.horizontal.3"
                 )
-            }
 
-            NavigationLink {
-                ShiftShortcutsSettingsView(settings: $settings)
-            } label: {
-                SettingsMenuRow(
+                settingsNavigationLink(
+                    route: .shiftShortcuts,
                     title: "Schichtvorlagen",
                     subtitle: "Namen und Zeiten für schnelle Schichten bearbeiten",
                     systemImage: "clock.badge"
                 )
-            }
-        }
 
-        Section("Integrationen") {
-            NavigationLink {
-                WidgetLiveActivitySettingsView(settings: $settings)
-            } label: {
-                SettingsMenuRow(
+                settingsNavigationLink(
+                    route: .widgetsLiveActivity,
                     title: "Widgets und Live Activity",
                     subtitle: "Lock-Screen-Widgets, Live Activity und Aktualisierung",
                     systemImage: "rectangle.inset.filled.and.person.filled"
                 )
-            }
 
-            NavigationLink {
-                HolidayImportSettingsView(settings: $settings)
-            } label: {
-                SettingsMenuRow(
+                settingsNavigationLink(
+                    route: .holidays,
                     title: "Feiertage",
                     subtitle: "Region, Import und automatische Markierung einstellen",
                     systemImage: "flag"
                 )
-            }
 
-            NavigationLink {
-                AppleCalendarSettingsView(settings: settings)
-            } label: {
-                SettingsMenuRow(
+                settingsNavigationLink(
+                    route: .appleCalendar,
                     title: "Apple Kalender",
                     subtitle: appleCalendarSubtitle,
                     systemImage: "calendar.badge.plus"
                 )
-            }
-        }
 
-        Section("Daten & App") {
-            NavigationLink {
-                ExportSettingsView(settings: $settings)
-            } label: {
-                SettingsMenuRow(
-                    title: "Export",
-                    subtitle: "Monatsdaten als CSV, Text oder PDF teilen",
-                    systemImage: "square.and.arrow.up"
-                )
-            }
-
-            NavigationLink {
-                AppInfoSettingsView()
-            } label: {
-                SettingsMenuRow(
-                    title: "Info & Entwickler",
-                    subtitle: "App-Version und Entwicklerangaben ansehen",
-                    systemImage: "info.circle"
-                )
-            }
-
-            Button("App zurücksetzen", role: .destructive) {
-                showResetConfirmation = true
+                Button("App zurücksetzen", role: .destructive) {
+                    resetWarningFeedbackTrigger += 1
+                    showResetConfirmation = true
+                }
             }
         }
     }
@@ -318,8 +489,8 @@ private struct PaySettingsView: View {
                     NetDefaultsSettingsView(settings: $settings)
                 } label: {
                     SettingsMenuRow(
-                        title: "Netto-Standardwerte",
-                        subtitle: "Abgaben und Zuschläge für Netto-Berechnungen verwalten",
+                        title: "Lohnsteuerabgaben",
+                        subtitle: "Abgaben und Zuschläge für Steuern verwalten",
                         systemImage: "percent"
                     )
                 }
@@ -410,7 +581,7 @@ private struct NetDefaultsSettingsView: View {
                 }
             }
         }
-        .navigationTitle("Netto-Standardwerte")
+        .navigationTitle("Lohnsteuerangaben")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -667,6 +838,20 @@ private struct RulesSettingsView: View {
             }
 
             Section(
+                header: Text("Pausen"),
+                footer: Text("Wenn diese Option aus ist, werden eingetragene Pausen und automatische Mindestpausen nicht von Arbeitszeit und Lohn abgezogen.")
+            ) {
+                Toggle("Pausen berechnen", isOn: calculateBreaksBinding)
+            }
+
+            Section(
+                header: Text("Aushilfemodus"),
+                footer: Text("Wenn der Aushilfemodus aktiv ist, wird das Stundenkonto im Tab-Bereich ausgeblendet.")
+            ) {
+                Toggle("Aushilfemodus", isOn: aushilfeModeBinding)
+            }
+
+            Section(
                 header: Text("13-Wochen-Logik"),
                 footer: Text("Gilt für Urlaub, Feiertag und Krank bei 13-Wochen-Regel.")
             ) {
@@ -732,6 +917,26 @@ private struct RulesSettingsView: View {
         )
     }
 
+    private var calculateBreaksBinding: Binding<Bool> {
+        Binding(
+            get: { settings.effectiveCalculateBreaks },
+            set: { newValue in
+                settings.calculateBreaks = newValue
+                Task { try? await cloudKitService.saveSettings(settings) }
+            }
+        )
+    }
+
+    private var aushilfeModeBinding: Binding<Bool> {
+        Binding(
+            get: { settings.effectiveAushilfeModeEnabled },
+            set: { newValue in
+                settings.aushilfeModeEnabled = newValue
+                Task { try? await cloudKitService.saveSettings(settings) }
+            }
+        )
+    }
+
     private var holidayCreditingModeBinding: Binding<HolidayCreditingMode> {
         Binding(
             get: { settings.effectiveHolidayCreditingMode },
@@ -783,12 +988,15 @@ private struct RulesSettingsView: View {
 private struct AppearanceSettingsView: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
     @Binding var settings: Settings
+    @State private var selectedCategoryForPalette: DayType?
+
+    private let categoryTypes = DayType.allCases
 
     var body: some View {
         Form {
             Section(
                 header: Text("Erscheinungsbild"),
-                footer: Text("Die Akzentfarbe wird in Kalender, Charts und Buttons verwendet.")) {
+                footer: Text("Arbeit bleibt an die Akzentfarbe gebunden. Die anderen Kategorien werden als eigene Pastelltöne gespeichert.")) {
                 HStack {
                     Text("Akzentfarbe")
                     Spacer()
@@ -817,11 +1025,123 @@ private struct AppearanceSettingsView: View {
                     }
                 }
             }
+
+            Section("Schichtkategorien") {
+                HStack(spacing: 0) {
+                    ForEach(categoryTypes) { type in
+                        Button {
+                            guard type != .work else { return }
+                            selectedCategoryForPalette = type
+                        } label: {
+                            Image(systemName: type.icon)
+                                .font(.system(size: 19, weight: .semibold))
+                                .foregroundStyle(categoryTint(for: type))
+                                .frame(width: 44, height: 44)
+                                .payScopeGlassControl(
+                                    accent: categoryTint(for: type),
+                                    cornerRadius: 14,
+                                    tintOpacity: type == .work ? 0.065 : 0.105,
+                                    isInteractive: type != .work
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(type.label)
+                        .opacity(type == .work ? 0.82 : 1)
+                        .popover(isPresented: categoryPaletteBinding(for: type),arrowEdge: .bottom) {
+                            CategoryColorPaletteView(
+                                type: type,
+                                selectedColor: settings.categoryColorSelection(for: type),
+                                accent: settings.themeAccent.color
+                            ) { color in
+                                settings.setCategoryColor(color, for: type)
+                                selectedCategoryForPalette = nil
+                                Task { try? await cloudKitService.saveSettings(settings) }
+                            }
+                            .presentationCompactAdaptation(.popover)
+                        }
+
+                        if type != categoryTypes.last {
+                            Spacer(minLength: 12)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .navigationTitle("Erscheinungsbild")
         .onChange(of: settings.themeAccent) { _, _ in
             Task { try? await cloudKitService.saveSettings(settings) }
         }
+    }
+
+    private func categoryTint(for type: DayType) -> Color {
+        settings.categoryColor(for: type)
+    }
+
+    private func categoryPaletteBinding(for type: DayType) -> Binding<Bool> {
+        Binding {
+            selectedCategoryForPalette == type
+        } set: { isPresented in
+            if !isPresented, selectedCategoryForPalette == type {
+                selectedCategoryForPalette = nil
+            }
+        }
+    }
+}
+
+private struct CategoryColorPaletteView: View {
+    let type: DayType
+    let selectedColor: ShiftCategoryColor?
+    let accent: Color
+    let onSelect: (ShiftCategoryColor) -> Void
+
+    private let columns = Array(repeating: GridItem(.fixed(42), spacing: 10), count: 5)
+    private let paletteWidth: CGFloat = 280
+    private var paletteContentWidth: CGFloat {
+        paletteWidth - (PayScopeModalGeometry.popover.edgePadding * 2)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: type.icon)
+                    .foregroundStyle(type == .work ? accent : selectedColor?.color ?? accent)
+                Text(type.label)
+                    .font(.headline)
+            }
+
+            LazyVGrid(columns: columns, spacing: 10) {
+                ForEach(ShiftCategoryColor.allCases) { color in
+                    Button {
+                        onSelect(color)
+                    } label: {
+                        Circle()
+                            .fill(color.color)
+                            .frame(width: 36, height: 36)
+                            .overlay(
+                                Circle()
+                                    .stroke(
+                                        selectedColor == color ? Color.primary.opacity(0.72) : Color.secondary.opacity(0.22),
+                                        lineWidth: selectedColor == color ? 2 : 1
+                                    )
+                            )
+                            .overlay {
+                                if selectedColor == color {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(.primary)
+                                }
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(color.label)
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: paletteContentWidth)
+        //.payScopeGlassSurface(accent: accent, cornerRadius: PayScopeModalGeometry.popover.innerCornerRadius, tintOpacity: 0.045, shadowOpacity: 0.06)
+        //.payScopePopoverSurface(accent: accent)
     }
 }
 
@@ -833,22 +1153,7 @@ private struct CalendarSettingsView: View {
         Form {
             Section(
                 header: Text("Kalenderdarstellung"),
-                footer: Text("Diese Einstellungen legen fest, welche Informationen im Kalender zu sehen sind.")) {
-                    Picker("Tageszelle", selection: calendarDisplayModeBinding) {
-                        ForEach(CalendarCellDisplayMode.allCases) { mode in
-                            Text(mode.label).tag(mode)
-                        }
-                    }
-                    
-                    if calendarDisplayModeBinding.wrappedValue == .hours {
-                        Picker("Stundenvergleich", selection: calendarHoursBreakModeBinding) {
-                            ForEach(CalendarHoursBreakMode.allCases) { mode in
-                                Text(mode.label).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                    }
-                    
+                footer: Text("Die Zellansicht wird direkt im Kalender-Menü geändert.")) {
                     Toggle("Kalenderwochen", isOn: showCalendarWeekNumbersBinding)
                     Toggle("Wochenstunden", isOn: showCalendarWeekHoursBinding)
                     Toggle("Wochenverdienst", isOn: showCalendarWeekPayBinding)
@@ -868,26 +1173,6 @@ private struct CalendarSettingsView: View {
         }
         }
         .navigationTitle("Kalender")
-    }
-
-    private var calendarDisplayModeBinding: Binding<CalendarCellDisplayMode> {
-        Binding(
-            get: { settings.calendarCellDisplayMode ?? .dot },
-            set: {
-                settings.calendarCellDisplayMode = $0
-                Task { try? await cloudKitService.saveSettings(settings) }
-            }
-        )
-    }
-
-    private var calendarHoursBreakModeBinding: Binding<CalendarHoursBreakMode> {
-        Binding(
-            get: { settings.effectiveCalendarHoursBreakMode },
-            set: {
-                settings.calendarHoursBreakMode = $0
-                Task { try? await cloudKitService.saveSettings(settings) }
-            }
-        )
     }
 
     private var calendarSummaryDisplayModeBinding: Binding<CalendarSummaryDisplayMode> {
@@ -935,6 +1220,7 @@ private struct WidgetLiveActivitySettingsView: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
     @Binding var settings: Settings
     @State private var lastWidgetRefreshDate: Date?
+    @State private var widgetRefreshFeedbackTrigger = 0
 
     private static let refreshFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -1012,6 +1298,7 @@ private struct WidgetLiveActivitySettingsView: View {
             }
         }
         .navigationTitle("Widgets und Live Activity")
+        .sensoryFeedback(.success, trigger: widgetRefreshFeedbackTrigger)
     }
 
     private var liveActivityFooter: String {
@@ -1068,17 +1355,14 @@ private struct WidgetLiveActivitySettingsView: View {
     private func refreshWidgets() {
         WidgetCenter.shared.reloadAllTimelines()
         lastWidgetRefreshDate = .now
+        widgetRefreshFeedbackTrigger += 1
     }
 }
 
 private struct ShiftShortcutsSettingsView: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
     @Binding var settings: Settings
-    @State private var editingNameIndex: Int?
-    @State private var editingTimeIndex: Int?
-    @State private var draftName = ""
-    @State private var draftStartMinute = 0
-    @State private var draftEndMinute = 0
+    @State private var editingShortcut: ShiftShortcutEditDraft?
 
     var body: some View {
         Form {
@@ -1092,6 +1376,15 @@ private struct ShiftShortcutsSettingsView: View {
             }
         }
         .navigationTitle("Schichtvorlagen")
+        .sheet(item: $editingShortcut) { draft in
+            ShiftShortcutEditorSheet(
+                draft: draft,
+                accent: settings.themeAccent.color,
+                onCancel: { editingShortcut = nil },
+                onSave: saveShortcutDraft
+            )
+            .payScopeSheetSurface(accent: settings.themeAccent.color)
+        }
     }
 
     @ViewBuilder
@@ -1101,102 +1394,25 @@ private struct ShiftShortcutsSettingsView: View {
     ) -> some View {
         let range = effectiveShortcutRange(for: index)
 
-        VStack(alignment: .leading, spacing: 10) {
+        HStack(alignment: .center, spacing: 12) {
             HStack {
-                if editingNameIndex == index {
-                    TextField("Name, z. B. Frühschicht", text: $draftName)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled()
-
-                    Button {
-                        saveShortcutName(index: index)
-                    } label: {
-                        Image(systemName: "checkmark")
-                    }
-                } else {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(displayName(for: index, fallback: title))
                         .font(.headline)
-                    Spacer()
-                    Button {
-                        beginEditingName(index: index)
-                    } label: {
-                        Image(systemName: "pencil")
-                    }
-                }
-            }
-
-            if editingTimeIndex == index {
-                VStack(spacing: 8) {
-                    shortcutMinuteControl(
-                        title: "Start",
-                        value: draftStartMinute,
-                        onDecrease: { adjustDraftTime(isStart: true, deltaMinutes: -15) },
-                        onIncrease: { adjustDraftTime(isStart: true, deltaMinutes: 15) }
-                    )
-                    shortcutMinuteControl(
-                        title: "Ende",
-                        value: draftEndMinute,
-                        onDecrease: { adjustDraftTime(isStart: false, deltaMinutes: -15) },
-                        onIncrease: { adjustDraftTime(isStart: false, deltaMinutes: 15) }
-                    )
-                }
-
-                HStack {
-                    Spacer()
-                    Button {
-                        saveShortcutTime(index: index)
-                    } label: {
-                        Image(systemName: "checkmark")
-                    }
-                }
-            } else {
-                HStack {
-                    Text("\(formatMinute(range.startMinute)) - \(formatMinute(range.endMinute))")
+                    Text(range.displayRange)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        beginEditingTime(index: index)
-                    } label: {
-                        Image(systemName: "pencil")
-                    }
                 }
+                Spacer(minLength: 8)
             }
-
-            Button("Standardwerte") {
-                resetShortcut(index: index)
-            }
-            .font(.footnote)
-        }
-    }
-
-    @ViewBuilder
-    private func shortcutMinuteControl(
-        title: String,
-        value: Int,
-        onDecrease: @escaping () -> Void,
-        onIncrease: @escaping () -> Void
-    ) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Button {
-                onDecrease()
-            } label: {
-                Image(systemName: "minus.circle")
-            }
-            .buttonStyle(.plain)
-
-            Text(formatMinute(value))
-                .font(.subheadline.bold())
-                .frame(minWidth: 58)
 
             Button {
-                onIncrease()
+                beginEditingShortcut(title: title, index: index)
             } label: {
-                Image(systemName: "plus.circle")
+                Image(systemName: "pencil")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
+            .accessibilityLabel("\(displayName(for: index, fallback: title)) bearbeiten")
         }
     }
 
@@ -1223,73 +1439,155 @@ private struct ShiftShortcutsSettingsView: View {
         return parseShiftShortcutRange(raw: raw) ?? defaultShiftShortcutRange(index: index)
     }
 
-    private func resetShortcut(index: Int) {
-        setShortcutRange(defaultShiftShortcutRange(index: index), index: index)
+    private func beginEditingShortcut(title: String, index: Int) {
+        let range = effectiveShortcutRange(for: index)
+        editingShortcut = ShiftShortcutEditDraft(
+            index: index,
+            title: title,
+            name: displayName(for: index, fallback: ""),
+            startMinute: range.startMinute,
+            endMinute: range.endMinute,
+            payload: range.payload,
+            defaultRange: defaultShiftShortcutRange(index: index)
+        )
     }
 
-    private func beginEditingName(index: Int) {
-        editingTimeIndex = nil
-        editingNameIndex = index
-        draftName = displayName(for: index, fallback: "")
-    }
-
-    private func saveShortcutName(index: Int) {
-        let trimmed = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch index {
+    private func saveShortcutDraft(_ draft: ShiftShortcutEditDraft) {
+        let trimmedName = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawValue = ShiftShortcutRange(
+            startMinute: draft.startMinute,
+            endMinute: draft.endMinute,
+            payload: draft.payload
+        ).rawValue
+        switch draft.index {
         case 0:
-            settings.shiftShortcutName1 = trimmed.nilIfEmpty
+            settings.shiftShortcut1 = rawValue
+            settings.shiftShortcutName1 = trimmedName.nilIfEmpty
         case 1:
-            settings.shiftShortcutName2 = trimmed.nilIfEmpty
+            settings.shiftShortcut2 = rawValue
+            settings.shiftShortcutName2 = trimmedName.nilIfEmpty
         default:
-            settings.shiftShortcutName3 = trimmed.nilIfEmpty
+            settings.shiftShortcut3 = rawValue
+            settings.shiftShortcutName3 = trimmedName.nilIfEmpty
         }
-        editingNameIndex = nil
+
+        editingShortcut = nil
         Task { try? await cloudKitService.saveSettings(settings) }
     }
+}
 
-    private func beginEditingTime(index: Int) {
-        editingNameIndex = nil
-        editingTimeIndex = index
-        let range = effectiveShortcutRange(for: index)
-        draftStartMinute = range.startMinute
-        draftEndMinute = range.endMinute
+private struct ShiftShortcutEditorSheet: View {
+    @State private var draft: ShiftShortcutEditDraft
+
+    let accent: Color
+    let onCancel: () -> Void
+    let onSave: (ShiftShortcutEditDraft) -> Void
+
+    init(
+        draft: ShiftShortcutEditDraft,
+        accent: Color,
+        onCancel: @escaping () -> Void,
+        onSave: @escaping (ShiftShortcutEditDraft) -> Void
+    ) {
+        self._draft = State(initialValue: draft)
+        self.accent = accent
+        self.onCancel = onCancel
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Name") {
+                    TextField("Name, z. B. Frühschicht", text: $draft.name)
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled()
+                }
+
+                Section("Zeit") {
+                    ShortcutMinuteControl(
+                        title: "Start",
+                        value: draft.startMinute,
+                        accent: accent,
+                        onDecrease: { adjustDraftTime(isStart: true, deltaMinutes: -15) },
+                        onIncrease: { adjustDraftTime(isStart: true, deltaMinutes: 15) }
+                    )
+                    ShortcutMinuteControl(
+                        title: "Ende",
+                        value: draft.endMinute,
+                        accent: accent,
+                        onDecrease: { adjustDraftTime(isStart: false, deltaMinutes: -15) },
+                        onIncrease: { adjustDraftTime(isStart: false, deltaMinutes: 15) }
+                    )
+                }
+
+                Section {
+                    Button("Standardwerte") {
+                        draft.name = ""
+                        draft.startMinute = draft.defaultRange.startMinute
+                        draft.endMinute = draft.defaultRange.endMinute
+                        draft.payload = nil
+                    }
+                }
+            }
+            .navigationTitle("\(draft.title) bearbeiten")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Abbrechen", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Speichern") {
+                        onSave(draft)
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 
     private func adjustDraftTime(isStart: Bool, deltaMinutes: Int) {
         if isStart {
-            let duration = max(15, draftEndMinute - draftStartMinute)
+            let duration = max(15, draft.endMinute - draft.startMinute)
             let upperStart = min(ShiftTimeRange.minutesPerDay - 1, ShiftTimeRange.maxEndMinuteOffset - duration)
-            draftStartMinute = max(0, min(upperStart, draftStartMinute + deltaMinutes))
-            draftEndMinute = min(
+            draft.startMinute = max(0, min(upperStart, draft.startMinute + deltaMinutes))
+            draft.endMinute = min(
                 ShiftTimeRange.maxEndMinuteOffset,
-                min(draftStartMinute + ShiftTimeRange.maxDurationMinutes, draftStartMinute + duration)
+                min(draft.startMinute + ShiftTimeRange.maxDurationMinutes, draft.startMinute + duration)
             )
         } else {
-            let upperEnd = min(ShiftTimeRange.maxEndMinuteOffset, draftStartMinute + ShiftTimeRange.maxDurationMinutes)
-            draftEndMinute = max(draftStartMinute + 15, min(upperEnd, draftEndMinute + deltaMinutes))
+            let upperEnd = min(ShiftTimeRange.maxEndMinuteOffset, draft.startMinute + ShiftTimeRange.maxDurationMinutes)
+            draft.endMinute = max(draft.startMinute + 15, min(upperEnd, draft.endMinute + deltaMinutes))
         }
     }
+}
 
-    private func saveShortcutTime(index: Int) {
-        setShortcutRange(
-            ShiftShortcutRange(startMinute: draftStartMinute, endMinute: draftEndMinute),
-            index: index
-        )
-        editingTimeIndex = nil
-    }
+private struct ShortcutMinuteControl: View {
+    let title: String
+    let value: Int
+    let accent: Color
+    let onDecrease: () -> Void
+    let onIncrease: () -> Void
 
-    private func setShortcutRange(_ range: ShiftShortcutRange, index: Int) {
-        let rawValue = "\(range.startMinute)-\(range.endMinute)"
-        switch index {
-        case 0:
-            settings.shiftShortcut1 = rawValue
-            Task { try? await cloudKitService.saveSettings(settings) }
-        case 1:
-            settings.shiftShortcut2 = rawValue
-            Task { try? await cloudKitService.saveSettings(settings) }
-        default:
-            settings.shiftShortcut3 = rawValue
-            Task { try? await cloudKitService.saveSettings(settings) }
+    var body: some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Button(action: onDecrease) {
+                Image(systemName: "minus.circle")
+            }
+            .buttonStyle(.borderless)
+
+            Text(formatMinute(value))
+                .font(.subheadline.bold())
+                .monospacedDigit()
+                .frame(minWidth: 78)
+                .foregroundStyle(accent)
+
+            Button(action: onIncrease) {
+                Image(systemName: "plus.circle")
+            }
+            .buttonStyle(.borderless)
         }
     }
 }
@@ -1348,7 +1646,7 @@ private struct HolidayImportSettingsView: View {
             }
 
             Section(header: Text("Automatische Markierung"),footer:Text("API-Feiertage werden im Kalender gelb markiert. Nur auf ausgewählten Tagen wird beim Öffnen automatisch eine Feiertagsschicht gesetzt.")) {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     ForEach(orderedWeekdays, id: \.weekday) { item in
                         let isSelected = settings.isPaidHolidayWeekday(weekday: item.weekday)
                         Button {
@@ -1652,8 +1950,15 @@ private enum MonthExportPreviewContent {
     case pdf(URL)
 }
 
+private enum MonthExportFormat {
+    case csv
+    case text
+    case pdf
+}
+
 private struct MonthExportPreview: Identifiable {
     let id = UUID()
+    let format: MonthExportFormat
     let title: String
     let subtitle: String
     let detail: String
@@ -1664,9 +1969,15 @@ private struct MonthExportPreview: Identifiable {
 private struct MonthExportPreviewSheet: View {
     @Environment(\.dismiss) private var dismiss
 
-    let preview: MonthExportPreview
+    let accent: Color
 
+    @State private var preview: MonthExportPreview
     @State private var showShare = false
+
+    init(preview: MonthExportPreview, accent: Color) {
+        self.accent = accent
+        self._preview = State(initialValue: preview)
+    }
 
     var body: some View {
         NavigationStack {
@@ -1680,16 +1991,6 @@ private struct MonthExportPreviewSheet: View {
             }
             .navigationTitle(preview.title)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .accessibilityLabel("Schließen")
-                }
-            }
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
@@ -1733,10 +2034,6 @@ private struct MonthExportPreviewSheet: View {
 
     private var shareBar: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 20){
-                
-            }
-            Divider()
             Button {
                 showShare = true
             } label: {
@@ -1744,9 +2041,18 @@ private struct MonthExportPreviewSheet: View {
                     .font(.headline.weight(.semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
+                    .foregroundStyle(preview.shareItems.isEmpty ? Color.secondary : accent)
+                    .payScopeGlassControl(
+                        accent: preview.shareItems.isEmpty ? Color.secondary : accent,
+                        cornerRadius: 15,
+                        tintOpacity: preview.shareItems.isEmpty ? 0.035 : 0.115,
+                        isInteractive: !preview.shareItems.isEmpty
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.plain)
             .disabled(preview.shareItems.isEmpty)
+            .opacity(preview.shareItems.isEmpty ? 0.58 : 1)
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
@@ -1779,34 +2085,71 @@ private struct PDFPreviewView: UIViewRepresentable {
 private struct ExportFormatButton: View {
     let title: String
     let systemImage: String
+    let accent: Color
     let isDisabled: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 7) {
+            let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+            let controlAccent = isDisabled ? Color.secondary : accent
+
+            VStack(spacing: 6) {
                 Image(systemName: systemImage)
-                    .font(.title3.weight(.semibold))
+                    .font(.system(size: 19, weight: .semibold))
+                    .frame(width: 44, height: 44)
+                    .foregroundStyle(isDisabled ? Color.secondary : accent.opacity(0.82))
+
                 Text(title)
-                    .font(.caption.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
+                    .foregroundStyle(isDisabled ? .secondary : .primary)
             }
-            .frame(maxWidth: .infinity, minHeight: 74)
-            .foregroundStyle(isDisabled ? .secondary : Color.accentColor)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(.secondarySystemGroupedBackground))
+            .frame(maxWidth: .infinity, minHeight: 78)
+            .padding(.vertical, 8)
+            .payScopeGlassControl(
+                accent: controlAccent,
+                cornerRadius: 14,
+                tintOpacity: isDisabled ? 0.035 : 0.095,
+                isInteractive: !isDisabled
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.accentColor.opacity(isDisabled ? 0.12 : 0.26), lineWidth: 1)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(shape)
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.55 : 1)
+    }
+}
+
+private struct ExportOptionToggleButton: View {
+    let title: String
+    let systemImage: String
+    let accent: Color
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.semibold))
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+            .frame(maxWidth: .infinity, minHeight: 34)
+            .foregroundStyle(isOn ? accent : Color.secondary)
+            .payScopeGlassControl(
+                accent: accent,
+                cornerRadius: 17,
+                tintOpacity: isOn ? 0.105 : 0.035
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1826,7 +2169,11 @@ private struct ExportSettingsView: View {
     @State private var isSavingImportRows = false
     @State private var isPreparingExport = false
     @State private var exportErrorMessage: String?
-    @State private var exportOptions = MonthExportOptions()
+    @AppStorage("payscope.export.options.includeShiftTimes") private var includeShiftTimesInExport = true
+    @AppStorage("payscope.export.options.includeBreaks") private var includeBreaksInExport = true
+    @AppStorage("payscope.export.options.includePay") private var includePayInExport = true
+    @AppStorage("payscope.export.options.includeTips") private var includeTipsInExport = true
+    @AppStorage("payscope.export.options.includeNotesAndWarnings") private var includeNotesAndWarningsInExport = true
 
     private let csvExporter = CSVExporter()
     private let textExporter = ShiftTextExporter()
@@ -1845,31 +2192,34 @@ private struct ExportSettingsView: View {
 
     var body: some View {
         Form {
-            Section(header: Text("Zeitraum"), footer: Text("Wähle links den Monat und rechts das Jahr.")) {
+            Section(header: Text("Export")) {
                 exportWheelPickers
                     .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
+                exportOptionButtons
+                    .listRowInsets(EdgeInsets(top: 12, leading: 15, bottom: 15, trailing: 12))
             }
-
             
-
-            Section(header: Text("Dateiart"), footer: Text("Erstellt eine Vorschau, die danach geteilt werden kann.")) {
-                HStack(spacing: 10) {
-                    ExportFormatButton(title: "CSV", systemImage: "tablecells", isDisabled: isPreparingExport) {
+            
+            
+            Section( footer: Text("Exportiere deine Monatsdaten in verschiedenen Formaten.")) {
+                HStack(spacing: 12) {
+                    ExportFormatButton(title: "CSV", systemImage: "tablecells", accent: settings.themeAccent.color, isDisabled: isPreparingExport) {
                         Task { await previewCSVExport() }
                     }
-                    ExportFormatButton(title: "Text", systemImage: "doc.text", isDisabled: isPreparingExport) {
+                    ExportFormatButton(title: "Text", systemImage: "doc.text", accent: settings.themeAccent.color, isDisabled: isPreparingExport) {
                         Task { await previewTextExport() }
                     }
-                    ExportFormatButton(title: "PDF", systemImage: "doc.richtext", isDisabled: isPreparingExport) {
+                    ExportFormatButton(title: "PDF", systemImage: "doc.richtext", accent: settings.themeAccent.color, isDisabled: isPreparingExport) {
                         Task { await previewPDFExport() }
                     }
                 }
-                .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
-
+                .padding(.top, 6)
+                .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 10, trailing: 12))
+                
                 
             }
-
-            Section(header: Text("CSV-Import"), footer: Text("Der Import garantiert keine Datenverluste.")) {
+            
+            Section(header: Text("CSV-Import"), footer: Text("Importiere und bearbeite Schichten aus CSV-Dateien.")) {
                 Button("CSV auswählen") {
                     showFileImporter = true
                 }
@@ -1887,9 +2237,10 @@ private struct ExportSettingsView: View {
                 }
             }
         }
-        .navigationTitle("Export")
+        .navigationTitle("Export & Import")
         .sheet(item: $exportPreview) { preview in
-            MonthExportPreviewSheet(preview: preview)
+            MonthExportPreviewSheet(preview: preview, accent: settings.themeAccent.color)
+                .payScopeSheetSurface(accent: settings.themeAccent.color)
         }
         .fileImporter(
             isPresented: $showFileImporter,
@@ -1903,7 +2254,47 @@ private struct ExportSettingsView: View {
                 isSaving: isSavingImportRows,
                 onSave: { await saveImportedRows() }
             )
+            .payScopeSheetSurface(accent: settings.themeAccent.color)
         }
+    }
+
+    private var exportOptionButtons: some View {
+        HStack(alignment: .center, spacing: 8) {
+            ExportOptionToggleButton(
+                title: "Zeiten",
+                systemImage: "clock",
+                accent: settings.themeAccent.color,
+                isOn: $includeShiftTimesInExport
+            )
+            ExportOptionToggleButton(
+                title: "Pause",
+                systemImage: "pause.circle",
+                accent: settings.themeAccent.color,
+                isOn: $includeBreaksInExport
+            )
+            ExportOptionToggleButton(
+                title: "Lohn",
+                systemImage: "eurosign.circle",
+                accent: settings.themeAccent.color,
+                isOn: $includePayInExport
+            )
+            ExportOptionToggleButton(
+                title: "Trinkgeld",
+                systemImage: "sparkles",
+                accent: settings.themeAccent.color,
+                isOn: $includeTipsInExport
+            )
+        }
+    }
+
+    private var exportOptions: MonthExportOptions {
+        MonthExportOptions(
+            includeShiftTimes: includeShiftTimesInExport,
+            includeBreaks: includeBreaksInExport,
+            includePay: includePayInExport,
+            includeTips: includeTipsInExport,
+            includeNotesAndWarnings: includeNotesAndWarningsInExport
+        )
     }
 
     private var exportWheelPickers: some View {
@@ -1974,60 +2365,77 @@ private struct ExportSettingsView: View {
     @MainActor
     private func previewCSVExport() async {
         await prepareExportPreview {
-            let data = await loadExportData()
-            let payload = csvExporter.csvForMonth(
-                entries: data.entries,
-                tips: data.tips,
-                month: selectedExportMonthDate,
-                settings: settings,
-                options: exportOptions
-            )
-            return MonthExportPreview(
-                title: "CSV-Vorschau",
-                subtitle: Self.monthYearFormatter.string(from: selectedExportMonthDate),
-                detail: "Monatsübersicht als CSV",
-                content: .text(payload, isMonospaced: true),
-                shareItems: payload.isEmpty ? [] : [payload]
-            )
+            try await makeExportPreview(options: exportOptions, format: .csv)
         }
     }
 
     @MainActor
     private func previewTextExport() async {
         await prepareExportPreview {
-            let data = await loadExportData()
-            let payload = textExporter.textForMonth(
-                entries: data.entries,
-                tips: data.tips,
-                month: selectedExportMonthDate,
-                settings: settings,
-                options: exportOptions
-            )
-            return MonthExportPreview(
-                title: "Text-Vorschau",
-                subtitle: Self.monthYearFormatter.string(from: selectedExportMonthDate),
-                detail: "Monatsübersicht als Text",
-                content: .text(payload, isMonospaced: false),
-                shareItems: [payload]
-            )
+            try await makeExportPreview(options: exportOptions, format: .text)
         }
     }
 
     @MainActor
     private func previewPDFExport() async {
         await prepareExportPreview {
+            try await makeExportPreview(options: exportOptions, format: .pdf)
+        }
+    }
+
+    private func makeExportPreview(options: MonthExportOptions, format: MonthExportFormat) async throws -> MonthExportPreview {
+        switch format {
+        case .csv:
+            let data = await loadExportData()
+            let payload = csvExporter.csvForMonth(
+                entries: data.entries,
+                tips: data.tips,
+                month: selectedExportMonthDate,
+                settings: settings,
+                options: options
+            )
+            return MonthExportPreview(
+                format: .csv,
+                title: "CSV-Vorschau",
+                subtitle: Self.monthYearFormatter.string(from: selectedExportMonthDate),
+                detail: "Monatsübersicht als CSV",
+                content: .text(payload, isMonospaced: true),
+                shareItems: payload.isEmpty ? [] : [payload]
+            )
+        case .text:
+            let data = await loadExportData()
+            let payload = textExporter.textForMonth(
+                entries: data.entries,
+                tips: data.tips,
+                month: selectedExportMonthDate,
+                settings: settings,
+                options: options
+            )
+            return MonthExportPreview(
+                format: .text,
+                title: "Text-Vorschau",
+                subtitle: Self.monthYearFormatter.string(from: selectedExportMonthDate),
+                detail: "Monatsübersicht als Text",
+                content: .text(payload, isMonospaced: false),
+                shareItems: [payload]
+            )
+        case .pdf:
             let data = await loadExportData()
             let url = try pdfExporter.pdfURLForMonth(
                 entries: data.entries,
                 tips: data.tips,
                 month: selectedExportMonthDate,
                 settings: settings,
-                options: exportOptions
+                options: options
             )
             return MonthExportPreview(
+                format: .pdf,
                 title: "PDF-Vorschau",
                 subtitle: Self.monthYearFormatter.string(from: selectedExportMonthDate),
-                detail: "Monatsübersicht als PDF",
+                detail: {
+                    let pageCount = PDFDocument(url: url)?.pageCount ?? 0
+                    return pageCount > 0 ? "\(pageCount) Seiten" : "PDF"
+                }(),
                 content: .pdf(url),
                 shareItems: [url]
             )
@@ -2481,9 +2889,93 @@ private struct SettingsMenuRow: View {
 private struct ShiftShortcutRange {
     var startMinute: Int
     var endMinute: Int
+    var payload: ShiftShortcutRangePayload? = nil
+
+    var displayRange: String {
+        let range = ShiftTimeRange(startMinute: startMinute, endMinuteOffset: endMinute)
+        return range?.displayRange() ?? "\(formatMinute(startMinute)) - \(formatMinute(endMinute))"
+    }
+
+    var rawValue: String {
+        guard var payload else {
+            return "\(startMinute)-\(endMinute)"
+        }
+
+        payload.startMinute = startMinute
+        payload.endMinute = endMinute
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(payload),
+              let string = String(data: data, encoding: .utf8) else {
+            return "\(startMinute)-\(endMinute)"
+        }
+        return string
+    }
 }
 
-private struct ShiftShortcutRangePayload: Decodable {
+private struct ShiftShortcutEditDraft: Identifiable {
+    var index: Int
+    var title: String
+    var name: String
+    var startMinute: Int
+    var endMinute: Int
+    var payload: ShiftShortcutRangePayload?
+    var defaultRange: ShiftShortcutRange
+
+    var id: Int { index }
+}
+
+private struct ShiftShortcutRangePayload: Codable {
+    var startMinute: Int
+    var endMinute: Int
+    var dayTypeRaw: String?
+    var segments: [ShiftShortcutRangeSegment]
+    var breakMinutes: Int
+    var manualWorkedSeconds: Int?
+    var creditedOverrideSeconds: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case startMinute
+        case endMinute
+        case dayTypeRaw
+        case segments
+        case breakMinutes
+        case manualWorkedSeconds
+        case creditedOverrideSeconds
+    }
+
+    init(
+        startMinute: Int,
+        endMinute: Int,
+        dayTypeRaw: String? = nil,
+        segments: [ShiftShortcutRangeSegment] = [],
+        breakMinutes: Int = 0,
+        manualWorkedSeconds: Int? = nil,
+        creditedOverrideSeconds: Int? = nil
+    ) {
+        self.startMinute = startMinute
+        self.endMinute = endMinute
+        self.dayTypeRaw = dayTypeRaw
+        self.segments = segments
+        self.breakMinutes = breakMinutes
+        self.manualWorkedSeconds = manualWorkedSeconds
+        self.creditedOverrideSeconds = creditedOverrideSeconds
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        startMinute = try container.decode(Int.self, forKey: .startMinute)
+        endMinute = try container.decode(Int.self, forKey: .endMinute)
+        dayTypeRaw = try container.decodeIfPresent(String.self, forKey: .dayTypeRaw)
+        segments = try container.decodeIfPresent([ShiftShortcutRangeSegment].self, forKey: .segments) ?? []
+        breakMinutes = try container.decodeIfPresent(Int.self, forKey: .breakMinutes) ?? 0
+        manualWorkedSeconds = try container.decodeIfPresent(Int.self, forKey: .manualWorkedSeconds)
+        creditedOverrideSeconds = try container.decodeIfPresent(Int.self, forKey: .creditedOverrideSeconds)
+    }
+}
+
+private struct ShiftShortcutRangeSegment: Codable, Equatable {
     let startMinute: Int
     let endMinute: Int
 }
@@ -2505,7 +2997,8 @@ private func parseShiftShortcutRange(raw: String) -> ShiftShortcutRange? {
         return clampShiftShortcutRange(
             ShiftShortcutRange(
                 startMinute: payload.startMinute,
-                endMinute: payload.endMinute
+                endMinute: payload.endMinute,
+                payload: payload
             )
         )
     }
@@ -2529,7 +3022,7 @@ private func clampShiftShortcutRange(_ range: ShiftShortcutRange) -> ShiftShortc
         : range.endMinute
     let upperEnd = min(ShiftTimeRange.maxEndMinuteOffset, clampedStart + ShiftTimeRange.maxDurationMinutes)
     let clampedEnd = max(clampedStart + 15, min(upperEnd, normalizedEnd))
-    return ShiftShortcutRange(startMinute: clampedStart, endMinute: clampedEnd)
+    return ShiftShortcutRange(startMinute: clampedStart, endMinute: clampedEnd, payload: range.payload)
 }
 
 private func parseMoneyToCents(_ text: String) -> Int? {
@@ -2556,4 +3049,38 @@ private extension String {
     var nilIfEmpty: String? {
         isEmpty ? nil : self
     }
+}
+
+
+#Preview("Settings") {
+    let settings = Settings(
+        hasCompletedOnboarding: true,
+        payMode: .hourly,
+        hourlyRateCents: 1450,
+        weeklyTargetSeconds: 20 * 3600,
+        holidayFixedSeconds: 8 * 3600,
+        scheduledWorkdaysCount: 5,
+        themeAccent: .teal,
+        showCalendarWeekNumbers: true,
+        showLiveActivity: true,
+        shiftShortcut1: "540-1020",
+        shiftShortcut2: "720-1080",
+        shiftShortcut3: "1080-1440",
+        shiftShortcutName1: "Früh",
+        shiftShortcutName2: "Mitte",
+        shiftShortcutName3: "Spät"
+    )
+
+    SettingsTabView(settings: settings)
+        .environmentObject(CloudKitService.shared)
+        .modelContainer(
+            for: [
+                Settings.self,
+                DayEntry.self,
+                HolidayCalendarDay.self,
+                NetWageMonthConfig.self,
+                TimeSegment.self
+            ],
+            inMemory: true
+        )
 }

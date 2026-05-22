@@ -153,7 +153,7 @@ struct MenuBarIconView: View {
     ) -> Int {
         switch day.type {
         case .work, .manual:
-            return workedSeconds(for: day, includeBreak: settings.effectiveCalendarHoursBreakMode == .withBreak)
+            return workedSeconds(for: day, includeBreak: shouldIncludeBreaks(in: settings))
         case .vacation:
             if let overrideSeconds = day.creditedOverrideSeconds {
                 return max(0, overrideSeconds)
@@ -273,7 +273,11 @@ struct MenuBarIconView: View {
             )
         }
 
-        return workedSeconds(for: day, includeBreak: settings.effectiveCalendarHoursBreakMode == .withBreak)
+        return workedSeconds(for: day, includeBreak: shouldIncludeBreaks(in: settings))
+    }
+
+    private func shouldIncludeBreaks(in settings: Settings) -> Bool {
+        !settings.effectiveCalculateBreaks || settings.effectiveCalendarHoursBreakMode == .withBreak
     }
 
     private func canDeriveCreditedReferenceValue(for day: CloudSnapshot.DayEntryPayload, settings: Settings) -> Bool {
@@ -324,6 +328,7 @@ struct MenuBarIconView: View {
         resolved.vacationFixedSeconds = payload.vacationFixedSeconds
         resolved.countMissingAsZero = payload.countMissingAsZero
         resolved.strictHistoryRequired = payload.strictHistoryRequired
+        resolved.calculateBreaks = payload.calculateBreaks
         resolved.holidayCreditingMode = payload.holidayCreditingMode
         resolved.holidayFixedSeconds = payload.holidayFixedSeconds
         resolved.scheduledWorkdaysCount = payload.scheduledWorkdaysCount

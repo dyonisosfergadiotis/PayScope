@@ -35,7 +35,7 @@ struct CSVExporter {
 
             let workedSeconds: Int
             let workedPay: Int
-            switch service.workedSeconds(for: entry) {
+            switch service.workedSeconds(for: entry, calculateBreaks: settings.effectiveCalculateBreaks) {
             case let .success(seconds):
                 workedSeconds = seconds
                 workedPay = service.payCents(for: seconds, settings: settings)
@@ -68,9 +68,11 @@ struct CSVExporter {
                 fields.append(contentsOf: [
                     shiftColumns.start,
                     shiftColumns.end,
-                    shiftColumns.endDayOffset,
-                    shiftColumns.breakMinutes
+                    shiftColumns.endDayOffset
                 ])
+            }
+            if options.includeBreaks {
+                fields.append(shiftColumns.breakMinutes)
             }
             fields.append(contentsOf: [
                 shiftColumns.type,
@@ -86,10 +88,6 @@ struct CSVExporter {
             if options.includeTips {
                 fields.append("")
             }
-            if options.includeNotesAndWarnings {
-                fields.append(entry.notes)
-            }
-
             let row = fields.map(Self.csvField).joined(separator: ",")
             lines.append(row)
         }
@@ -113,9 +111,11 @@ struct CSVExporter {
             columns.append(contentsOf: [
                 "start",
                 "end",
-                "endDayOffset",
-                "breakMinutes"
+                "endDayOffset"
             ])
+        }
+        if options.includeBreaks {
+            columns.append("breakMinutes")
         }
         columns.append(contentsOf: [
             "type",
@@ -131,9 +131,6 @@ struct CSVExporter {
         if options.includeTips {
             columns.append("tipAmount")
         }
-        if options.includeNotesAndWarnings {
-            columns.append("notes")
-        }
         return columns.joined(separator: ",")
     }
 
@@ -144,11 +141,13 @@ struct CSVExporter {
         ]
         if options.includeShiftTimes {
             fields.append(contentsOf: [
-                "",
-                "",
-                "",
-                ""
+                "-",
+                "-",
+                "-"
             ])
+        }
+        if options.includeBreaks {
+            fields.append("-")
         }
         fields.append(contentsOf: [
             "tip",
@@ -162,9 +161,6 @@ struct CSVExporter {
             fields.append("")
         }
         fields.append(String(format: "%.2f", Double(tip.amountCents) / 100))
-        if options.includeNotesAndWarnings {
-            fields.append("Trinkgeld")
-        }
         return fields
     }
 

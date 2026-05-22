@@ -10,6 +10,62 @@ import ActivityKit
 import SwiftUI
 import WidgetKit
 
+struct PayScopeStartShiftControl: ControlWidget {
+    static let kind = "DyonisosFergadiotis.PayScope.controls.startShift"
+
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: Self.kind) {
+            ControlWidgetButton(action: StartShiftControlIntent()) {
+                Label("Schicht starten", systemImage: "briefcase.fill")
+            }
+        }
+        .displayName("Schicht starten")
+        .description("Startet die heutige Schicht in PayScope.")
+    }
+}
+
+struct PayScopeEndShiftControl: ControlWidget {
+    static let kind = "DyonisosFergadiotis.PayScope.controls.endShift"
+
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: Self.kind) {
+            ControlWidgetButton(action: EndShiftControlIntent()) {
+                Label("Schicht beenden", systemImage: "checkmark.circle.fill")
+            }
+        }
+        .displayName("Schicht beenden")
+        .description("Beendet die aktuell laufende Schicht in PayScope.")
+    }
+}
+
+struct PayScopeAddTipControl: ControlWidget {
+    static let kind = "DyonisosFergadiotis.PayScope.controls.addTip"
+
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: Self.kind) {
+            ControlWidgetButton(action: AddTipControlIntent()) {
+                Label("Trinkgeld", systemImage: "eurosign.circle.fill")
+            }
+        }
+        .displayName("Trinkgeld hinzufügen")
+        .description("Fragt nach dem genommenen Trinkgeld und fügt es in PayScope hinzu.")
+    }
+}
+
+struct PayScopeMarkTodaySickControl: ControlWidget {
+    static let kind = "DyonisosFergadiotis.PayScope.controls.markTodaySick"
+
+    var body: some ControlWidgetConfiguration {
+        StaticControlConfiguration(kind: Self.kind) {
+            ControlWidgetButton(action: MarkTodaySickControlIntent()) {
+                Label("Krank", systemImage: "cross.case.fill")
+            }
+        }
+        .displayName("Heute krank markieren")
+        .description("Markiert den heutigen Tag in PayScope als krank.")
+    }
+}
+
 struct PayScope_WidgetsControl: ControlWidget {
     static let kind: String = "DyonisosFergadiotis.PayScope.PayScope Widgets"
 
@@ -122,6 +178,97 @@ struct StartTimerIntent: SetValueIntent {
         for activity in Activity<PayScope_WidgetsAttributes>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
+    }
+}
+
+private enum PayScopeControlCenterActionKind: String, Codable {
+    case startShift
+    case endShift
+    case addTip
+    case markTodaySick
+}
+
+private struct PayScopeControlCenterAction: Codable {
+    var id: String
+    var kind: PayScopeControlCenterActionKind
+    var amountEuro: Double?
+}
+
+private enum PayScopeControlCenterActionStore {
+    private static let appGroupIdentifier = "group.DyonisosFergadiotis.PayScope"
+    private static let pendingActionKey = "payscope.controlCenter.pendingAction.v1"
+
+    static func savePendingAction(kind: PayScopeControlCenterActionKind, amountEuro: Double? = nil) {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
+
+        let action = PayScopeControlCenterAction(
+            id: UUID().uuidString,
+            kind: kind,
+            amountEuro: amountEuro
+        )
+        guard let data = try? JSONEncoder().encode(action) else { return }
+
+        defaults.set(data, forKey: pendingActionKey)
+    }
+}
+
+private struct StartShiftControlIntent: AppIntent {
+    static var title: LocalizedStringResource { "Schicht starten" }
+    static var description: IntentDescription {
+        IntentDescription("Startet die heutige Schicht in PayScope.")
+    }
+    static var openAppWhenRun: Bool { true }
+
+    func perform() async throws -> some IntentResult {
+        PayScopeControlCenterActionStore.savePendingAction(kind: .startShift)
+        return .result()
+    }
+}
+
+private struct EndShiftControlIntent: AppIntent {
+    static var title: LocalizedStringResource { "Schicht beenden" }
+    static var description: IntentDescription {
+        IntentDescription("Beendet die aktuell laufende Schicht in PayScope.")
+    }
+    static var openAppWhenRun: Bool { true }
+
+    func perform() async throws -> some IntentResult {
+        PayScopeControlCenterActionStore.savePendingAction(kind: .endShift)
+        return .result()
+    }
+}
+
+private struct AddTipControlIntent: AppIntent {
+    static var title: LocalizedStringResource { "Trinkgeld hinzufügen" }
+    static var description: IntentDescription {
+        IntentDescription("Fügt für heute Trinkgeld in PayScope hinzu.")
+    }
+    static var openAppWhenRun: Bool { true }
+
+    @Parameter(
+        title: "Betrag in Euro",
+        requestValueDialog: "Wie viel Trinkgeld wurde genommen?"
+    )
+    var amount: Double
+
+    init() {}
+
+    func perform() async throws -> some IntentResult {
+        PayScopeControlCenterActionStore.savePendingAction(kind: .addTip, amountEuro: amount)
+        return .result()
+    }
+}
+
+private struct MarkTodaySickControlIntent: AppIntent {
+    static var title: LocalizedStringResource { "Heute krank markieren" }
+    static var description: IntentDescription {
+        IntentDescription("Markiert den heutigen Tag in PayScope als krank.")
+    }
+    static var openAppWhenRun: Bool { true }
+
+    func perform() async throws -> some IntentResult {
+        PayScopeControlCenterActionStore.savePendingAction(kind: .markTodaySick)
+        return .result()
     }
 }
 

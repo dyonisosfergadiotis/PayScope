@@ -35,6 +35,7 @@ enum CloudKitReadRecordKeys {
         case vacationFixedSeconds
         case countMissingAsZero
         case strictHistoryRequired
+        case calculateBreaks
         case holidayCreditingMode
         case holidayFixedSeconds
         case scheduledWorkdaysCount
@@ -104,6 +105,7 @@ struct CloudSnapshot: Codable, Equatable {
         let vacationFixedSeconds: Int?
         let countMissingAsZero: Bool
         let strictHistoryRequired: Bool
+        let calculateBreaks: Bool?
         let holidayCreditingMode: HolidayCreditingMode
         let holidayFixedSeconds: Int?
         let scheduledWorkdaysCount: Int
@@ -282,7 +284,6 @@ actor CloudKitReadService {
             let updatedAt = (record[CloudKitReadRecordKeys.DayEntry.updatedAt.rawValue] as? Date)
                 ?? record.modificationDate
                 ?? date
-            let notes = record[CloudKitReadRecordKeys.DayEntry.notes.rawValue] as? String ?? ""
             var manualWorkedSeconds = (record[CloudKitReadRecordKeys.DayEntry.manualWorkedSeconds.rawValue] as? NSNumber)?.intValue
             var creditedOverrideSeconds = (record[CloudKitReadRecordKeys.DayEntry.creditedOverrideSeconds.rawValue] as? NSNumber)?.intValue
             let alwaysApplyFifteenMinuteBuffer = (record[
@@ -338,7 +339,7 @@ actor CloudKitReadService {
                 date: date,
                 updatedAt: updatedAt,
                 type: type,
-                notes: notes,
+                notes: "",
                 manualWorkedSeconds: manualWorkedSeconds,
                 creditedOverrideSeconds: creditedOverrideSeconds,
                 shiftStart: shiftStart,
@@ -562,6 +563,7 @@ actor CloudKitReadService {
         let vacationFixedSeconds = (record[CloudKitReadRecordKeys.Settings.vacationFixedSeconds.rawValue] as? NSNumber)?.intValue
         let countMissingAsZero = (record[CloudKitReadRecordKeys.Settings.countMissingAsZero.rawValue] as? NSNumber)?.boolValue ?? true
         let strictHistoryRequired = (record[CloudKitReadRecordKeys.Settings.strictHistoryRequired.rawValue] as? NSNumber)?.boolValue ?? true
+        let calculateBreaks = (record[CloudKitReadRecordKeys.Settings.calculateBreaks.rawValue] as? NSNumber)?.boolValue
         let holidayCreditingMode = HolidayCreditingMode(rawValue: record[CloudKitReadRecordKeys.Settings.holidayCreditingMode.rawValue] as? String ?? "")
             ?? .fixedValue
         let holidayFixedSeconds = (record[CloudKitReadRecordKeys.Settings.holidayFixedSeconds.rawValue] as? NSNumber)?.intValue
@@ -594,6 +596,7 @@ actor CloudKitReadService {
             vacationFixedSeconds: vacationFixedSeconds,
             countMissingAsZero: countMissingAsZero,
             strictHistoryRequired: strictHistoryRequired,
+            calculateBreaks: calculateBreaks,
             holidayCreditingMode: holidayCreditingMode,
             holidayFixedSeconds: holidayFixedSeconds,
             scheduledWorkdaysCount: scheduledWorkdaysCount,

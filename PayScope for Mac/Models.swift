@@ -132,7 +132,7 @@ enum ThemeAccent: String, Codable, CaseIterable, Identifiable {
         case .green: return .green
         case .purple: return .purple
         case .orange: return .orange
-        case .pink: return .pink
+        case .pink: return Color(red: 1.0, green: 0.36, blue: 0.64)
         case .teal: return .teal
         case .red: return .red
         case .indigo: return .indigo
@@ -158,6 +158,9 @@ enum CalendarCellDisplayMode: String, Codable, CaseIterable, Identifiable {
     case dot
     case hours
     case pay
+    case startTime
+    case endTime
+    case startAndEndTime
 
     var id: String { rawValue }
 
@@ -166,6 +169,9 @@ enum CalendarCellDisplayMode: String, Codable, CaseIterable, Identifiable {
         case .dot: return "Icon"
         case .hours: return "Stunden"
         case .pay: return "Geld"
+        case .startTime: return "Startzeit"
+        case .endTime: return "Endzeit"
+        case .startAndEndTime: return "Start & Ende"
         }
     }
 }
@@ -222,7 +228,7 @@ final class DayEntry {
     ) {
         self.date = date.startOfDayUTC()
         self.type = type
-        self.notes = notes
+        self.notes = ""
         self.segments = segments
         self.manualWorkedSeconds = manualWorkedSeconds
         self.creditedOverrideSeconds = creditedOverrideSeconds
@@ -250,6 +256,7 @@ final class Settings {
     var vacationFixedSeconds: Int?
     var countMissingAsZero: Bool = true
     var strictHistoryRequired: Bool = true
+    var calculateBreaks: Bool?
     var holidayCreditingMode: HolidayCreditingMode = HolidayCreditingMode.fixedValue
     var holidayFixedSeconds: Int?
     var scheduledWorkdaysCount: Int = 5
@@ -281,6 +288,7 @@ final class Settings {
         vacationFixedSeconds: Int? = nil,
         countMissingAsZero: Bool = true,
         strictHistoryRequired: Bool = true,
+        calculateBreaks: Bool = true,
         holidayCreditingMode: HolidayCreditingMode = .fixedValue,
         holidayFixedSeconds: Int? = nil,
         scheduledWorkdaysCount: Int = 5,
@@ -311,6 +319,7 @@ final class Settings {
         self.vacationFixedSeconds = vacationFixedSeconds.map { max(0, $0) }
         self.countMissingAsZero = countMissingAsZero
         self.strictHistoryRequired = strictHistoryRequired
+        self.calculateBreaks = calculateBreaks
         self.holidayCreditingMode = holidayCreditingMode
         self.holidayFixedSeconds = holidayFixedSeconds.map { max(0, $0) }
         self.scheduledWorkdaysCount = min(max(scheduledWorkdaysCount, 1), 7)
@@ -369,6 +378,10 @@ extension Settings {
 
     var effectiveCalendarHoursBreakMode: CalendarHoursBreakMode {
         calendarHoursBreakMode ?? .withoutBreak
+    }
+
+    var effectiveCalculateBreaks: Bool {
+        calculateBreaks ?? true
     }
 
     var effectiveShowCalendarWeekNumbers: Bool {

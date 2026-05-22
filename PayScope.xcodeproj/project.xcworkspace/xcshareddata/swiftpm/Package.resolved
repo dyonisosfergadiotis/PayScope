@@ -1,5 +1,5 @@
 {
-  "originHash" : "d54a2246b83d1dbd9cff8149febec1305eff032e524f709980a4ffc4f1259a89",
+  "originHash" : "ccace1aae312d1911a476378ffa7fedc156de07d4b00adac8c5e78f7da99cc3d",
   "pins" : [
     {
       "identity" : "fabbar",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "4f05fc7815fc676683807574fec4a826f49588da",
         "version" : "1.1.0"
+      }
+    },
+    {
+      "identity" : "notelet",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mykolaharmash/notelet",
+      "state" : {
+        "branch" : "main",
+        "revision" : "07d1fdbe71f9c9bd498d0655116cc4ddff8d4aac"
       }
     }
   ],

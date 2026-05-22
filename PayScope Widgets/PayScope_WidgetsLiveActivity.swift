@@ -126,6 +126,23 @@ struct PayScope_WidgetsInlineLockScreen: Widget {
     }
 }
 
+struct PayScope_CurrentShiftCardWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(
+            kind: "PayScopeCurrentShiftCardWidget",
+            provider: PayScopeRectangularProvider()
+        ) { entry in
+            PayScopeCurrentShiftCardContent(entry: entry)
+                .containerBackground(for: .widget) {
+                    Color.clear
+                }
+        }
+        .configurationDisplayName("Aktuelle Schicht")
+        .description("Zeigt deine aktuelle oder nächste Schicht als kompakte PayScope-Karte.")
+        .supportedFamilies([.systemSmall, .systemMedium])
+    }
+}
+
 private enum PayScopeRectangularSharedStore {
     static let appGroupIdentifier = "group.DyonisosFergadiotis.PayScope"
     static let snapshotKey = "payscope.rectangularWidgetSnapshot.v1"
@@ -139,6 +156,9 @@ struct PayScopeRectangularSnapshot: Codable {
     let shiftStart: Date?
     let shiftEnd: Date?
     let shiftDurationSeconds: Int
+    let workedReferenceStart: Date?
+    let workedTodaySeconds: Int?
+    let completedPayCents: Int?
     let nextShiftStart: Date?
     let isAllDayStatus: Bool?
     let allDayYear: Int?
@@ -301,6 +321,9 @@ extension PayScopeRectangularEntry {
                 shiftStart: start,
                 shiftEnd: end,
                 shiftDurationSeconds: 8 * 3600,
+                workedReferenceStart: start,
+                workedTodaySeconds: 2 * 3600,
+                completedPayCents: 3400,
                 nextShiftStart: nil,
                 isAllDayStatus: nil,
                 allDayYear: nil,
@@ -324,6 +347,9 @@ extension PayScopeRectangularEntry {
                 shiftStart: nextShift,
                 shiftEnd: nextShiftEnd,
                 shiftDurationSeconds: 8 * 3600,
+                workedReferenceStart: nil,
+                workedTodaySeconds: nil,
+                completedPayCents: nil,
                 nextShiftStart: followingShift,
                 isAllDayStatus: nil,
                 allDayYear: nil,
@@ -344,6 +370,9 @@ extension PayScopeRectangularEntry {
                 shiftStart: nil,
                 shiftEnd: nil,
                 shiftDurationSeconds: 0,
+                workedReferenceStart: nil,
+                workedTodaySeconds: nil,
+                completedPayCents: nil,
                 nextShiftStart: nil,
                 isAllDayStatus: nil,
                 allDayYear: nil,
@@ -365,6 +394,9 @@ extension PayScopeRectangularEntry {
                 shiftStart: nil,
                 shiftEnd: nil,
                 shiftDurationSeconds: 0,
+                workedReferenceStart: nil,
+                workedTodaySeconds: nil,
+                completedPayCents: nil,
                 nextShiftStart: Calendar.current.date(byAdding: .day, value: 1, to: date),
                 isAllDayStatus: true,
                 allDayYear: dayComponents.year,
@@ -387,6 +419,9 @@ extension PayScopeRectangularEntry {
                 shiftStart: start,
                 shiftEnd: end,
                 shiftDurationSeconds: 123 * 3600 + 45 * 60,
+                workedReferenceStart: start,
+                workedTodaySeconds: 123 * 3600 + 15 * 60,
+                completedPayCents: 209525,
                 nextShiftStart: nil,
                 isAllDayStatus: nil,
                 allDayYear: nil,
@@ -692,6 +727,263 @@ private struct PayScopeInlineLockScreenContent: View {
             Text("Keine Schicht geplant")
                 .lineLimit(1)
         }
+    }
+}
+
+private struct PayScopeCurrentShiftCardContent: View {
+    @Environment(\.widgetFamily) private var family
+
+    let entry: PayScopeRectangularEntry
+
+    private var accent: Color {
+        liveAccentColor(from: entry.snapshot.themeAccentRawValue)
+    }
+
+    private var icon: String {
+        entry.snapshot.shiftCategoryIcon ?? "briefcase.fill"
+    }
+
+    private var title: String {
+        entry.snapshot.shiftCategoryTitle ?? "Arbeit"
+    }
+
+    var body: some View {
+        TimelineView(.periodic(from: entry.date, by: 60)) { timeline in
+            cardContent(at: timeline.date)
+                .padding(family == .systemSmall ? 14 : 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background {
+                    RoundedRectangle(cornerRadius: family == .systemSmall ? 26 : 30, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: family == .systemSmall ? 26 : 30, style: .continuous))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: family == .systemSmall ? 26 : 30, style: .continuous)
+                        .strokeBorder(.white.opacity(0.22), lineWidth: 0.8)
+                }
+                .padding(6)
+        }
+    }
+
+    @ViewBuilder
+    private func cardContent(at now: Date) -> some View {
+        if isActive(at: now) {
+            activeShiftCard(at: now)
+        } else if isAllDayStatus(at: now) {
+            allDayCard
+        } else if let nextStart = nextShiftStartForDisplay(at: now) {
+            upcomingShiftCard(start: nextStart)
+        } else {
+            emptyCard
+        }
+    }
+
+    private func activeShiftCard(at now: Date) -> some View {
+        VStack(alignment: .leading, spacing: family == .systemSmall ? 10 : 12) {
+            header(status: "Aktiv", statusIcon: "bolt.fill")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(workedTitle(at: now))
+                    .font(.system(size: family == .systemSmall ? 30 : 38, weight: .black, design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.58)
+                    .foregroundStyle(.primary)
+
+                Text(remainingText(at: now))
+                    .font(.system(.caption, design: .rounded).weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(accent)
+                    .lineLimit(1)
+            }
+
+            progressTrack(progress: progress(at: now))
+
+            if family == .systemMedium {
+                HStack(spacing: 10) {
+                    metric("Start", timeString(entry.snapshot.shiftStart ?? now))
+                    metric("Dauer", hhmmString(from: entry.snapshot.shiftDurationSeconds))
+                    metric("Ende", endTimeString(start: entry.snapshot.shiftStart, end: entry.snapshot.shiftEnd, fallback: now))
+                    if let cents = entry.snapshot.completedPayCents {
+                        metric("Lohn", currencyString(cents: cents))
+                    }
+                }
+            } else {
+                HStack {
+                    Text(shiftRangeString(start: entry.snapshot.shiftStart ?? now, end: entry.snapshot.shiftEnd ?? now))
+                    Spacer(minLength: 8)
+                    Text(hhmmString(from: entry.snapshot.shiftDurationSeconds))
+                }
+                .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.62)
+            }
+        }
+    }
+
+    private var allDayCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            header(status: "Heute", statusIcon: "calendar")
+            Spacer(minLength: 0)
+            Text(title)
+                .font(.system(size: family == .systemSmall ? 28 : 34, weight: .black, design: .rounded))
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+            Text("Ganztag")
+                .font(.system(.caption, design: .rounded).weight(.bold))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func upcomingShiftCard(start: Date) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            header(status: "Nächste", statusIcon: "clock.fill")
+            Spacer(minLength: 0)
+            Text(nextShiftDateString(start))
+                .font(.system(size: family == .systemSmall ? 24 : 32, weight: .black, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.58)
+                .foregroundStyle(.primary)
+            Text("\(timeString(start)) Uhr")
+                .font(.system(.headline, design: .rounded).weight(.bold))
+                .monospacedDigit()
+                .foregroundStyle(accent)
+        }
+    }
+
+    private var emptyCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            header(status: "PayScope", statusIcon: "sparkle")
+            Spacer(minLength: 0)
+            Text("Keine Schicht")
+                .font(.system(size: family == .systemSmall ? 24 : 32, weight: .black, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text("Heute ist nichts geplant")
+                .font(.system(.caption, design: .rounded).weight(.bold))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func header(status: String, statusIcon: String) -> some View {
+        HStack(spacing: 9) {
+            ZStack {
+                Circle()
+                    .fill(accent.opacity(0.18))
+                Image(systemName: icon)
+                    .font(.system(size: family == .systemSmall ? 15 : 17, weight: .bold))
+                    .foregroundStyle(accent)
+            }
+            .frame(width: family == .systemSmall ? 32 : 36, height: family == .systemSmall ? 32 : 36)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(.caption, design: .rounded).weight(.bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Label(status, systemImage: statusIcon)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .labelStyle(.titleAndIcon)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func metric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            Text(value)
+                .font(.system(size: 13, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func progressTrack(progress: Double) -> some View {
+        GeometryReader { proxy in
+            let width = max(0, proxy.size.width * min(max(progress, 0), 1))
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.secondary.opacity(0.16))
+                Capsule()
+                    .fill(accent)
+                    .frame(width: width)
+                    .shadow(color: accent.opacity(0.35), radius: 7, y: 1)
+            }
+        }
+        .frame(height: family == .systemSmall ? 7 : 8)
+    }
+
+    private func isActive(at now: Date) -> Bool {
+        guard
+            let start = entry.snapshot.shiftStart,
+            let end = entry.snapshot.shiftEnd,
+            end > start
+        else {
+            return false
+        }
+
+        return now >= start && now < end
+    }
+
+    private func isAllDayStatus(at now: Date) -> Bool {
+        guard entry.snapshot.hasAllDayStatus, let date = entry.snapshot.allDayDisplayDate else {
+            return false
+        }
+        return Calendar.current.isDate(date, inSameDayAs: now)
+    }
+
+    private func nextShiftStartForDisplay(at now: Date) -> Date? {
+        if
+            let start = entry.snapshot.shiftStart,
+            let end = entry.snapshot.shiftEnd,
+            end > start,
+            now < start
+        {
+            return start
+        }
+
+        if let nextShiftStart = entry.snapshot.nextShiftStart, nextShiftStart > now {
+            return nextShiftStart
+        }
+
+        return nil
+    }
+
+    private func workedSeconds(at now: Date) -> Int {
+        if let referenceStart = entry.snapshot.workedReferenceStart {
+            return max(0, Int(now.timeIntervalSince(referenceStart)))
+        }
+
+        guard let start = entry.snapshot.shiftStart else {
+            return entry.snapshot.workedTodaySeconds ?? 0
+        }
+
+        return max(0, Int(now.timeIntervalSince(start)))
+    }
+
+    private func workedTitle(at now: Date) -> String {
+        "\(hhmmString(from: workedSeconds(at: now))) h"
+    }
+
+    private func remainingText(at now: Date) -> String {
+        guard let end = entry.snapshot.shiftEnd else { return "läuft" }
+        let remaining = max(0, Int(end.timeIntervalSince(now)))
+        return "\(hhmmString(from: remaining)) h übrig"
+    }
+
+    private func progress(at now: Date) -> Double {
+        let total = max(1, entry.snapshot.shiftDurationSeconds)
+        return min(max(Double(workedSeconds(at: now)) / Double(total), 0), 1)
     }
 }
 
@@ -1099,6 +1391,10 @@ private func nextShiftText(start: Date?, workedSeconds: Int, completedPayCents: 
         return "Heute hast du \(payText) mit \(workedText) erarbeitet. Die nächste Schicht ist noch nicht geplant."
     }
 
+    if Calendar.current.isDate(start, inSameDayAs: .now) {
+        return "Heute hast du \(payText) mit \(workedText) erarbeitet. Die nächste Schicht ist um \(timeString(start)) Uhr."
+    }
+
     let dayLabel = nextShiftDayLabel(start) ?? nextShiftAbsoluteWeekdayDateString(start)
     return "Heute hast du \(payText) mit \(workedText) erarbeitet. Die nächste Schicht ist \(dayLabel) um \(timeString(start)) Uhr."
 }
@@ -1115,6 +1411,10 @@ private func nextShiftDateString(_ date: Date) -> String {
 }
 
 private func nextShiftInlineString(_ date: Date) -> String {
+    if Calendar.current.isDate(date, inSameDayAs: .now) {
+        return timeString(date)
+    }
+
     let dayLabel = nextShiftDayLabel(date) ?? nextShiftAbsoluteDateString(date)
     return "\(dayLabel) - \(timeString(date))"
 }

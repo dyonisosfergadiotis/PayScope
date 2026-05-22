@@ -153,7 +153,7 @@ struct CalculationService {
         self.calendar = calendar
     }
 
-    func workedSeconds(for day: DayEntry) -> Result<Int, WorkedSecondsError> {
+    func workedSeconds(for day: DayEntry, calculateBreaks: Bool = true) -> Result<Int, WorkedSecondsError> {
         // Manual duration takes precedence for editable work/manual entries.
         // For credited types the computed value comes from day rules, not from manual cache fields.
         if let manual = day.manualWorkedSeconds {
@@ -161,7 +161,7 @@ struct CalculationService {
                 return .failure(WorkedSecondsError(message: "Manual worked seconds cannot be negative."))
             }
             if day.type == .work {
-                return .success(applyLegalBreakToleranceCorrection(to: manual))
+                return .success(calculateBreaks ? applyLegalBreakToleranceCorrection(to: manual) : manual)
             }
             if day.type == .manual {
                 return .success(manual)
@@ -171,7 +171,7 @@ struct CalculationService {
 
         guard let start = day.shiftStart, let end = day.shiftEnd, end > start else {
             if !day.segments.isEmpty {
-                return workedSeconds(forSegments: day.segments, dayType: day.type)
+                return workedSeconds(forSegments: day.segments, dayType: day.type, calculateBreaks: calculateBreaks)
             }
             return .success(0)
         }
@@ -180,6 +180,10 @@ struct CalculationService {
 
         // Non-work days: no legal-break correction, return presence directly
         if day.type != .work {
+            return .success(presenceSeconds)
+        }
+
+        guard calculateBreaks else {
             return .success(presenceSeconds)
         }
 
@@ -222,7 +226,11 @@ struct CalculationService {
             }
     }
 
-    private func workedSeconds(forSegments segments: [TimeSegment], dayType: DayType) -> Result<Int, WorkedSecondsError> {
+    private func workedSeconds(
+        forSegments segments: [TimeSegment],
+        dayType: DayType,
+        calculateBreaks: Bool
+    ) -> Result<Int, WorkedSecondsError> {
         let errors = validateSegments(segments)
         guard errors.isEmpty else {
             return .failure(errors[0])
@@ -230,11 +238,11 @@ struct CalculationService {
 
         let total = segments.reduce(0) { partial, segment in
             let presenceSeconds = max(0, Int(segment.end.timeIntervalSince(segment.start)))
-            let explicitBreakSeconds = max(0, segment.breakSeconds)
+            let explicitBreakSeconds = calculateBreaks ? max(0, segment.breakSeconds) : 0
             return partial + max(0, presenceSeconds - explicitBreakSeconds)
         }
 
-        guard dayType == .work else {
+        guard dayType == .work, calculateBreaks else {
             return .success(total)
         }
 
@@ -354,7 +362,7 @@ struct CalculationService {
     func dayComputation(for day: DayEntry, entriesByDate: [Date: DayEntry], settings: Settings) -> ComputationResult {
         switch day.type {
         case .work, .manual:
-            switch workedSeconds(for: day) {
+            switch workedSeconds(for: day, calculateBreaks: settings.effectiveCalculateBreaks) {
             case let .success(seconds):
                 return .ok(valueSeconds: seconds, valueCents: payCents(for: seconds, settings: settings))
             case let .failure(message):
@@ -493,7 +501,7 @@ struct CalculationService {
             }
         }
 
-        return workedSeconds(for: day)
+        return workedSeconds(for: day, calculateBreaks: settings.effectiveCalculateBreaks)
     }
 
     private func savedAutoCreditedSeconds(for day: DayEntry) -> Int? {
@@ -532,6 +540,91 @@ struct CalculationService {
         let desired = 2
         let diff = (weekday - desired + 7) % 7
         return normalized.addingDays(-diff, calendar: calendar)
+    }
+
+    func earnedSecondsSoFar(
+        for day: DayEntry,
+        asOf referenceDate: Date,
+        entriesByDate: [Date: DayEntry],
+        settings: Settings
+    ) -> Int {
+        if (day.type == .work || day.type == .manual),
+           day.manualWorkedSeconds == nil,
+           let start = day.shiftStart,
+           let end = day.shiftEnd,
+           end > start {
+            guard referenceDate > start else { return 0 }
+            guard referenceDate < end else {
+                return dayComputation(for: day, entriesByDate: entriesByDate, settings: settings).valueSecondsOrZero
+            }
+            let effectiveEnd = min(referenceDate, end)
+            let elapsedSeconds = max(0, Int(effectiveEnd.timeIntervalSince(start)))
+            guard day.type == .work else { return elapsedSeconds }
+            guard settings.effectiveCalculateBreaks else { return elapsedSeconds }
+            let totalShiftSeconds = max(1, Int(end.timeIntervalSince(start)))
+            let breakSeconds = max(0, day.breakSeconds ?? 0)
+            let elapsedBreak = Int((Double(breakSeconds) * Double(elapsedSeconds) / Double(totalShiftSeconds)).rounded())
+            let elapsedNetSeconds = max(0, elapsedSeconds - elapsedBreak)
+
+            let requiredBreak = legalMinimumBreakSeconds(forWorkedSeconds: elapsedNetSeconds)
+            let missingBreakComplement = max(0, requiredBreak - elapsedBreak)
+            let corrected = max(0, elapsedNetSeconds - missingBreakComplement)
+            return applyLegalBreakToleranceCorrection(to: corrected)
+        }
+
+        return dayComputation(for: day, entriesByDate: entriesByDate, settings: settings).valueSecondsOrZero
+    }
+
+    func todayEarnedSecondsSoFar(
+        entries: [DayEntry],
+        asOf referenceDate: Date,
+        settings: Settings
+    ) -> Int {
+        let entriesByDate = makeEntriesByDateLookup(from: entries)
+        let todayStart = referenceDate.startOfDayLocal(calendar: calendar)
+        guard let entry = entriesByDate[todayStart] else { return 0 }
+        return earnedSecondsSoFar(
+            for: entry,
+            asOf: referenceDate,
+            entriesByDate: entriesByDate,
+            settings: settings
+        )
+    }
+
+    func weekEarnedSecondsSoFar(
+        entries: [DayEntry],
+        asOf referenceDate: Date,
+        settings: Settings
+    ) -> Int {
+        let todayStart = referenceDate.startOfDayLocal(calendar: calendar)
+        let weekStart = weekStartDate(for: todayStart)
+        let entriesByDate = makeEntriesByDateLookup(from: entries)
+        let activeDayStart = activeShiftEntry(at: referenceDate, entries: entries)?
+            .date
+            .startOfDayLocal(calendar: calendar)
+
+        return entriesByDate.reduce(0) { total, item in
+            let (entryDay, entry) = item
+            guard entryDay >= weekStart, entryDay <= todayStart else {
+                return total
+            }
+
+            if entryDay.isSameLocalDay(as: todayStart, calendar: calendar) ||
+                activeDayStart.map({ entryDay.isSameLocalDay(as: $0, calendar: calendar) }) == true {
+                return total + earnedSecondsSoFar(
+                    for: entry,
+                    asOf: referenceDate,
+                    entriesByDate: entriesByDate,
+                    settings: settings
+                )
+            }
+
+            return total + dayComputation(
+                for: entry,
+                entriesByDate: entriesByDate,
+                settings: settings
+            ).valueSecondsOrZero
+        }
     }
 
     func periodSummary(

@@ -1,4 +1,5 @@
 import Combine
+import SwiftUI
 import EventKit
 import Foundation
 import UIKit
@@ -498,7 +499,6 @@ private struct CalendarEventPayload {
 
     init?(entry: DayEntry, allEntries: [DayEntry], settings: Settings?, marker: String) {
         let dayStart = entry.date.startOfDayLocal()
-        let trimmedNotes = entry.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let endOfSearch = Calendar.current.date(byAdding: .day, value: 2, to: dayStart) ?? dayStart.addingTimeInterval(2 * 24 * 60 * 60)
 
         switch entry.type {
@@ -556,11 +556,6 @@ private struct CalendarEventPayload {
         lines.append("Pause: \(Self.durationString(seconds: computedValues.breakSeconds))")
         lines.append("Lohn: \(payText)")
 
-        if !trimmedNotes.isEmpty {
-            lines.append("")
-            lines.append(trimmedNotes)
-        }
-
         lines.append("")
         lines.append(marker)
         notes = lines.joined(separator: "\n")
@@ -574,8 +569,7 @@ private struct CalendarEventPayload {
             "\(computedValues.durationSeconds ?? 0)",
             "\(computedValues.breakSeconds)",
             "\(computedValues.payCents ?? 0)",
-            "\(entry.creditedOverrideSeconds ?? 0)",
-            trimmedNotes
+            "\(entry.creditedOverrideSeconds ?? 0)"
         ].joined(separator: "|")
     }
 
@@ -621,7 +615,11 @@ private struct CalendarEventPayload {
             case let .ok(valueSeconds, valueCents), let .warning(valueSeconds, valueCents, _):
                 return (valueSeconds, breakSeconds, valueCents)
             case .error:
-                if let fallback = fallbackDurationSeconds(for: entry, service: service) {
+                if let fallback = fallbackDurationSeconds(
+                    for: entry,
+                    service: service,
+                    calculateBreaks: settings.effectiveCalculateBreaks
+                ) {
                     return (fallback, breakSeconds, service.payCents(for: fallback, settings: settings))
                 }
                 return (nil, breakSeconds, nil)
@@ -631,12 +629,16 @@ private struct CalendarEventPayload {
         return (fallbackDurationSeconds(for: entry, service: service), breakSeconds, nil)
     }
 
-    private static func fallbackDurationSeconds(for entry: DayEntry, service: CalculationService) -> Int? {
+    private static func fallbackDurationSeconds(
+        for entry: DayEntry,
+        service: CalculationService,
+        calculateBreaks: Bool = true
+    ) -> Int? {
         if let manualWorkedSeconds = entry.manualWorkedSeconds, manualWorkedSeconds > 0 {
             return manualWorkedSeconds
         }
 
-        switch service.workedSeconds(for: entry) {
+        switch service.workedSeconds(for: entry, calculateBreaks: calculateBreaks) {
         case let .success(seconds):
             return seconds
         case .failure:
@@ -652,10 +654,36 @@ private extension ThemeAccent {
         case .green: return .systemGreen
         case .purple: return .systemPurple
         case .orange: return .systemOrange
-        case .pink: return .systemPink
+        case .pink: return UIColor(red: 1.0, green: 0.36, blue: 0.64, alpha: 1.0)
         case .teal: return .systemTeal
         case .red: return .systemRed
         case .indigo: return .systemIndigo
         }
+    }
+}
+
+private extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 6:
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8:
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
+        }
+
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: Double(a) / 255
+        )
     }
 }

@@ -309,7 +309,7 @@ struct CalendarMonthView: View {
     ) -> DayComputationResult {
         switch day.type {
         case .work, .manual:
-            let seconds = workedSeconds(for: day)
+            let seconds = workedSeconds(for: day, settings: settings)
             return .ok(seconds: seconds, cents: payCents(for: seconds, settings: settings))
         case .vacation:
             if let overrideSeconds = day.creditedOverrideSeconds {
@@ -430,7 +430,7 @@ struct CalendarMonthView: View {
             }
         }
 
-        return workedSeconds(for: day)
+        return workedSeconds(for: day, settings: settings)
     }
 
     private func canDeriveCreditedReferenceValue(for day: DayEntry, settings: Settings) -> Bool {
@@ -446,15 +446,14 @@ struct CalendarMonthView: View {
         }
     }
 
-    private func workedSeconds(for entry: DayEntry) -> Int {
+    private func workedSeconds(for entry: DayEntry, settings: Settings) -> Int {
         if let manual = entry.manualWorkedSeconds, manual > 0 {
             return manual
         }
 
-        let includeBreak = settings?.effectiveCalendarHoursBreakMode == .withBreak
         let fromSegments = entry.segments.reduce(0) { sum, segment in
             let rawSeconds = Int(segment.end.timeIntervalSince(segment.start))
-            let value = includeBreak ? rawSeconds : rawSeconds - segment.breakSeconds
+            let value = settings.effectiveCalculateBreaks ? rawSeconds - segment.breakSeconds : rawSeconds
             return sum + max(0, value)
         }
 
@@ -649,7 +648,8 @@ private struct MonthDayCell: View {
             return seconds
         }
 
-        let includeBreak = settings?.effectiveCalendarHoursBreakMode == .withBreak
+        let includeBreak = !(settings?.effectiveCalculateBreaks ?? true) ||
+            settings?.effectiveCalendarHoursBreakMode == .withBreak
         return entry.segments.reduce(0) { sum, segment in
             let rawSeconds = Int(segment.end.timeIntervalSince(segment.start))
             let worked = includeBreak ? rawSeconds : rawSeconds - segment.breakSeconds
@@ -681,7 +681,28 @@ private struct MonthDayCell: View {
             }
             guard cents > 0 else { return nil }
             return Formatters.currencyString(cents: cents)
+        case .startTime:
+            return startTimeText
+        case .endTime:
+            return endTimeText
+        case .startAndEndTime:
+            let texts = [startTimeText, endTimeText].compactMap { $0 }
+            guard !texts.isEmpty else { return nil }
+            return texts.joined(separator: "\n")
         }
+    }
+
+    private var startTimeText: String? {
+        guard let start = entry?.shiftStart else { return nil }
+        return Formatters.time.string(from: start)
+    }
+
+    private var endTimeText: String? {
+        guard let start = entry?.shiftStart, let end = entry?.shiftEnd, end > start else {
+            return nil
+        }
+        let suffix = Calendar.current.isDate(start, inSameDayAs: end) ? "" : " +1"
+        return "\(Formatters.time.string(from: end))\(suffix)"
     }
 
     private var iconSymbol: String {
@@ -705,20 +726,39 @@ private struct MonthDayCell: View {
     }
 
     private var iconOpacity: Double {
-        (entry != nil || isHoliday) ? 1 : 0
+        if shouldHideIconForMissingTimeMetric {
+            return 0
+        }
+        return (entry != nil || isHoliday) ? 1 : 0
+    }
+
+    private var shouldHideIconForMissingTimeMetric: Bool {
+        guard entry != nil, metricText == nil else { return false }
+        switch displayMode {
+        case .startTime, .endTime, .startAndEndTime:
+            return true
+        case .dot, .hours, .pay:
+            return false
+        }
     }
 
     private var metricPlaceholder: String {
         switch displayMode {
         case .pay:
             return "--,--"
-        case .dot, .hours:
+        case .dot, .hours, .startTime, .endTime:
             return "--:--"
+        case .startAndEndTime:
+            return "--:--\n--:--"
         }
     }
 
     private var metricOpacity: Double {
         metricText == nil ? 0 : 1
+    }
+
+    private var metricLineLimit: Int {
+        displayMode == .startAndEndTime ? 2 : 1
     }
 
     var body: some View {
@@ -745,7 +785,7 @@ private struct MonthDayCell: View {
                     .font(.caption2)
                     .foregroundStyle(metricText == nil ? .tertiary : .secondary)
                     .monospacedDigit()
-                    .lineLimit(1)
+                    .lineLimit(metricLineLimit)
                     .minimumScaleFactor(0.72)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .opacity(metricOpacity)

@@ -311,7 +311,7 @@ private struct OnboardingFlowView: View {
                         Text(mode.label).tag(mode)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.menu)
 
                 Text("Akzentfarbe")
                     .font(.subheadline.weight(.semibold))
@@ -330,10 +330,10 @@ private struct OnboardingFlowView: View {
                             }
                             .frame(maxWidth: .infinity)
                             .padding(12)
-                            .payScopeSurface(
+                            .payScopeGlassControl(
                                 accent: accent.color,
                                 cornerRadius: 14,
-                                emphasis: settings.themeAccent == accent ? 0.45 : 0.2
+                                tintOpacity: settings.themeAccent == accent ? 0.11 : 0.045
                             )
                         }
                         .buttonStyle(.plain)
@@ -481,10 +481,7 @@ private struct OnboardingPageShell<Content: View>: View {
                         .font(.headline)
                         .foregroundStyle(accent)
                         .frame(width: 30, height: 30)
-                        .background(
-                            Circle()
-                                .fill(accent.opacity(0.15))
-                        )
+                        .payScopeLiquidGlassIcon(accent: accent, tintOpacity: 0.12, shadowOpacity: 0.06)
 
                     Text("Schritt \(step) von \(total)")
                         .font(.footnote.weight(.semibold))

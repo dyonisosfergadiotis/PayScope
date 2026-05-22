@@ -16,6 +16,7 @@ enum CloudKitRecordKeys {
         case shiftEnd
         case breakSeconds
         case alwaysApplyFifteenMinuteBuffer
+        case tipAmountCents
     }
 
     enum TimeSegment: String {
@@ -37,6 +38,8 @@ enum CloudKitRecordKeys {
         case vacationFixedSeconds
         case countMissingAsZero
         case strictHistoryRequired
+        case calculateBreaks
+        case aushilfeModeEnabled
         case holidayCreditingMode
         case holidayFixedSeconds
         case scheduledWorkdaysCount
@@ -63,6 +66,10 @@ enum CloudKitRecordKeys {
         case netBonusesCSV
         case showTipsButton
         case showTipsButtonAmount
+        case manualCategoryColor
+        case vacationCategoryColor
+        case holidayCategoryColor
+        case sickCategoryColor
         case shiftShortcut1
         case shiftShortcut2
         case shiftShortcut3
@@ -205,6 +212,38 @@ final class CloudKitService: ObservableObject {
                 sourceYear: year
             )
         }
+    }
+
+    private func applyHolidayValues(_ day: HolidayCalendarDay, to record: CKRecord) {
+        record[CloudKitRecordKeys.HolidayCalendarDay.key.rawValue] = day.key
+        record[CloudKitRecordKeys.HolidayCalendarDay.date.rawValue] = day.date.startOfDayUTC()
+        record[CloudKitRecordKeys.HolidayCalendarDay.localName.rawValue] = day.localName
+        record[CloudKitRecordKeys.HolidayCalendarDay.countryCode.rawValue] =
+            normalizeHolidayCode(day.countryCode) ?? day.countryCode
+        record[CloudKitRecordKeys.HolidayCalendarDay.subdivisionCode.rawValue] =
+            normalizeHolidaySubdivisionCode(day.subdivisionCode)
+        record[CloudKitRecordKeys.HolidayCalendarDay.sourceYear.rawValue] = NSNumber(value: day.sourceYear)
+    }
+
+    private func holidayRecordMatches(_ record: CKRecord, day: HolidayCalendarDay) -> Bool {
+        let storedKey = record[CloudKitRecordKeys.HolidayCalendarDay.key.rawValue] as? String
+        let storedDate = (record[CloudKitRecordKeys.HolidayCalendarDay.date.rawValue] as? Date)?.startOfDayUTC()
+        let storedLocalName = record[CloudKitRecordKeys.HolidayCalendarDay.localName.rawValue] as? String
+        let storedCountry = normalizeHolidayCode(
+            record[CloudKitRecordKeys.HolidayCalendarDay.countryCode.rawValue] as? String
+        )
+        let storedSubdivision = normalizeHolidaySubdivisionCode(
+            record[CloudKitRecordKeys.HolidayCalendarDay.subdivisionCode.rawValue] as? String
+        )
+        let storedSourceYear = (record[CloudKitRecordKeys.HolidayCalendarDay.sourceYear.rawValue] as? NSNumber)?
+            .intValue
+
+        return storedKey == day.key &&
+            storedDate == day.date.startOfDayUTC() &&
+            storedLocalName == day.localName &&
+            storedCountry == normalizeHolidayCode(day.countryCode) &&
+            storedSubdivision == normalizeHolidaySubdivisionCode(day.subdivisionCode) &&
+            storedSourceYear == day.sourceYear
     }
 
     private func holidayKey(from record: CKRecord) -> String? {
@@ -373,7 +412,12 @@ final class CloudKitService: ObservableObject {
         record[CloudKitRecordKeys.DayEntry.date.rawValue] = dayEntry.date.startOfDayUTC()
         record[CloudKitRecordKeys.DayEntry.updatedAt.rawValue] = updatedAt as NSDate
         record[CloudKitRecordKeys.DayEntry.dayType.rawValue] = dayEntry.type.rawValue
-        record[CloudKitRecordKeys.DayEntry.notes.rawValue] = dayEntry.notes
+        record[CloudKitRecordKeys.DayEntry.notes.rawValue] = nil
+        if let tipAmountCents = dayEntry.tipAmountCents, tipAmountCents > 0 {
+            record[CloudKitRecordKeys.DayEntry.tipAmountCents.rawValue] = NSNumber(value: tipAmountCents)
+        } else {
+            record[CloudKitRecordKeys.DayEntry.tipAmountCents.rawValue] = nil
+        }
 
         // Shift fields (single start/end/breakSeconds)
         // We store only whole shifts now (no segments aggregation here)
@@ -432,6 +476,7 @@ final class CloudKitService: ObservableObject {
             do {
                 // Compatibility retry for environments where this field is not in the CloudKit schema yet.
                 record[CloudKitRecordKeys.DayEntry.alwaysApplyFifteenMinuteBuffer.rawValue] = nil
+                record[CloudKitRecordKeys.DayEntry.tipAmountCents.rawValue] = nil
                 _ = try await privateDatabase.save(record)
                 Self.logger.warning(
                     "DayEntry save succeeded with compatibility profile after initial error: \(String(describing: error), privacy: .public)"
@@ -627,7 +672,6 @@ final class CloudKitService: ObservableObject {
             return nil
         }
 
-        let notes = record[CloudKitRecordKeys.DayEntry.notes.rawValue] as? String ?? ""
         let updatedAt = (record[CloudKitRecordKeys.DayEntry.updatedAt.rawValue] as? Date) ?? record.modificationDate ?? date
         let manualWorkedSeconds = (record[
             CloudKitRecordKeys.DayEntry.manualWorkedSeconds.rawValue
@@ -638,16 +682,19 @@ final class CloudKitService: ObservableObject {
         let alwaysApplyFifteenMinuteBuffer = (record[
             CloudKitRecordKeys.DayEntry.alwaysApplyFifteenMinuteBuffer.rawValue
         ] as? NSNumber)?.boolValue
+        let tipAmountCents = (record[
+            CloudKitRecordKeys.DayEntry.tipAmountCents.rawValue
+        ] as? NSNumber)?.intValue
 
         let entry = DayEntry(
             date: date,
             updatedAt: updatedAt,
             type: dayType,
-            notes: notes,
             segments: [],
             manualWorkedSeconds: manualWorkedSeconds,
             creditedOverrideSeconds: creditedOverrideSeconds,
-            alwaysApplyFifteenMinuteBuffer: alwaysApplyFifteenMinuteBuffer
+            alwaysApplyFifteenMinuteBuffer: alwaysApplyFifteenMinuteBuffer,
+            tipAmountCents: tipAmountCents.map { max(0, $0) }
         )
 
         // Map shift fields
@@ -692,6 +739,8 @@ final class CloudKitService: ObservableObject {
         let holidayFixedSeconds = (record[CloudKitRecordKeys.Settings.holidayFixedSeconds.rawValue] as? NSNumber)?.intValue
         let countMissingAsZero = (record[CloudKitRecordKeys.Settings.countMissingAsZero.rawValue] as? NSNumber)?.boolValue ?? true
         let strictHistoryRequired = (record[CloudKitRecordKeys.Settings.strictHistoryRequired.rawValue] as? NSNumber)?.boolValue ?? true
+        let calculateBreaks = (record[CloudKitRecordKeys.Settings.calculateBreaks.rawValue] as? NSNumber)?.boolValue
+        let aushilfeModeEnabled = (record[CloudKitRecordKeys.Settings.aushilfeModeEnabled.rawValue] as? NSNumber)?.boolValue
         let scheduledWorkdaysCount = min(
             max((record[CloudKitRecordKeys.Settings.scheduledWorkdaysCount.rawValue] as? NSNumber)?.intValue ?? 5, 1),
             7
@@ -722,6 +771,14 @@ final class CloudKitService: ObservableObject {
         let netBonusesCSV = record[CloudKitRecordKeys.Settings.netBonusesCSV.rawValue] as? String
         let showTipsButton = (record[CloudKitRecordKeys.Settings.showTipsButton.rawValue] as? NSNumber)?.boolValue
         let showTipsButtonAmount = (record[CloudKitRecordKeys.Settings.showTipsButtonAmount.rawValue] as? NSNumber)?.boolValue
+        let manualCategoryColor = (record[CloudKitRecordKeys.Settings.manualCategoryColor.rawValue] as? String)
+            .flatMap(ShiftCategoryColor.init(rawValue:))
+        let vacationCategoryColor = (record[CloudKitRecordKeys.Settings.vacationCategoryColor.rawValue] as? String)
+            .flatMap(ShiftCategoryColor.init(rawValue:))
+        let holidayCategoryColor = (record[CloudKitRecordKeys.Settings.holidayCategoryColor.rawValue] as? String)
+            .flatMap(ShiftCategoryColor.init(rawValue:))
+        let sickCategoryColor = (record[CloudKitRecordKeys.Settings.sickCategoryColor.rawValue] as? String)
+            .flatMap(ShiftCategoryColor.init(rawValue:))
         let shiftShortcut1 = record[CloudKitRecordKeys.Settings.shiftShortcut1.rawValue] as? String ?? ""
         let shiftShortcut2 = record[CloudKitRecordKeys.Settings.shiftShortcut2.rawValue] as? String ?? ""
         let shiftShortcut3 = record[CloudKitRecordKeys.Settings.shiftShortcut3.rawValue] as? String ?? ""
@@ -742,6 +799,8 @@ final class CloudKitService: ObservableObject {
             vacationFixedSeconds: vacationFixedSeconds,
             countMissingAsZero: countMissingAsZero,
             strictHistoryRequired: strictHistoryRequired,
+            calculateBreaks: calculateBreaks ?? true,
+            aushilfeModeEnabled: aushilfeModeEnabled ?? false,
             holidayCreditingMode: holidayCreditingMode,
             holidayFixedSeconds: holidayFixedSeconds,
             scheduledWorkdaysCount: scheduledWorkdaysCount,
@@ -768,6 +827,10 @@ final class CloudKitService: ObservableObject {
             netBonusesCSV: netBonusesCSV,
             showTipsButton: showTipsButton ?? true,
             showTipsButtonAmount: showTipsButtonAmount ?? true,
+            manualCategoryColor: manualCategoryColor ?? .lavender,
+            vacationCategoryColor: vacationCategoryColor ?? .mint,
+            holidayCategoryColor: holidayCategoryColor ?? .peach,
+            sickCategoryColor: sickCategoryColor ?? .blush,
             shiftShortcut1: shiftShortcut1,
             shiftShortcut2: shiftShortcut2,
             shiftShortcut3: shiftShortcut3,
@@ -776,6 +839,8 @@ final class CloudKitService: ObservableObject {
             shiftShortcutName3: shiftShortcutName3
         )
         settings.vacationCreditingMode = vacationCreditingMode
+        settings.calculateBreaks = calculateBreaks
+        settings.aushilfeModeEnabled = aushilfeModeEnabled
         settings.calendarCellDisplayMode = calendarCellDisplayMode
         settings.calendarHoursBreakMode = calendarHoursBreakMode
         settings.calendarSummaryDisplayMode = calendarSummaryDisplayMode
@@ -791,6 +856,10 @@ final class CloudKitService: ObservableObject {
         settings.markPaidHolidays = markPaidHolidays
         settings.showTipsButton = showTipsButton
         settings.showTipsButtonAmount = showTipsButtonAmount
+        settings.manualCategoryColor = manualCategoryColor
+        settings.vacationCategoryColor = vacationCategoryColor
+        settings.holidayCategoryColor = holidayCategoryColor
+        settings.sickCategoryColor = sickCategoryColor
 
         return settings
     }
@@ -931,6 +1000,17 @@ final class CloudKitService: ObservableObject {
 
         guard includeExtendedFields else { return }
 
+        if let calculateBreaks = settings.calculateBreaks {
+            record[CloudKitRecordKeys.Settings.calculateBreaks.rawValue] = NSNumber(value: calculateBreaks)
+        } else {
+            record[CloudKitRecordKeys.Settings.calculateBreaks.rawValue] = nil
+        }
+        if let aushilfeModeEnabled = settings.aushilfeModeEnabled {
+            record[CloudKitRecordKeys.Settings.aushilfeModeEnabled.rawValue] = NSNumber(value: aushilfeModeEnabled)
+        } else {
+            record[CloudKitRecordKeys.Settings.aushilfeModeEnabled.rawValue] = nil
+        }
+
         if let calendarSummaryDisplayMode = settings.calendarSummaryDisplayMode {
             record[CloudKitRecordKeys.Settings.calendarSummaryDisplayMode.rawValue] = calendarSummaryDisplayMode.rawValue
         } else {
@@ -1031,6 +1111,10 @@ final class CloudKitService: ObservableObject {
         } else {
             record[CloudKitRecordKeys.Settings.showTipsButtonAmount.rawValue] = nil
         }
+        record[CloudKitRecordKeys.Settings.manualCategoryColor.rawValue] = settings.effectiveManualCategoryColor.rawValue
+        record[CloudKitRecordKeys.Settings.vacationCategoryColor.rawValue] = settings.effectiveVacationCategoryColor.rawValue
+        record[CloudKitRecordKeys.Settings.holidayCategoryColor.rawValue] = settings.effectiveHolidayCategoryColor.rawValue
+        record[CloudKitRecordKeys.Settings.sickCategoryColor.rawValue] = settings.effectiveSickCategoryColor.rawValue
 
         let shortcut1 = settings.shiftShortcut1.trimmingCharacters(in: .whitespacesAndNewlines)
         let shortcut2 = settings.shiftShortcut2.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1126,11 +1210,15 @@ final class CloudKitService: ObservableObject {
     func saveHolidayDays(_ days: [HolidayCalendarDay]) async throws {
         do {
             let uniqueDays = deduplicateHolidayDays(days)
+            var savedCount = 0
 
             for day in uniqueDays {
                 let recordID = holidayRecordID(for: day.key)
                 let record: CKRecord
                 if let existing = try? await privateDatabase.record(for: recordID) {
+                    if holidayRecordMatches(existing, day: day) {
+                        continue
+                    }
                     record = existing
                 } else {
                     record = CKRecord(
@@ -1138,17 +1226,11 @@ final class CloudKitService: ObservableObject {
                         recordID: recordID
                     )
                 }
-                record[CloudKitRecordKeys.HolidayCalendarDay.key.rawValue] = day.key
-                record[CloudKitRecordKeys.HolidayCalendarDay.date.rawValue] = day.date.startOfDayUTC()
-                record[CloudKitRecordKeys.HolidayCalendarDay.localName.rawValue] = day.localName
-                record[CloudKitRecordKeys.HolidayCalendarDay.countryCode.rawValue] =
-                    normalizeHolidayCode(day.countryCode) ?? day.countryCode
-                record[CloudKitRecordKeys.HolidayCalendarDay.subdivisionCode.rawValue] =
-                    normalizeHolidaySubdivisionCode(day.subdivisionCode)
-                record[CloudKitRecordKeys.HolidayCalendarDay.sourceYear.rawValue] = NSNumber(value: day.sourceYear)
+                applyHolidayValues(day, to: record)
                 try await privateDatabase.save(record)
+                savedCount += 1
             }
-            Self.logger.debug("Saved \(uniqueDays.count) HolidayCalendarDay records")
+            Self.logger.debug("Saved \(savedCount) changed HolidayCalendarDay records out of \(uniqueDays.count) checked")
             markSynced()
         } catch {
             markSyncError(error)
@@ -1188,6 +1270,7 @@ final class CloudKitService: ObservableObject {
             )
             let existingRecords = try await queryRecords(query)
             var recordsToDeleteByName: [String: CKRecord.ID] = [:]
+            var canonicalExistingRecordsByKey: [String: CKRecord] = [:]
 
             for record in existingRecords {
                 let existingSubdivision = normalizeHolidaySubdivisionCode(
@@ -1209,15 +1292,23 @@ final class CloudKitService: ObservableObject {
                 if record.recordID.recordName != canonicalRecordName {
                     // Cleanup legacy records that use non-canonical record IDs.
                     recordsToDeleteByName[record.recordID.recordName] = record.recordID
+                    continue
                 }
+
+                canonicalExistingRecordsByKey[existingKey] = record
             }
 
             for recordID in recordsToDeleteByName.values {
                 try await deleteRecordIfExists(recordID)
             }
 
-            if !incomingDays.isEmpty {
-                try await saveHolidayDays(incomingDays)
+            let daysToSave = incomingDays.filter { day in
+                guard let existing = canonicalExistingRecordsByKey[day.key] else { return true }
+                return !holidayRecordMatches(existing, day: day)
+            }
+
+            if !daysToSave.isEmpty {
+                try await saveHolidayDays(daysToSave)
             } else {
                 markSynced()
             }
@@ -1554,6 +1645,6 @@ final class CloudKitService: ObservableObject {
         if let manualWorkedSeconds = entry.manualWorkedSeconds, manualWorkedSeconds > 0 {
             return true
         }
-        return !entry.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return false
     }
 }

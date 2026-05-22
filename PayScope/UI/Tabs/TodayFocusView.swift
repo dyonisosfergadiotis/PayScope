@@ -9,7 +9,7 @@ struct TodayFocusView: View {
 
     @State private var now = Date()
 
-    private let refreshTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+    private let refreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     private let service = CalculationService()
 
     private struct TimelineScaleItem: Identifiable {
@@ -19,6 +19,18 @@ struct TodayFocusView: View {
         let isBoundary: Bool
 
         var id: String { "\(minute)-\(label)" }
+    }
+
+    private struct FocusShift {
+        let entry: DayEntry
+        let state: FocusShiftState
+    }
+
+    private enum FocusShiftState {
+        case today
+        case runningFromPreviousDay
+        case upcomingAfterCompletedShift
+        case upcoming
     }
 
     init(settings: Settings, entriesOverride: [DayEntry]? = nil) {
@@ -31,8 +43,8 @@ struct TodayFocusView: View {
             let isCompactSheet = geometry.size.height < 700
             let isNarrow = geometry.size.width < 390
             let horizontalPadding: CGFloat = isNarrow ? 14 : 16
-            let cardSpacing: CGFloat = isCompactSheet || isNarrow ? 10 : 12
-            let verticalSpacing: CGFloat = isCompactSheet || isNarrow ? 12 : 16
+            let cardSpacing: CGFloat = isCompactSheet || isNarrow ? 12 : 14
+            let verticalSpacing: CGFloat = isCompactSheet || isNarrow ? 14 : 18
 
                 VStack(spacing: verticalSpacing) {
                     header(isCompact: isCompactSheet || isNarrow)
@@ -43,11 +55,13 @@ struct TodayFocusView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .top)
                 .padding(.horizontal, horizontalPadding)
+                .padding(.top, 20)
         }
         .onReceive(refreshTimer) { value in
             now = value
         }
-        .animation(.snappy(duration: 0.35), value: settings.themeAccent)
+        .animation(.snappy(duration: 0.35), value: focusAccentAnimationKey)
+        //.payScopeBackground(accent: focusAccentColor)
     }
 
     private var todayStart: Date {
@@ -55,20 +69,70 @@ struct TodayFocusView: View {
     }
 
     private var timelineAnchorStart: Date {
-        todayEntry?.date.startOfDayLocal() ?? todayStart
+        focusShift?.entry.date.startOfDayLocal() ?? todayStart
     }
 
     private var entries: [DayEntry] {
         entriesOverride ?? queryEntries
     }
 
+    private var focusAccentColor: Color {
+        if let type = focusShift?.entry.type {
+            return settings.categoryColor(for: type)
+        }
+        if let type = nextEntry?.type {
+            return settings.categoryColor(for: type)
+        }
+        return settings.categoryColor(for: .work)
+    }
+
+    private var focusAccentAnimationKey: String {
+        let type = todayEntry?.type ?? nextEntry?.type
+        let color = type.flatMap(settings.categoryColorSelection(for:))?.rawValue ?? settings.themeAccent.rawValue
+        return "\(type?.rawValue ?? "empty")-\(color)"
+    }
+
+    private var todayEntryForToday: DayEntry? {
+        entries.first(where: { $0.date.isSameLocalDay(as: todayStart) })
+    }
+
+    private var focusShift: FocusShift? {
+        if let active = service.activeShiftEntry(at: now, entries: entries) {
+            let state: FocusShiftState = active.date.isSameLocalDay(as: todayStart) ? .today : .runningFromPreviousDay
+            return FocusShift(entry: active, state: state)
+        }
+
+        if let today = todayEntryForToday {
+            if let end = today.shiftEnd, now >= end.addingTimeInterval(15 * 60),
+               let next = nextShiftEntry(after: now) {
+                return FocusShift(entry: next, state: .upcomingAfterCompletedShift)
+            }
+
+            return FocusShift(entry: today, state: .today)
+        }
+
+        if let next = nextShiftEntry(after: now) {
+            return FocusShift(entry: next, state: .upcoming)
+        }
+
+        return nil
+    }
+
     private var todayEntry: DayEntry? {
-        service.activeShiftEntry(at: now, entries: entries) ??
-            entries.first(where: { $0.date.isSameLocalDay(as: todayStart) })
+        focusShift?.entry
     }
 
     private var nextEntry: DayEntry? {
-        entries.first(where: { $0.date > todayStart })
+        nextShiftEntry(after: now)
+    }
+
+    private var isShowingUpcomingShift: Bool {
+        switch focusShift?.state {
+        case .upcomingAfterCompletedShift, .upcoming:
+            return true
+        case .today, .runningFromPreviousDay, .none:
+            return false
+        }
     }
 
     private var workedSeconds: Int {
@@ -78,6 +142,7 @@ struct TodayFocusView: View {
         }
         if let start = day.shiftStart, let end = day.shiftEnd, end > start {
             let gross = max(0, Int(end.timeIntervalSince(start)))
+            guard settings.effectiveCalculateBreaks else { return gross }
             let breakSeconds = max(0, day.breakSeconds ?? 0)
             return max(0, gross - breakSeconds)
         }
@@ -104,7 +169,7 @@ struct TodayFocusView: View {
     }
 
     private var displayPayCents: Int {
-        service.payCents(for: displayWorkedSeconds, settings: settings)
+        service.payCents(for: todayEarnedSecondsSoFar, settings: settings)
     }
 
     private var totalShiftSeconds: Int {
@@ -118,6 +183,7 @@ struct TodayFocusView: View {
 
         if let start = day.shiftStart, let end = day.shiftEnd, end > start {
             let gross = max(0, Int(end.timeIntervalSince(start)))
+            guard settings.effectiveCalculateBreaks else { return gross }
             return max(0, gross - breakSeconds)
         }
 
@@ -215,29 +281,24 @@ struct TodayFocusView: View {
     }
 
     private var weekWorkedSeconds: Int {
-        let weekStart = service.weekStartDate(for: todayStart)
-        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
-
-        return entriesByDate.values.reduce(0) { total, day in
-            let entryDay = day.date.startOfDayLocal()
-            guard entryDay >= weekStart, entryDay <= todayStart else {
-                return total
-            }
-
-            if let todayEntry, day.date.isSameLocalDay(as: todayEntry.date) {
-                return total + displayWorkedSeconds
-            }
-
-            return total + service.dayComputation(
-                for: day,
-                entriesByDate: entriesByDate,
-                settings: settings
-            ).valueSecondsOrZero
-        }
+        service.weekEarnedSecondsSoFar(entries: entries, asOf: now, settings: settings)
     }
 
     private var weekWorkedDisplayLabel: String {
         "\(PayScopeFormatters.hhmmString(seconds: weekWorkedSeconds)) h"
+    }
+
+    private var headerValueCaption: String {
+        guard let todayEntry else { return "erfasst" }
+        return todayEntry.type == .work ? "erfasst" : "gutgeschrieben"
+    }
+
+    private var showsRemainingHeader: Bool {
+        todayEntry?.type == .work
+    }
+
+    private var todayEarnedSecondsSoFar: Int {
+        service.todayEarnedSecondsSoFar(entries: entries, asOf: now, settings: settings)
     }
 
     private func header(isCompact: Bool) -> some View {
@@ -248,10 +309,11 @@ struct TodayFocusView: View {
                         .font(.system(.caption, design: .rounded).weight(.bold))
                         .textCase(.uppercase)
                         .foregroundStyle(.secondary.opacity(0.86))
-                    Text(timelineAnchorStart.isSameLocalDay(as: todayStart) ? "Heute" : "Läuft weiter")
+                    Text(headerTitle)
                         .font(.system(isCompact ? .title : .largeTitle, design: .rounded).weight(.black))
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
+                        .payScopeTextTransition(value: headerTitle)
                 }
 
                 Spacer(minLength: 10)
@@ -265,29 +327,44 @@ struct TodayFocusView: View {
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.62)
+                    .payScopeNumericTransition(value: workedDisplayLabel)
 
-                Text("erfasst")
+                Text(headerValueCaption)
                     .font(.system(.subheadline, design: .rounded).weight(.semibold))
                     .foregroundStyle(.secondary)
 
                 Spacer(minLength: 10)
 
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(shiftRemainingText)
-                        .font(.system(isCompact ? .headline : .title3, design: .rounded).weight(.black))
-                        .foregroundStyle(settings.themeAccent.color)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.68)
-                    Text("Verbleibend")
-                        .font(.system(.caption2, design: .rounded).weight(.bold))
-                        .foregroundStyle(.secondary)
-                        .textCase(.uppercase)
+                if showsRemainingHeader {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(shiftRemainingText)
+                            .font(.system(isCompact ? .headline : .title3, design: .rounded).weight(.black))
+                            .foregroundStyle(focusAccentColor)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.68)
+                            .payScopeNumericTransition(value: shiftRemainingText)
+                        Text(remainingCaption)
+                            .font(.system(.caption2, design: .rounded).weight(.bold))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                    }
                 }
             }
         }
         .padding(isCompact ? 16 : 20)
-        .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: isCompact ? 24 : 28, emphasis: 0.75)
+        .payScopeGlassSurface(
+            accent: focusAccentColor,
+            cornerRadius: isCompact ? 24 : 28,
+            tintOpacity: 0.07,
+            shadowOpacity: 0.09,
+            isInteractive: true
+        )
+        .payScopeLiquidGlassTapFeedback(
+            accent: focusAccentColor,
+            in: RoundedRectangle(cornerRadius: isCompact ? 24 : 28, style: .continuous),
+            tintOpacity: 0.05
+        )
     }
 
     private func statusPill(isCompact: Bool) -> some View {
@@ -295,6 +372,7 @@ struct TodayFocusView: View {
             Image(systemName: todayTypeIcon)
                 .font(.system(.caption, design: .rounded).weight(.black))
             Text(todayTypeLabel)
+                .payScopeTextTransition(value: todayTypeLabel)
         }
         .font(.system(isCompact ? .caption : .callout, design: .rounded).weight(.bold))
         .foregroundStyle(todayTypeColor)
@@ -302,10 +380,11 @@ struct TodayFocusView: View {
         .minimumScaleFactor(0.72)
         .padding(.horizontal, isCompact ? 10 : 12)
         .padding(.vertical, isCompact ? 7 : 9)
-        .background(todayTypeColor.opacity(0.14), in: Capsule())
-        .overlay(
-            Capsule()
-                .stroke(todayTypeColor.opacity(0.28), lineWidth: 1)
+        .payScopeGlassControl(
+            accent: todayTypeColor,
+            cornerRadius: isCompact ? 15 : 18,
+            tintOpacity: 0.08,
+            isInteractive: false
         )
     }
 
@@ -317,16 +396,17 @@ struct TodayFocusView: View {
 
                 VStack(spacing: isCompact ? 6 : 9) {
                     Rectangle()
-                        .fill(settings.themeAccent.color.opacity(0.18))
+                        .fill(focusAccentColor.opacity(0.18))
                         .frame(height: 1)
                     Text(compactDurationString(seconds: totalShiftSeconds))
                         .font(.system(isCompact ? .callout : .title3, design: .rounded).weight(.black))
-                        .foregroundStyle(settings.themeAccent.color)
+                        .foregroundStyle(focusAccentColor)
                         .monospacedDigit()
                         .lineLimit(1)
+                        .payScopeNumericTransition(value: totalShiftSeconds)
                         .minimumScaleFactor(0.7)
                     Rectangle()
-                        .fill(settings.themeAccent.color.opacity(0.18))
+                        .fill(focusAccentColor.opacity(0.18))
                         .frame(height: 1)
                 }
                 .frame(maxWidth: .infinity)
@@ -343,7 +423,18 @@ struct TodayFocusView: View {
         }
         .padding(isCompact ? 16 : 20)
         .frame(maxWidth: .infinity)
-        .payScopeSurface(accent: settings.themeAccent.color, cornerRadius: isCompact ? 22 : 26, emphasis: 0.48)
+        .payScopeGlassSurface(
+            accent: focusAccentColor,
+            cornerRadius: isCompact ? 22 : 26,
+            tintOpacity: 0.06,
+            shadowOpacity: 0.08,
+            isInteractive: true
+        )
+        .payScopeLiquidGlassTapFeedback(
+            accent: focusAccentColor,
+            in: RoundedRectangle(cornerRadius: isCompact ? 22 : 26, style: .continuous),
+            tintOpacity: 0.048
+        )
     }
 
     private func metricsGrid(spacing: CGFloat, isCompact: Bool) -> some View {
@@ -354,30 +445,33 @@ struct TodayFocusView: View {
         return LazyVGrid(columns: columns, spacing: spacing) {
             metricCard(
                 icon: "stopwatch.fill",
-                iconTint: settings.themeAccent.color,
+                iconTint: focusAccentColor,
                 value: weekWorkedDisplayLabel,
-                label: "Stunden in dieser Woche",
+                label: "Diese Woche",
                 isCompact: isCompact
             )
             metricCard(
                 icon: "cup.and.saucer.fill",
                 iconTint: .orange,
                 value: breakSeconds > 0 ? "\(PayScopeFormatters.hhmmString(seconds: breakSeconds)) h" : "-",
-                label: "Pausen",
+                label: "Pause",
                 isCompact: isCompact
             )
             metricCard(
                 icon: "eurosign",
                 iconTint: .green,
                 value: PayScopeFormatters.currencyString(cents: displayPayCents),
-                label: "Verdienst",
-                valueTint: settings.themeAccent.color,
+                label: "Erarbeitet",
+                valueTint: focusAccentColor,
                 isCompact: isCompact
             )
         }
     }
 
     private var todayTypeLabel: String {
+        if isShowingUpcomingShift {
+            return todayEntry?.type.label ?? "Geplant"
+        }
         if let today = todayEntry {
             return today.type.label
         }
@@ -388,6 +482,9 @@ struct TodayFocusView: View {
     }
 
     private var todayTypeIcon: String {
+        if isShowingUpcomingShift {
+            return todayEntry?.type.icon ?? "calendar.badge.clock"
+        }
         if todayEntry != nil {
             return todayEntry?.type.icon ?? "calendar.badge.exclamationmark"
         }
@@ -395,10 +492,16 @@ struct TodayFocusView: View {
     }
 
     private var todayTypeColor: Color {
-        if let today = todayEntry {
-            return today.type.tint(for: settings.themeAccent)
+        if isShowingUpcomingShift {
+            return focusAccentColor
         }
-        return nextEntry != nil ? settings.themeAccent.color : .secondary
+        if let today = todayEntry {
+            return settings.categoryColor(for: today.type)
+        }
+        if let next = nextEntry {
+            return settings.categoryColor(for: next.type)
+        }
+        return .secondary
     }
 
     private var todayHasShiftDeviation: Bool {
@@ -424,11 +527,34 @@ struct TodayFocusView: View {
     private var shiftRemainingText: String {
         guard todayEntry != nil else { return "kein Eintrag" }
 
+        if isShowingUpcomingShift, let start = todayEntry?.shiftStart {
+            return countdownDurationString(seconds: max(0, Int(start.timeIntervalSince(now))))
+        }
+
         if totalShiftSeconds <= 0 {
             return "Ende"
         }
 
         return "\(compactDurationString(seconds: shiftRemainingSeconds))"
+    }
+
+    private var headerTitle: String {
+        switch focusShift?.state {
+        case .upcomingAfterCompletedShift:
+            return "Nächste Schicht"
+        case .upcoming:
+            return "Geplant"
+        case .runningFromPreviousDay:
+            return "Läuft weiter"
+        case .today:
+            return "Heute"
+        case .none:
+            return "Heute"
+        }
+    }
+
+    private var remainingCaption: String {
+        isShowingUpcomingShift ? "Bis Start" : "Verbleibend"
     }
 
     private var progressTrack: some View {
@@ -439,13 +565,13 @@ struct TodayFocusView: View {
 
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(settings.themeAccent.color.opacity(0.18))
+                    .fill(focusAccentColor.opacity(0.18))
                 Capsule()
                     .fill(
                         LinearGradient(
                             colors: [
-                                settings.themeAccent.color.opacity(0.55),
-                                settings.themeAccent.color
+                                focusAccentColor.opacity(0.55),
+                                focusAccentColor
                             ],
                             startPoint: .leading,
                             endPoint: .trailing
@@ -469,9 +595,9 @@ struct TodayFocusView: View {
                     .frame(width: 16, height: 16)
                     .overlay(
                         Circle()
-                            .stroke(settings.themeAccent.color, lineWidth: 3)
+                            .stroke(focusAccentColor, lineWidth: 3)
                     )
-                    .shadow(color: settings.themeAccent.color.opacity(0.34), radius: 4, x: 0, y: 2)
+                    .shadow(color: focusAccentColor.opacity(0.34), radius: 4, x: 0, y: 2)
                     .offset(x: min(max(0, markerX - 8), max(0, width - 16)))
             }
         }
@@ -639,9 +765,9 @@ struct TodayFocusView: View {
         HStack(alignment: .top, spacing: 9) {
             Image(systemName: systemImage)
                 .font(.system(.caption, design: .rounded).weight(.black))
-                .foregroundStyle(settings.themeAccent.color)
+                .foregroundStyle(focusAccentColor)
                 .frame(width: 28, height: 28)
-                .background(Circle().fill(settings.themeAccent.color.opacity(0.13)))
+                .payScopeLiquidGlassIcon(accent: focusAccentColor, tintOpacity: 0.11, shadowOpacity: 0.06)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -654,17 +780,16 @@ struct TodayFocusView: View {
                     .monospacedDigit()
                     .lineLimit(2)
                     .minimumScaleFactor(0.72)
+                    .payScopeNumericTransition(value: value)
             }
         }
         .padding(10)
         .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.systemBackground).opacity(0.58))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(settings.themeAccent.color.opacity(0.1), lineWidth: 1)
+        .payScopeGlassControl(
+            accent: focusAccentColor,
+            cornerRadius: 16,
+            tintOpacity: 0.045,
+            isInteractive: false
         )
     }
 
@@ -684,6 +809,7 @@ struct TodayFocusView: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.58)
+                .payScopeNumericTransition(value: value)
         }
         .frame(minWidth: isCompact ? 76 : 98, alignment: alignment == .trailing ? .trailing : .leading)
     }
@@ -697,14 +823,16 @@ struct TodayFocusView: View {
         isCompact: Bool
     ) -> some View {
         VStack(alignment: .leading, spacing: isCompact ? 9 : 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: isCompact ? 11 : 14, style: .continuous)
-                    .fill(iconTint.opacity(0.16))
-                Image(systemName: icon)
-                    .font(.system(isCompact ? .caption : .subheadline, design: .rounded).weight(.black))
-                    .foregroundStyle(iconTint)
-            }
-            .frame(width: isCompact ? 34 : 40, height: isCompact ? 34 : 40)
+            Image(systemName: icon)
+                .font(.system(isCompact ? .caption : .subheadline, design: .rounded).weight(.black))
+                .foregroundStyle(iconTint)
+                .frame(width: isCompact ? 34 : 40, height: isCompact ? 34 : 40)
+                .payScopeLiquidGlassIcon(
+                    accent: iconTint,
+                    in: RoundedRectangle(cornerRadius: isCompact ? 11 : 14, style: .continuous),
+                    tintOpacity: 0.13,
+                    shadowOpacity: 0.07
+                )
 
             Spacer(minLength: 0)
 
@@ -715,6 +843,7 @@ struct TodayFocusView: View {
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.58)
+                    .payScopeNumericTransition(value: value)
                 Text(label)
                     .font(.system(.caption2, design: .rounded).weight(.bold))
                     .textCase(.uppercase)
@@ -725,7 +854,18 @@ struct TodayFocusView: View {
         }
         .padding(isCompact ? 12 : 16)
         .frame(maxWidth: .infinity, minHeight: isCompact ? 112 : 132, alignment: .topLeading)
-        .payScopeLiquidGlass(accent: settings.themeAccent.color, cornerRadius: isCompact ? 18 : 22, tintOpacity: 0.08)
+        .payScopeGlassSurface(
+            accent: focusAccentColor,
+            cornerRadius: isCompact ? 18 : 22,
+            tintOpacity: 0.05,
+            shadowOpacity: 0.06,
+            isInteractive: true
+        )
+        .payScopeLiquidGlassTapFeedback(
+            accent: iconTint,
+            in: RoundedRectangle(cornerRadius: isCompact ? 18 : 22, style: .continuous),
+            tintOpacity: 0.048
+        )
     }
 
     private func compactDurationString(seconds: Int) -> String {
@@ -742,6 +882,19 @@ struct TodayFocusView: View {
         return String(format: "%d:%02d h", hours, minutes)
     }
 
+    private func countdownDurationString(seconds: Int) -> String {
+        let clamped = max(0, seconds)
+        let days = clamped / 86_400
+        let hours = (clamped % 86_400) / 3_600
+        let minutes = (clamped % 3_600) / 60
+
+        if days == 0 {
+            return String(format: "%02d:%02d", hours, minutes)
+        }
+
+        return String(format: "%02d:%02d:%02d", days, hours, minutes)
+    }
+
     private func workedSeconds(until now: Date, for day: DayEntry?) -> Int {
         guard let day else { return 0 }
         if let manual = day.manualWorkedSeconds {
@@ -752,6 +905,7 @@ struct TodayFocusView: View {
             guard now > start else { return 0 }
             let effectiveEnd = min(now, end)
             let elapsedSeconds = max(0, Int(effectiveEnd.timeIntervalSince(start)))
+            guard settings.effectiveCalculateBreaks else { return elapsedSeconds }
             let totalShiftSeconds = max(1, Int(end.timeIntervalSince(start)))
             let breakSeconds = max(0, day.breakSeconds ?? 0)
             let elapsedBreak = Int((Double(breakSeconds) * Double(elapsedSeconds) / Double(totalShiftSeconds)).rounded())
@@ -759,6 +913,18 @@ struct TodayFocusView: View {
         }
 
         return 0
+    }
+
+    private func nextShiftEntry(after referenceDate: Date) -> DayEntry? {
+        entries
+            .filter { entry in
+                guard entry.type == .work || entry.type == .manual else { return false }
+                guard let start = entry.shiftStart, let end = entry.shiftEnd, end > start else { return false }
+                return start > referenceDate
+            }
+            .min { lhs, rhs in
+                (lhs.shiftStart ?? .distantFuture) < (rhs.shiftStart ?? .distantFuture)
+            }
     }
 
     private func dateAtMinute(_ minute: Int, on dayStart: Date) -> Date {

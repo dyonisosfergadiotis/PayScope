@@ -314,6 +314,7 @@ struct ContentView: View {
         if local.vacationFixedSeconds != iCloud.vacationFixedSeconds { differences += 1 }
         if local.countMissingAsZero != iCloud.countMissingAsZero { differences += 1 }
         if local.strictHistoryRequired != iCloud.strictHistoryRequired { differences += 1 }
+        if local.effectiveCalculateBreaks != iCloud.effectiveCalculateBreaks { differences += 1 }
         if local.holidayCreditingMode != iCloud.holidayCreditingMode { differences += 1 }
         if local.holidayFixedSeconds != iCloud.holidayFixedSeconds { differences += 1 }
         if local.scheduledWorkdaysCount != iCloud.scheduledWorkdaysCount { differences += 1 }
@@ -359,7 +360,7 @@ struct ContentView: View {
         let entry = DayEntry(
             date: payload.date.startOfDayUTC(),
             type: payload.type,
-            notes: payload.notes,
+            notes: "",
             segments: [],
             manualWorkedSeconds: payload.manualWorkedSeconds,
             creditedOverrideSeconds: payload.creditedOverrideSeconds,
@@ -437,6 +438,7 @@ struct ContentView: View {
         resolved.vacationFixedSeconds = incoming.vacationFixedSeconds
         resolved.countMissingAsZero = incoming.countMissingAsZero
         resolved.strictHistoryRequired = incoming.strictHistoryRequired
+        resolved.calculateBreaks = incoming.calculateBreaks
         resolved.holidayCreditingMode = incoming.holidayCreditingMode
         resolved.holidayFixedSeconds = incoming.holidayFixedSeconds
         resolved.scheduledWorkdaysCount = incoming.scheduledWorkdaysCount
@@ -476,7 +478,6 @@ struct ContentView: View {
         if lhs.date != rhs.date { return lhs.date < rhs.date }
         if lhs.updatedAt != rhs.updatedAt { return (lhs.updatedAt ?? .distantPast) < (rhs.updatedAt ?? .distantPast) }
         if lhs.type != rhs.type { return lhs.type.rawValue < rhs.type.rawValue }
-        if lhs.notes != rhs.notes { return lhs.notes < rhs.notes }
         if lhs.manualWorkedSeconds != rhs.manualWorkedSeconds {
             return (lhs.manualWorkedSeconds ?? -1) < (rhs.manualWorkedSeconds ?? -1)
         }

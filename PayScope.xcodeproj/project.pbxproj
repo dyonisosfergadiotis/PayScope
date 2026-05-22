@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E539C2C42FB4A8D600E09AE4 /* Notelet in Frameworks */ = {isa = PBXBuildFile; productRef = E539C2C32FB4A8D600E09AE4 /* Notelet */; };
 		E580ADFE2FB1E88C0005C14B /* FabBar in Frameworks */ = {isa = PBXBuildFile; productRef = E580ADFD2FB1E88C0005C14B /* FabBar */; };
 		E59E75D72F85339C006A872F /* PayScope.icon in Resources */ = {isa = PBXBuildFile; fileRef = E59E75D62F85339C006A872F /* PayScope.icon */; };
 		E5ABAA5D2F458AC000031FB6 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5ABAA5C2F458AC000031FB6 /* WidgetKit.framework */; };
@@ -40,13 +41,6 @@
 			proxyType = 1;
 			remoteGlobalIDString = E5ABAA592F458AC000031FB6;
 			remoteInfo = "PayScope WidgetsExtension";
-		};
-		E5CC010A2FAAAAAB0000000A /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = E5ABA9BA2F44731100031FB6 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = E5ABA9C12F44731100031FB6;
-			remoteInfo = PayScope;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -97,7 +91,6 @@
 		E5AC7E3C2F59854A00DFE5DD /* PayScope_for_MacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PayScope_for_MacApp.swift; sourceTree = "<group>"; };
 		E5AC7E3D2F59854A00DFE5DD /* Persistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Persistence.swift; sourceTree = "<group>"; };
 		E5AC7E4B2F59885300DFE5DD /* CloudKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CloudKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/Library/Frameworks/CloudKit.framework; sourceTree = DEVELOPER_DIR; };
-		E5CC01012FAAAAAB00000001 /* PayScopeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PayScopeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E5FF00112FAAAAAA00000011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		E5FF00122FAAAAAA00000012 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		E5FF00132FAAAAAA00000013 /* PayScope_WidgetsBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PayScope_WidgetsBundle.swift; sourceTree = "<group>"; };
@@ -123,6 +116,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E539C2C42FB4A8D600E09AE4 /* Notelet in Frameworks */,
 				E580ADFE2FB1E88C0005C14B /* FabBar in Frameworks */,
 				E5ABAFD22F4F32DB00031FB6 /* CloudKit.framework in Frameworks */,
 			);
@@ -146,13 +140,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		E5CC01042FAAAAAB00000004 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -173,7 +160,6 @@
 			isa = PBXGroup;
 			children = (
 				E5ABA9C22F44731100031FB6 /* PayScope.app */,
-				E5CC01012FAAAAAB00000001 /* PayScopeTests.xctest */,
 				E5ABAA5A2F458AC000031FB6 /* PayScope WidgetsExtension.appex */,
 				E5AC7DD12F5984D800DFE5DD /* PayScope For Mac.app */,
 			);
@@ -248,6 +234,7 @@
 			name = PayScope;
 			packageProductDependencies = (
 				E580ADFD2FB1E88C0005C14B /* FabBar */,
+				E539C2C32FB4A8D600E09AE4 /* Notelet */,
 			);
 			productName = PayScope;
 			productReference = E5ABA9C22F44731100031FB6 /* PayScope.app */;
@@ -291,29 +278,6 @@
 			productReference = E5AC7DD12F5984D800DFE5DD /* PayScope For Mac.app */;
 			productType = "com.apple.product-type.application";
 		};
-		E5CC01062FAAAAAB00000006 /* PayScopeTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = E5CC01092FAAAAAB00000009 /* Build configuration list for PBXNativeTarget "PayScopeTests" */;
-			buildPhases = (
-				E5CC01032FAAAAAB00000003 /* Sources */,
-				E5CC01042FAAAAAB00000004 /* Frameworks */,
-				E5CC01052FAAAAAB00000005 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				E5CC010B2FAAAAAB0000000B /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				E5CC01022FAAAAAB00000002 /* PayScopeTests */,
-			);
-			name = PayScopeTests;
-			packageProductDependencies = (
-			);
-			productName = PayScopeTests;
-			productReference = E5CC01012FAAAAAB00000001 /* PayScopeTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -322,7 +286,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2640;
-				LastUpgradeCheck = 2630;
+				LastUpgradeCheck = 2640;
 				TargetAttributes = {
 					E5ABA9C12F44731100031FB6 = {
 						CreatedOnToolsVersion = 26.2;
@@ -332,10 +296,6 @@
 					};
 					E5AC7DD02F5984D800DFE5DD = {
 						CreatedOnToolsVersion = 26.3;
-					};
-					E5CC01062FAAAAAB00000006 = {
-						CreatedOnToolsVersion = 26.2;
-						TestTargetID = E5ABA9C12F44731100031FB6;
 					};
 				};
 			};
@@ -350,6 +310,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				E580ADFC2FB1E88C0005C14B /* XCRemoteSwiftPackageReference "FabBar" */,
+				E539C2C22FB4A8D600E09AE4 /* XCRemoteSwiftPackageReference "notelet" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E5ABA9C32F44731100031FB6 /* Products */;
@@ -357,7 +318,6 @@
 			projectRoot = "";
 			targets = (
 				E5ABA9C12F44731100031FB6 /* PayScope */,
-				E5CC01062FAAAAAB00000006 /* PayScopeTests */,
 				E5ABAA592F458AC000031FB6 /* PayScope WidgetsExtension */,
 				E5AC7DD02F5984D800DFE5DD /* PayScope For Mac */,
 			);
@@ -386,13 +346,6 @@
 			files = (
 				E59E75D72F85339C006A872F /* PayScope.icon in Resources */,
 				E5AC7E3F2F59854A00DFE5DD /* Assets.xcassets in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		E5CC01052FAAAAAB00000005 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -434,13 +387,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		E5CC01032FAAAAAB00000003 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -448,11 +394,6 @@
 			isa = PBXTargetDependency;
 			target = E5ABAA592F458AC000031FB6 /* PayScope WidgetsExtension */;
 			targetProxy = E5ABAA6E2F458AC100031FB6 /* PBXContainerItemProxy */;
-		};
-		E5CC010B2FAAAAAB0000000B /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = E5ABA9C12F44731100031FB6 /* PayScope */;
-			targetProxy = E5CC010A2FAAAAAB0000000A /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -599,7 +540,7 @@
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -638,7 +579,7 @@
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -665,7 +606,7 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = "PayScope WidgetsExtension.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "PayScope Widgets/Info.plist";
@@ -676,7 +617,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.6.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "DyonisosFergadiotis.PayScope.PayScope-Widgets";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -696,7 +637,7 @@
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
 				CODE_SIGN_ENTITLEMENTS = "PayScope WidgetsExtension.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "PayScope Widgets/Info.plist";
@@ -707,7 +648,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.6.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "DyonisosFergadiotis.PayScope.PayScope-Widgets";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -730,6 +671,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -769,6 +711,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -795,70 +738,6 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-			};
-			name = Release;
-		};
-		E5CC01072FAAAAAB00000007 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 8W4U9DBYVS;
-				ENABLE_TESTING_SEARCH_PATHS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = PayScopeTests;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = DyonisosFergadiotis.PayScopeTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
-				SKIP_INSTALL = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PayScope.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PayScope";
-			};
-			name = Debug;
-		};
-		E5CC01082FAAAAAB00000008 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 8W4U9DBYVS;
-				ENABLE_TESTING_SEARCH_PATHS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = PayScopeTests;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = DyonisosFergadiotis.PayScopeTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
-				SKIP_INSTALL = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PayScope.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PayScope";
 			};
 			name = Release;
 		};
@@ -901,18 +780,17 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		E5CC01092FAAAAAB00000009 /* Build configuration list for PBXNativeTarget "PayScopeTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				E5CC01072FAAAAAB00000007 /* Debug */,
-				E5CC01082FAAAAAB00000008 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		E539C2C22FB4A8D600E09AE4 /* XCRemoteSwiftPackageReference "notelet" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mykolaharmash/notelet";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 		E580ADFC2FB1E88C0005C14B /* XCRemoteSwiftPackageReference "FabBar" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/ryanashcraft/FabBar.git";
@@ -924,6 +802,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		E539C2C32FB4A8D600E09AE4 /* Notelet */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E539C2C22FB4A8D600E09AE4 /* XCRemoteSwiftPackageReference "notelet" */;
+			productName = Notelet;
+		};
 		E580ADFD2FB1E88C0005C14B /* FabBar */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = E580ADFC2FB1E88C0005C14B /* XCRemoteSwiftPackageReference "FabBar" */;
