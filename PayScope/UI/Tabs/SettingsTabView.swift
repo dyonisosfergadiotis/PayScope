@@ -1112,28 +1112,47 @@ private struct CategoryColorPaletteView: View {
 
             LazyVGrid(columns: columns, spacing: 10) {
                 ForEach(ShiftCategoryColor.allCases) { color in
+                    let isSelected = selectedColor == color
+
                     Button {
                         onSelect(color)
                     } label: {
                         Circle()
                             .fill(color.color)
                             .frame(width: 36, height: 36)
+                            .background(
+                                Circle()
+                                    .fill(color.color.opacity(isSelected ? 0.18 : 0.1))
+                            )
+                            .glassEffect(
+                                .regular
+                                    .tint(color.color.opacity(isSelected ? 0.2 : 0.14))
+                                    .interactive(true),
+                                in: Circle()
+                            )
                             .overlay(
                                 Circle()
                                     .stroke(
-                                        selectedColor == color ? Color.primary.opacity(0.72) : Color.secondary.opacity(0.22),
-                                        lineWidth: selectedColor == color ? 2 : 1
+                                        isSelected ? Color.primary.opacity(0.72) : Color.secondary.opacity(0.22),
+                                        lineWidth: isSelected ? 2 : 1
                                     )
                             )
                             .overlay {
-                                if selectedColor == color {
+                                if isSelected {
                                     Image(systemName: "checkmark")
                                         .font(.system(size: 13, weight: .bold))
                                         .foregroundStyle(.primary)
                                 }
                             }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(
+                        PayScopeLiquidGlassPressButtonStyle(
+                            accent: color.color,
+                            shape: Circle(),
+                            tintOpacity: 0.12,
+                            pressedScale: 0.9
+                        )
+                    )
                     .accessibilityLabel(color.label)
                 }
             }
