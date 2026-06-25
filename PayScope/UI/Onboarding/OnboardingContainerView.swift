@@ -1,3 +1,4 @@
+import FabBar
 import SwiftUI
 import SwiftData
 
@@ -54,67 +55,49 @@ private struct OnboardingSplashView: View {
 private struct OnboardingFlowView: View {
     @EnvironmentObject private var cloudKitService: CloudKitService
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Bindable var settings: Settings
 
-    @State private var page = 0
+    @State private var step: OnboardingStep = .overview
+    @State private var furthestUnlockedStepIndex = 0
     @State private var hourlyRate = ""
     @State private var monthlySalary = ""
     @State private var weeklyHours = ""
     @State private var holidayCountryCode = "DE"
     @State private var holidaySubdivisionCode = ""
+    @State private var shouldCreateFirstShift = false
+    @State private var firstShiftDate = Date()
+    @State private var firstShiftStartTime = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: Date()) ?? Date()
+    @State private var firstShiftEndTime = Calendar.current.date(bySettingHour: 17, minute: 0, second: 0, of: Date()) ?? Date()
+    @State private var firstShiftBreakMinutes = "30"
+    @State private var firstShiftTip = ""
 
-    private let pageCount = 7
+    private let localStore = LocalDayEntryStore.shared
+    private var pageCount: Int { OnboardingStep.allCases.count }
 
     var body: some View {
-        VStack(spacing: 12) {
-            TabView(selection: $page) {
-                overviewPage.tag(0)
-                paySetupPage.tag(1)
-                workweekPage.tag(2)
-                weeklyTargetPage.tag(3)
-                holidayRegionPage.tag(4)
-                rulesPage.tag(5)
-                captureAndThemePage.tag(6)
+        ZStack {
+            stepContent
+                .id(step)
+                .transition(.opacity.combined(with: .move(edge: .trailing)))
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if showsFallbackControls {
+                fallbackNavigationControls
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-
-            ProgressView(value: Double(page + 1), total: Double(pageCount))
-                .padding(.horizontal)
-
-            HStack {
-                if page > 0 {
-                    Button("Zurück") {
-                        page -= 1
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                Spacer()
-
-                Button(page == pageCount - 1 ? "Fertig" : "Weiter") {
-                        persistCurrentPage()
-                        if page == pageCount - 1 {
-                            settings.hasCompletedOnboarding = true
-                            settings.updatedAt = Date()
-                            UserDefaults.standard.set(true, forKey: "payscope.onboarding.completed.sticky")
-                            try? modelContext.save()
-
-                            Task {
-                                try? await cloudKitService.saveSettings(settings)
-                            }
-                        } else {
-                            page += 1
-                        }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!isPageValid)
-                .accessibilityLabel(page == pageCount - 1 ? "Onboarding abschließen" : "Weiter")
-            }
-            .padding(.horizontal)
-            .padding(.bottom, 16)
         }
         .payScopeBackground(accent: settings.themeAccent.color)
         .tint(settings.themeAccent.color)
+        .animation(.smooth(duration: 0.24, extraBounce: 0.08), value: step)
+        .fabBar(
+            selection: stepSelection,
+            tabs: onboardingTabs,
+            action: FabBarAction(
+                systemImage: "arrow.right",
+                accessibilityLabel: "Weiter oder Onboarding abschließen",
+                action: advanceStep
+            )
+        )
         .onAppear {
             hourlyRate = settings.hourlyRateCents.map { String(format: "%.2f", Double($0) / 100) } ?? ""
             monthlySalary = settings.monthlySalaryCents.map { String(format: "%.2f", Double($0) / 100) } ?? ""
@@ -124,21 +107,39 @@ private struct OnboardingFlowView: View {
         }
     }
 
+    @ViewBuilder
+    private var stepContent: some View {
+        switch step {
+        case .overview:
+            overviewPage
+        case .pay:
+            paySetupPage
+        case .schedule:
+            schedulePage
+        case .firstShift:
+            firstShiftPage
+        case .rules:
+            rulesPage
+        case .appearance:
+            captureAndThemePage
+        }
+    }
+
     private var overviewPage: some View {
         OnboardingPageShell(
             title: "Schnelles Setup",
             subtitle: "Wir richten die wichtigsten Einstellungen direkt jetzt ein.",
-            step: page + 1,
+            step: currentStepIndex + 1,
             total: pageCount,
             icon: "slider.horizontal.3",
-            accent: settings.themeAccent.color
+            accent: settings.themeAccent.color,
+            isCurrentStepValid: isStepValid
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 bullet("Bezahlungsmodell und Betrag")
-                bullet("Arbeitstage pro Woche")
-                bullet("Wöchentliche Sollstunden")
-                bullet("Land/Bundesland für Feiertage")
-                bullet("Regeln für 13-Wochen-Berechnung")
+                bullet("Arbeitstage und wöchentliche Sollstunden")
+                bullet("Optional direkt eine erste Schicht eintippen")
+                bullet("Feiertage, Region und 13-Wochen-Regeln")
                 bullet("Kalenderdarstellung und Akzentfarbe")
             }
         }
@@ -148,10 +149,11 @@ private struct OnboardingFlowView: View {
         OnboardingPageShell(
             title: "Bezahlung",
             subtitle: "Diese Angaben sind für die Lohnberechnung erforderlich.",
-            step: page + 1,
+            step: currentStepIndex + 1,
             total: pageCount,
             icon: "eurosign.circle",
-            accent: settings.themeAccent.color
+            accent: settings.themeAccent.color,
+            isCurrentStepValid: isStepValid
         ) {
             VStack(alignment: .leading, spacing: 14) {
                 Picker("Lohnmodus", selection: Binding(get: { settings.payMode }, set: { settings.payMode = $0 })) {
@@ -184,14 +186,15 @@ private struct OnboardingFlowView: View {
         }
     }
 
-    private var workweekPage: some View {
+    private var schedulePage: some View {
         OnboardingPageShell(
-            title: "Arbeitswoche",
-            subtitle: "Lege fest, wie viele Arbeitstage deine Woche hat.",
-            step: page + 1,
+            title: "Arbeitszeit",
+            subtitle: "Lege fest, wie deine Woche gerechnet werden soll.",
+            step: currentStepIndex + 1,
             total: pageCount,
             icon: "calendar",
-            accent: settings.themeAccent.color
+            accent: settings.themeAccent.color,
+            isCurrentStepValid: isStepValid
         ) {
             VStack(alignment: .leading, spacing: 14) {
                 Stepper(
@@ -206,20 +209,7 @@ private struct OnboardingFlowView: View {
                 Text("Feiertage werden mit der Sollzeit pro Arbeitstag gutgeschrieben.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-            }
-        }
-    }
 
-    private var weeklyTargetPage: some View {
-        OnboardingPageShell(
-            title: "Wochenstunden",
-            subtitle: "Diese Sollzeit wird für Zielwerte und Feiertage genutzt.",
-            step: page + 1,
-            total: pageCount,
-            icon: "clock",
-            accent: settings.themeAccent.color
-        ) {
-            VStack(alignment: .leading, spacing: 14) {
                 TextField("Wöchentliche Sollstunden (optional)", text: $weeklyHours)
                     .textFieldStyle(.roundedBorder)
                     .keyboardType(.decimalPad)
@@ -233,14 +223,61 @@ private struct OnboardingFlowView: View {
         }
     }
 
-    private var holidayRegionPage: some View {
+    private var firstShiftPage: some View {
         OnboardingPageShell(
-            title: "Feiertage & Region",
-            subtitle: "Land und Bundesland steuern den Feiertagsimport im Kalender.",
-            step: page + 1,
+            title: "Erste Daten",
+            subtitle: "Optional kannst du direkt eine erste Schicht speichern.",
+            step: currentStepIndex + 1,
             total: pageCount,
-            icon: "globe.europe.africa",
-            accent: settings.themeAccent.color
+            icon: "square.and.pencil",
+            accent: settings.themeAccent.color,
+            isCurrentStepValid: isStepValid
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                Toggle("Erste Schicht speichern", isOn: $shouldCreateFirstShift)
+
+                if shouldCreateFirstShift {
+                    DatePicker("Datum", selection: $firstShiftDate, displayedComponents: .date)
+                    DatePicker("Start", selection: $firstShiftStartTime, displayedComponents: .hourAndMinute)
+                    DatePicker("Ende", selection: $firstShiftEndTime, displayedComponents: .hourAndMinute)
+
+                    TextField("Pause in Minuten", text: $firstShiftBreakMinutes)
+                        .textFieldStyle(.roundedBorder)
+                        .keyboardType(.numberPad)
+
+                    TextField("Trinkgeld optional (z. B. 12,50)", text: $firstShiftTip)
+                        .textFieldStyle(.roundedBorder)
+                        .keyboardType(.decimalPad)
+
+                    if let summary = firstShiftSummaryText {
+                        Text(summary)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let message = firstShiftValidationMessage {
+                        Text(message)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                } else {
+                    Text("Du kannst diesen Schritt überspringen und später im Kalender starten.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var rulesPage: some View {
+        OnboardingPageShell(
+            title: "Regeln & Feiertage",
+            subtitle: "Region und Regeln steuern Urlaub, Feiertage und Kranktage.",
+            step: currentStepIndex + 1,
+            total: pageCount,
+            icon: "checkmark.shield",
+            accent: settings.themeAccent.color,
+            isCurrentStepValid: isStepValid
         ) {
             VStack(alignment: .leading, spacing: 14) {
                 TextField("Land (ISO, z. B. DE)", text: $holidayCountryCode)
@@ -262,20 +299,9 @@ private struct OnboardingFlowView: View {
                         .font(.footnote)
                         .foregroundStyle(.red)
                 }
-            }
-        }
-    }
 
-    private var rulesPage: some View {
-        OnboardingPageShell(
-            title: "13-Wochen-Regeln",
-            subtitle: "Steuert, wie Urlaub/Feiertag/Krank ohne Schätzungen berechnet wird.",
-            step: page + 1,
-            total: pageCount,
-            icon: "checkmark.shield",
-            accent: settings.themeAccent.color
-        ) {
-            VStack(alignment: .leading, spacing: 14) {
+                Divider()
+
                 Text("Bei aktivierter Regel werden die letzten 13 gleichen Wochentage geprüft.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -300,10 +326,11 @@ private struct OnboardingFlowView: View {
         OnboardingPageShell(
             title: "Erfassung & Ansicht",
             subtitle: "Lege Kalenderdarstellung und Akzentfarbe fest.",
-            step: page + 1,
+            step: currentStepIndex + 1,
             total: pageCount,
             icon: "paintpalette",
-            accent: settings.themeAccent.color
+            accent: settings.themeAccent.color,
+            isCurrentStepValid: isStepValid
         ) {
             VStack(alignment: .leading, spacing: 14) {
                 Picker("Zellanzeige im Kalender", selection: calendarDisplayModeBinding) {
@@ -352,26 +379,28 @@ private struct OnboardingFlowView: View {
         }
     }
 
-    private var isPageValid: Bool {
-        switch page {
-        case 0:
+    private var isStepValid: Bool {
+        switch step {
+        case .overview:
             return true
-        case 1:
+        case .pay:
             if settings.payMode == .hourly {
                 return parseMoneyToCents(hourlyRate).map { $0 > 0 } ?? false
             }
             return parseMoneyToCents(monthlySalary).map { $0 > 0 } ?? false
-        case 3:
+        case .schedule:
             if weeklyHours.isEmpty { return true }
             return parseHoursToSeconds(weeklyHours) != nil
-        case 4:
+        case .firstShift:
+            return firstShiftValidationMessage == nil
+        case .rules:
             return isHolidayCountryCodeValid
-        default:
+        case .appearance:
             return true
         }
     }
 
-    private func persistCurrentPage() {
+    private func persistCurrentStep() {
         if let value = parseMoneyToCents(hourlyRate), settings.payMode == .hourly {
             settings.hourlyRateCents = value
             settings.monthlySalaryCents = nil
@@ -384,6 +413,95 @@ private struct OnboardingFlowView: View {
         settings.holidayCountryCode = normalizedHolidayCountryCode
         settings.holidaySubdivisionCode = normalizedHolidaySubdivisionCode
         persistSettingsLocally()
+    }
+
+    private func advanceStep() {
+        guard isStepValid else { return }
+        persistCurrentStep()
+
+        if step == .appearance {
+            finishOnboarding()
+            return
+        }
+
+        guard let nextStep = OnboardingStep(rawValue: currentStepIndex + 1) else { return }
+        furthestUnlockedStepIndex = max(furthestUnlockedStepIndex, nextStep.rawValue)
+        step = nextStep
+    }
+
+    private func finishOnboarding() {
+        let firstShiftEntry = shouldCreateFirstShift ? makeFirstShiftEntry() : nil
+
+        if let firstShiftEntry {
+            localStore.save(firstShiftEntry)
+        }
+
+        settings.hasCompletedOnboarding = true
+        settings.updatedAt = Date()
+        UserDefaults.standard.set(true, forKey: "payscope.onboarding.completed.sticky")
+        try? modelContext.save()
+
+        Task {
+            try? await cloudKitService.saveSettings(settings)
+            if let firstShiftEntry {
+                try? await cloudKitService.saveDayEntry(firstShiftEntry)
+            }
+        }
+    }
+
+    private func navigate(to newStep: OnboardingStep) {
+        let targetIndex = newStep.rawValue
+        if targetIndex <= furthestUnlockedStepIndex {
+            persistCurrentStep()
+            step = newStep
+            return
+        }
+
+        guard targetIndex == currentStepIndex + 1, isStepValid else { return }
+        persistCurrentStep()
+        furthestUnlockedStepIndex = max(furthestUnlockedStepIndex, targetIndex)
+        step = newStep
+    }
+
+    private var stepSelection: Binding<OnboardingStep> {
+        Binding(
+            get: { step },
+            set: { navigate(to: $0) }
+        )
+    }
+
+    private var onboardingTabs: [FabBarTab<OnboardingStep>] {
+        OnboardingStep.allCases.map { step in
+            FabBarTab(value: step, title: step.shortTitle, systemImage: step.systemImage)
+        }
+    }
+
+    private var currentStepIndex: Int {
+        step.rawValue
+    }
+
+    private var showsFallbackControls: Bool {
+        horizontalSizeClass != .compact
+    }
+
+    private var fallbackNavigationControls: some View {
+        HStack(spacing: 12) {
+            Button("Zurück") {
+                guard currentStepIndex > 0, let previous = OnboardingStep(rawValue: currentStepIndex - 1) else { return }
+                navigate(to: previous)
+            }
+            .buttonStyle(.bordered)
+            .disabled(currentStepIndex == 0)
+
+            Button(step == .appearance ? "Fertig" : "Weiter") {
+                advanceStep()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!isStepValid)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 18)
     }
 
     private var vacationLookbackBinding: Binding<Bool> {
@@ -443,6 +561,13 @@ private struct OnboardingFlowView: View {
         return Int((hours * 3600).rounded())
     }
 
+    private func parseMinutes(_ text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return 0 }
+        guard let value = Int(trimmed), value >= 0 else { return nil }
+        return value
+    }
+
     private var isHolidayCountryCodeValid: Bool {
         normalizedHolidayCountryCode.count == 2
     }
@@ -462,6 +587,109 @@ private struct OnboardingFlowView: View {
             set: { settings.calendarCellDisplayMode = $0 }
         )
     }
+
+    private var firstShiftValidationMessage: String? {
+        guard shouldCreateFirstShift else { return nil }
+        guard parseMinutes(firstShiftBreakMinutes) != nil else {
+            return "Bitte eine gültige Pause in Minuten eingeben."
+        }
+        if !firstShiftTip.isEmpty && parseMoneyToCents(firstShiftTip) == nil {
+            return "Bitte ein gültiges Trinkgeld eingeben."
+        }
+        guard let range = firstShiftTimeRange else {
+            return "Start und Ende dürfen nicht gleich sein."
+        }
+        let duration = Int(range.end.timeIntervalSince(range.start))
+        if let breakMinutes = parseMinutes(firstShiftBreakMinutes), breakMinutes * 60 >= duration {
+            return "Die Pause muss kürzer als die Schicht sein."
+        }
+        return nil
+    }
+
+    private var firstShiftSummaryText: String? {
+        guard shouldCreateFirstShift, let range = firstShiftTimeRange else { return nil }
+        let breakSeconds = (parseMinutes(firstShiftBreakMinutes) ?? 0) * 60
+        let duration = max(0, Int(range.end.timeIntervalSince(range.start)) - breakSeconds)
+        let durationText = PayScopeFormatters.hhmmString(seconds: duration)
+        let daySuffix = Calendar.current.isDate(range.start, inSameDayAs: range.end) ? "" : " (+1)"
+        return "Wird als Arbeitstag mit \(durationText) gespeichert. Ende\(daySuffix)."
+    }
+
+    private var firstShiftTimeRange: (start: Date, end: Date)? {
+        let calendar = Calendar.current
+        let startMinute = minuteOfDay(from: firstShiftStartTime, calendar: calendar)
+        let endMinute = minuteOfDay(from: firstShiftEndTime, calendar: calendar)
+        guard startMinute != endMinute else { return nil }
+
+        let start = combinedDate(day: firstShiftDate, time: firstShiftStartTime, calendar: calendar)
+        var end = combinedDate(day: firstShiftDate, time: firstShiftEndTime, calendar: calendar)
+        if endMinute < startMinute {
+            end = calendar.date(byAdding: .day, value: 1, to: end) ?? end.addingTimeInterval(24 * 60 * 60)
+        }
+        return end > start ? (start, end) : nil
+    }
+
+    private func makeFirstShiftEntry() -> DayEntry? {
+        guard let range = firstShiftTimeRange else { return nil }
+        let entry = DayEntry(date: firstShiftDate, updatedAt: Date(), type: .work)
+        entry.shiftStart = range.start
+        entry.shiftEnd = range.end
+        entry.breakSeconds = (parseMinutes(firstShiftBreakMinutes) ?? 0) * 60
+        if let tipCents = parseMoneyToCents(firstShiftTip), tipCents > 0 {
+            entry.tipAmountCents = tipCents
+        }
+        return entry
+    }
+
+    private func minuteOfDay(from date: Date, calendar: Calendar) -> Int {
+        let components = calendar.dateComponents([.hour, .minute], from: date)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
+    }
+
+    private func combinedDate(day: Date, time: Date, calendar: Calendar) -> Date {
+        let dayComponents = calendar.dateComponents([.year, .month, .day], from: day)
+        let timeComponents = calendar.dateComponents([.hour, .minute], from: time)
+        var components = DateComponents()
+        components.year = dayComponents.year
+        components.month = dayComponents.month
+        components.day = dayComponents.day
+        components.hour = timeComponents.hour
+        components.minute = timeComponents.minute
+        return calendar.date(from: components) ?? day.startOfDayLocal()
+    }
+}
+
+private enum OnboardingStep: Int, CaseIterable, Hashable, Identifiable {
+    case overview
+    case pay
+    case schedule
+    case firstShift
+    case rules
+    case appearance
+
+    var id: Int { rawValue }
+
+    var shortTitle: String {
+        switch self {
+        case .overview: return "Start"
+        case .pay: return "Lohn"
+        case .schedule: return "Zeit"
+        case .firstShift: return "Daten"
+        case .rules: return "Regel"
+        case .appearance: return "Stil"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overview: return "sparkles"
+        case .pay: return "eurosign.circle.fill"
+        case .schedule: return "calendar.badge.clock"
+        case .firstShift: return "square.and.pencil"
+        case .rules: return "checkmark.shield.fill"
+        case .appearance: return "paintpalette.fill"
+        }
+    }
 }
 
 private struct OnboardingPageShell<Content: View>: View {
@@ -471,6 +699,7 @@ private struct OnboardingPageShell<Content: View>: View {
     let total: Int
     let icon: String
     let accent: Color
+    let isCurrentStepValid: Bool
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -496,11 +725,25 @@ private struct OnboardingPageShell<Content: View>: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
+                ProgressView(value: Double(step), total: Double(total))
+                    .tint(accent)
+
                 content
                     .padding(14)
                     .payScopeSurface(accent: accent, cornerRadius: 18, emphasis: 0.28)
+
+                if !isCurrentStepValid {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                        Text("Bitte fülle die markierten Angaben aus, bevor du weitergehst.")
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .padding(.top, -4)
+                }
             }
             .padding(24)
         }
+        .fabBarSafeAreaPadding()
     }
 }

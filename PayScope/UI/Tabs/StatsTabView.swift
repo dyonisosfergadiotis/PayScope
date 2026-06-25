@@ -10,24 +10,86 @@ struct StatsTabView: View {
         case fullSync
     }
 
+    private enum StatsContentMode: String, CaseIterable, Identifiable {
+        case pay
+        case timeAccount
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .pay:
+                return "Lohn"
+            case .timeAccount:
+                return "Zeitkonto"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .pay:
+                return "eurosign.circle.fill"
+            case .timeAccount:
+                return "plusminus.circle.fill"
+            }
+        }
+    }
+
     private enum MonthSelectorStyle {
         case largeTitle
         case subtitle
     }
 
+    private struct StatsBestDay: Sendable {
+        let date: Date
+        let seconds: Int
+    }
+
+    private struct StatsDayTypeBreakdownValue: Sendable {
+        let type: DayType
+        let count: Int
+        let seconds: Int
+    }
+
+    private struct StatsDerivedSnapshot: Sendable {
+        var key: String
+        var monthSummary: TotalsSummary
+        var activeDaysCount: Int
+        var bestDay: StatsBestDay?
+        var yearPayPoints: [MonthPayPoint]
+        var yearAverageMonthlyCents: Int
+        var dayTypeBreakdown: [StatsDayTypeBreakdownValue]
+        var monthDailyPoints: [MonthDailyPoint]
+
+        static let empty = StatsDerivedSnapshot(
+            key: "",
+            monthSummary: TotalsSummary(),
+            activeDaysCount: 0,
+            bestDay: nil,
+            yearPayPoints: [],
+            yearAverageMonthlyCents: 0,
+            dayTypeBreakdown: [],
+            monthDailyPoints: []
+        )
+    }
+
     @EnvironmentObject private var cloudKitService: CloudKitService
     @Bindable var settings: Settings
     @Binding var referenceMonth: Date
+    var includesTimeAccount: Bool = true
+    var isActive: Bool = true
 
     @State private var entries: [DayEntry] = []
     @State private var isLoadingData = false
     @State private var showMonthYearPicker = false
-    @State private var selectedYearChartMonth: Date?
-    @State private var selectedDailyChartDate: Date?
-    @State private var chartSelectionFeedbackTrigger = 0
+    @State private var selectedContentMode: StatsContentMode = .pay
+    @State private var modeSelectionFeedbackTrigger = 0
+    @State private var derivedSnapshot = StatsDerivedSnapshot.empty
+    @State private var derivedSnapshotTask: Task<Void, Never>?
+    @State private var pendingDerivedSnapshotKey = ""
+    @Namespace private var statsModeNamespace
 
     private let localStore = LocalDayEntryStore.shared
-    private let service = CalculationService()
     private static let monthTitleFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "de_DE")
@@ -45,11 +107,11 @@ struct StatsTabView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
-                    monthFocusCard
-                    statsCards
-                    dayTypeBreakdownCard
-                    yearPayChartCard
-                    monthDailyChartCard
+                    if includesTimeAccount {
+                        statsModeRail
+                    }
+
+                    statsContent
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 18)
@@ -73,37 +135,288 @@ struct StatsTabView: View {
                 ) { selectedMonth in
                     referenceMonth = selectedMonth
                 }
-                .payScopeSheetSurface(accent: settings.themeAccent.color)
             }
         }
         .payScopeBackground(accent: settings.themeAccent.color)
-        .sensoryFeedback(.selection, trigger: chartSelectionFeedbackTrigger)
-        .task(id: referenceMonth) {
+        .sensoryFeedback(.selection, trigger: modeSelectionFeedbackTrigger)
+        .task(id: dataLoadTaskKey) {
+            guard isActive else { return }
             await loadData()
         }
-        .onChange(of: referenceMonth.startOfMonthLocal()) { _, _ in
-            selectedYearChartMonth = nil
-            selectedDailyChartDate = nil
+        .task(id: statsDerivedSnapshotKey) {
+            scheduleStatsDerivedSnapshotRecompute(key: statsDerivedSnapshotKey)
         }
-        .onChange(of: selectedYearChartMonth) { oldValue, newValue in
-            let oldPoint = selectedYearPayPoint(for: oldValue, in: yearPayPoints)
-            let newPoint = selectedYearPayPoint(for: newValue, in: yearPayPoints)
-            guard oldPoint?.monthStart != newPoint?.monthStart, newPoint != nil else { return }
-            chartSelectionFeedbackTrigger += 1
+        .onChange(of: includesTimeAccount) { _, includesTimeAccount in
+            guard !includesTimeAccount, selectedContentMode == .timeAccount else { return }
+            selectedContentMode = .pay
         }
-        .onChange(of: selectedDailyChartDate) { oldValue, newValue in
-            let points = monthDailyPoints
-            let oldPoint = selectedDailyPoint(for: oldValue, in: points)
-            let newPoint = selectedDailyPoint(for: newValue, in: points)
-            guard oldPoint?.date != newPoint?.date, newPoint != nil else { return }
-            chartSelectionFeedbackTrigger += 1
+        .onDisappear {
+            derivedSnapshotTask?.cancel()
+            derivedSnapshotTask = nil
         }
         .onReceive(
             NotificationCenter.default.publisher(for: .dayEntriesDidChange)
                 .debounce(for: .seconds(1), scheduler: RunLoop.main)
         ) { _ in
+            guard isActive else { return }
             Task { await loadData(mode: .localOnly) }
         }
+    }
+
+    private var dataLoadTaskKey: String {
+        "\(referenceMonth.startOfMonthLocal().timeIntervalSinceReferenceDate)-active-\(isActive)"
+    }
+
+    private var statsDerivedSnapshotKey: String {
+        var hasher = Hasher()
+        hasher.combine(referenceMonth.startOfMonthLocal().timeIntervalSinceReferenceDate)
+        hasher.combine(dayEntriesSignature(entries))
+        hasher.combine(statsCalculationSettingsSignature)
+        return String(hasher.finalize())
+    }
+
+    private var statsCalculationSettingsSignature: Int {
+        var hasher = Hasher()
+        hasher.combine(settings.payMode.rawValue)
+        hasher.combine(settings.hourlyRateCents ?? -1)
+        hasher.combine(settings.monthlySalaryCents ?? -1)
+        hasher.combine(settings.weeklyTargetSeconds ?? -1)
+        hasher.combine(settings.vacationLookbackCount)
+        hasher.combine(settings.effectiveVacationCreditingMode.rawValue)
+        hasher.combine(settings.effectiveVacationFixedSeconds)
+        hasher.combine(settings.countMissingAsZero)
+        hasher.combine(settings.strictHistoryRequired)
+        hasher.combine(settings.effectiveCalculateBreaks)
+        hasher.combine(settings.effectiveHolidayCreditingMode.rawValue)
+        hasher.combine(settings.effectiveHolidayFixedSeconds)
+        hasher.combine(settings.scheduledWorkdaysCount)
+        return hasher.finalize()
+    }
+
+    @MainActor
+    private func scheduleStatsDerivedSnapshotRecompute(key: String) {
+        guard key != derivedSnapshot.key || pendingDerivedSnapshotKey != key else { return }
+
+        derivedSnapshotTask?.cancel()
+        pendingDerivedSnapshotKey = key
+
+        let entrySnapshots = entries.map(CalculationInputSnapshot.init)
+        let settingsSnapshot = CalculationSettingsSnapshot(settings)
+        let referenceMonthStart = referenceMonth.startOfMonthLocal()
+
+        derivedSnapshotTask = Task { @MainActor in
+            let snapshot = await Task.detached(priority: .userInitiated) {
+                Self.makeStatsDerivedSnapshot(
+                    key: key,
+                    entries: entrySnapshots,
+                    settings: settingsSnapshot,
+                    referenceMonth: referenceMonthStart
+                )
+            }.value
+
+            guard !Task.isCancelled else { return }
+            guard pendingDerivedSnapshotKey == key else { return }
+            derivedSnapshot = snapshot
+        }
+    }
+
+    nonisolated private static func makeStatsDerivedSnapshot(
+        key: String,
+        entries: [CalculationInputSnapshot],
+        settings: CalculationSettingsSnapshot,
+        referenceMonth: Date
+    ) -> StatsDerivedSnapshot {
+        let calendar = Calendar.current
+        let monthRange = calendar.dateInterval(of: .month, for: referenceMonth)
+            ?? DateInterval(start: referenceMonth, duration: 24 * 60 * 60)
+        let monthEnd = monthRange.end.addingTimeInterval(-1)
+        let monthEntries = entries
+            .filter(\.isRealTrackedDay)
+            .filter { $0.date >= monthRange.start && $0.date < monthRange.end }
+            .sorted { $0.date < $1.date }
+
+        var context = CalculationService(calendar: calendar).makeContext(
+            entrySnapshots: entries,
+            settingsSnapshot: settings,
+            calendar: calendar
+        )
+
+        let monthSummary = context.periodSummary(from: monthRange.start, to: monthEnd)
+        let monthSecondsByDate = monthEntrySecondsByDate(monthEntries, context: &context, calendar: calendar)
+        let activeDaysCount = monthSecondsByDate.values.filter { $0 > 0 }.count
+        let bestDay = monthSecondsByDate
+            .filter { $0.value > 0 }
+            .max { $0.value < $1.value }
+            .map { StatsBestDay(date: $0.key, seconds: $0.value) }
+
+        let yearPayPoints = yearPayPoints(
+            referenceMonth: referenceMonth,
+            context: &context,
+            calendar: calendar
+        )
+        let yearAverageMonthlyCents: Int = {
+            guard !yearPayPoints.isEmpty else { return 0 }
+            let total = yearPayPoints.reduce(0) { $0 + $1.cents }
+            return Int((Double(total) / Double(yearPayPoints.count)).rounded())
+        }()
+
+        let dayTypeBreakdown = DayType.allCases.compactMap { type -> StatsDayTypeBreakdownValue? in
+            let typedEntries = monthEntries.filter { $0.type == type }
+            let seconds = typedEntries.reduce(0) { total, entry in
+                let day = entry.date.startOfDayLocal(calendar: calendar)
+                return total + max(0, monthSecondsByDate[day] ?? 0)
+            }
+            guard !typedEntries.isEmpty || seconds > 0 else { return nil }
+            return StatsDayTypeBreakdownValue(type: type, count: typedEntries.count, seconds: seconds)
+        }
+
+        let monthDailyPoints = monthEntries.compactMap { entry -> MonthDailyPoint? in
+            let day = entry.date.startOfDayLocal(calendar: calendar)
+            guard let seconds = monthSecondsByDate[day] else { return nil }
+            return MonthDailyPoint(date: entry.date, hours: Double(seconds) / 3600.0)
+        }
+
+        return StatsDerivedSnapshot(
+            key: key,
+            monthSummary: monthSummary,
+            activeDaysCount: activeDaysCount,
+            bestDay: bestDay,
+            yearPayPoints: yearPayPoints,
+            yearAverageMonthlyCents: yearAverageMonthlyCents,
+            dayTypeBreakdown: dayTypeBreakdown,
+            monthDailyPoints: monthDailyPoints
+        )
+    }
+
+    nonisolated private static func monthEntrySecondsByDate(
+        _ monthEntries: [CalculationInputSnapshot],
+        context: inout CalculationContext,
+        calendar: Calendar
+    ) -> [Date: Int] {
+        var values: [Date: Int] = [:]
+        for entry in monthEntries {
+            let result = context.dayComputation(for: entry)
+            switch result {
+            case let .ok(seconds, _), let .warning(seconds, _, _):
+                values[entry.date.startOfDayLocal(calendar: calendar)] = seconds
+            case .error:
+                continue
+            }
+        }
+        return values
+    }
+
+    nonisolated private static func yearPayPoints(
+        referenceMonth: Date,
+        context: inout CalculationContext,
+        calendar: Calendar
+    ) -> [MonthPayPoint] {
+        guard let yearInterval = calendar.dateInterval(of: .year, for: referenceMonth) else {
+            return []
+        }
+
+        return (0..<12).compactMap { offset in
+            guard let monthStart = calendar.date(byAdding: .month, value: offset, to: yearInterval.start) else {
+                return nil
+            }
+            let monthEnd = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart
+            let summary = context.periodSummary(from: monthStart, to: monthEnd.addingTimeInterval(-1))
+            return MonthPayPoint(
+                monthStart: monthStart,
+                cents: summary.totalCents,
+                isHighlighted: calendar.isDate(monthStart, equalTo: referenceMonth, toGranularity: .month)
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var statsContent: some View {
+        switch effectiveContentMode {
+        case .pay:
+            VStack(spacing: 18) {
+                monthFocusCard
+                statsCards
+                dayTypeBreakdownCard
+                yearPayChartCard
+                monthDailyChartCard
+            }
+            .transition(.opacity.combined(with: .scale(scale: 0.985, anchor: .top)))
+        case .timeAccount:
+            HoursAccountTabView(
+                settings: settings,
+                referenceMonth: $referenceMonth,
+                presentation: .embedded
+            )
+            .transition(.opacity.combined(with: .scale(scale: 0.985, anchor: .top)))
+        }
+    }
+
+    private var effectiveContentMode: StatsContentMode {
+        includesTimeAccount ? selectedContentMode : .pay
+    }
+
+    private var statsModeRail: some View {
+        HStack(spacing: 5) {
+            ForEach(StatsContentMode.allCases) { mode in
+                statsModeButton(mode)
+            }
+        }
+        .padding(5)
+        .frame(maxWidth: .infinity)
+        .payScopeGlassControl(
+            accent: settings.themeAccent.color,
+            cornerRadius: 25,
+            tintOpacity: 0.055,
+            isInteractive: false
+        )
+    }
+
+    private func statsModeButton(_ mode: StatsContentMode) -> some View {
+        let isSelected = effectiveContentMode == mode
+
+        return Button {
+            guard selectedContentMode != mode else { return }
+            withAnimation(.smooth(duration: 0.28, extraBounce: 0.12)) {
+                selectedContentMode = mode
+            }
+            modeSelectionFeedbackTrigger += 1
+        } label: {
+            ZStack {
+                if isSelected {
+                    Capsule(style: .continuous)
+                        .fill(Color(.tertiarySystemFill).opacity(0.76))
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(settings.themeAccent.color.opacity(0.16), lineWidth: 0.8)
+                        )
+                        .matchedGeometryEffect(id: "stats-mode-selection", in: statsModeNamespace)
+                }
+
+                HStack(spacing: 7) {
+                    Image(systemName: mode.icon)
+                        .font(.system(.caption, design: .rounded).weight(.black))
+                    Text(mode.title)
+                        .font(.system(.subheadline, design: .rounded).weight(.bold))
+                }
+                .foregroundStyle(isSelected ? settings.themeAccent.color : .secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 11)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(
+            PayScopeLiquidGlassPressButtonStyle(
+                accent: settings.themeAccent.color,
+                shape: Capsule(style: .continuous),
+                tintOpacity: 0.04,
+                pressedScale: 0.975
+            )
+        )
+        .accessibilityLabel(mode.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var monthRange: DateInterval {
@@ -120,19 +433,8 @@ struct StatsTabView: View {
         )
     }
 
-    private var monthEntries: [DayEntry] {
-        entries
-            .filter { $0.date >= monthRange.start && $0.date < monthRange.end }
-            .sorted { $0.date < $1.date }
-    }
-
     private var monthSummary: TotalsSummary {
-        service.periodSummary(
-            entries: entries,
-            from: monthRange.start,
-            to: monthRange.end.addingTimeInterval(-1),
-            settings: settings
-        )
+        derivedSnapshot.monthSummary
     }
 
     private var monthDays: Int {
@@ -158,11 +460,7 @@ struct StatsTabView: View {
     }
 
     private var activeDaysCount: Int {
-        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
-        return monthEntries
-            .compactMap { workedSeconds(for: $0, entriesByDate: entriesByDate) }
-            .filter { $0 > 0 }
-            .count
+        derivedSnapshot.activeDaysCount
     }
 
     private var monthTargetSeconds: Int? {
@@ -176,12 +474,7 @@ struct StatsTabView: View {
     }
 
     private var bestDay: (date: Date, seconds: Int)? {
-        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
-        return monthEntries.compactMap { day -> (date: Date, seconds: Int)? in
-            guard let seconds = workedSeconds(for: day, entriesByDate: entriesByDate), seconds > 0 else { return nil }
-            return (day.date, seconds)
-        }
-        .max { $0.seconds < $1.seconds }
+        derivedSnapshot.bestDay.map { (date: $0.date, seconds: $0.seconds) }
     }
 
     private var monthTitle: String {
@@ -199,35 +492,11 @@ struct StatsTabView: View {
     }
 
     private var yearPayPoints: [MonthPayPoint] {
-        guard let yearInterval = Calendar.current.dateInterval(of: .year, for: referenceMonth) else {
-            return []
-        }
-
-        let months = (0..<12).compactMap { Calendar.current.date(byAdding: .month, value: $0, to: yearInterval.start) }
-        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
-
-        return months.map { monthStart in
-            let monthEnd = Calendar.current.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart
-            let summary = service.periodSummary(
-                entries: entries,
-                entriesByDate: entriesByDate,
-                from: monthStart,
-                to: monthEnd.addingTimeInterval(-1),
-                settings: settings
-            )
-            return MonthPayPoint(
-                monthStart: monthStart,
-                cents: summary.totalCents,
-                isHighlighted: Calendar.current.isDate(monthStart, equalTo: referenceMonth, toGranularity: .month)
-            )
-        }
+        derivedSnapshot.yearPayPoints
     }
 
     private var yearAverageMonthlyCents: Int {
-        let points = yearPayPoints
-        guard !points.isEmpty else { return 0 }
-        let total = points.reduce(0) { $0 + $1.cents }
-        return Int((Double(total) / Double(points.count)).rounded())
+        derivedSnapshot.yearAverageMonthlyCents
     }
 
     private var monthFocusCard: some View {
@@ -250,11 +519,13 @@ struct StatsTabView: View {
 
                 Image(systemName: "chart.line.uptrend.xyaxis")
                     .font(.system(.title2, design: .rounded).weight(.black))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(settings.themeAccent.color)
                     .frame(width: 48, height: 48)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(settings.themeAccent.color)
+                    .payScopeLiquidGlassIcon(
+                        accent: settings.themeAccent.color,
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous),
+                        tintOpacity: 0.12,
+                        shadowOpacity: 0.06
                     )
             }
 
@@ -299,17 +570,12 @@ struct StatsTabView: View {
             }
         }
         .padding(20)
-        .payScopeGlassSurface(
+        .payScopePureGlassSurface(
             accent: settings.themeAccent.color,
             cornerRadius: 28,
             tintOpacity: 0.07,
             shadowOpacity: 0.09,
-            isInteractive: true
-        )
-        .payScopeLiquidGlassTapFeedback(
-            accent: settings.themeAccent.color,
-            in: RoundedRectangle(cornerRadius: 28, style: .continuous),
-            tintOpacity: 0.05
+            isInteractive: false
         )
     }
 
@@ -402,9 +668,12 @@ struct StatsTabView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.systemBackground).opacity(0.72))
+        .payScopePureGlassSurface(
+            accent: settings.themeAccent.color,
+            cornerRadius: 18,
+            tintOpacity: 0.045,
+            shadowOpacity: 0.025,
+            isInteractive: false
         )
     }
 
@@ -413,7 +682,7 @@ struct StatsTabView: View {
             metricCard(
                 title: PayScopeFormatters.currencyString(cents: averageCentsPerActiveDay),
                 value: PayScopeFormatters.hoursString(seconds: averageSecondsPerActiveDay),
-                footnote: "Ø pro aktiven Tag",
+                footnote: "Ø pro Schicht",
                 icon: "timer",
                 tint: settings.themeAccent.color
             )
@@ -485,17 +754,12 @@ struct StatsTabView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
-        .payScopeGlassSurface(
+        .payScopePureGlassSurface(
             accent: settings.themeAccent.color,
             cornerRadius: 22,
             tintOpacity: 0.052,
             shadowOpacity: 0.07,
-            isInteractive: true
-        )
-        .payScopeLiquidGlassTapFeedback(
-            accent: tint,
-            in: RoundedRectangle(cornerRadius: 22, style: .continuous),
-            tintOpacity: 0.05
+            isInteractive: false
         )
     }
 
@@ -517,22 +781,23 @@ struct StatsTabView: View {
                 }
             }
         }
-        .payScopeCard(accent: settings.themeAccent.color, isInteractive: true)
+        .padding(16)
+        .payScopePureGlassSurface(
+            accent: settings.themeAccent.color,
+            cornerRadius: PayScopeModalGeometry.sheet.innerCornerRadius,
+            tintOpacity: 0.055,
+            shadowOpacity: 0.075,
+            isInteractive: false
+        )
     }
 
     private var dayTypeBreakdown: [DayTypeBreakdownItem] {
-        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
-        return DayType.allCases.compactMap { type in
-            let typedEntries = monthEntries.filter { $0.type == type }
-            let seconds = typedEntries.reduce(0) { total, entry in
-                total + max(0, workedSeconds(for: entry, entriesByDate: entriesByDate) ?? 0)
-            }
-            guard !typedEntries.isEmpty || seconds > 0 else { return nil }
+        derivedSnapshot.dayTypeBreakdown.map { value in
             return DayTypeBreakdownItem(
-                type: type,
-                count: typedEntries.count,
-                seconds: seconds,
-                tint: settings.categoryColor(for: type)
+                type: value.type,
+                count: value.count,
+                seconds: value.seconds,
+                tint: settings.categoryColor(for: value.type)
             )
         }
     }
@@ -564,9 +829,12 @@ struct StatsTabView: View {
                 .payScopeNumericTransition(value: item.seconds)
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.systemBackground).opacity(0.62))
+        .payScopePureGlassSurface(
+            accent: item.tint,
+            cornerRadius: 16,
+            tintOpacity: 0.042,
+            shadowOpacity: 0.02,
+            isInteractive: false
         )
     }
 
@@ -586,196 +854,24 @@ struct StatsTabView: View {
     }
 
     private var yearPayChartCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            cardHeader(title: "Lohnverlauf", subtitle: "")
-
-            let points = yearPayPoints
-
-            if points.isEmpty {
-                Text("Noch keine Daten.")
-                    .foregroundStyle(.secondary)
-            } else {
-#if canImport(Charts)
-                let selectedPoint = selectedYearPayPoint(for: selectedYearChartMonth, in: points)
-
-                Chart {
-                    ForEach(points, id: \.monthStart) { point in
-                        let isSelected = selectedPoint?.monthStart == point.monthStart
-
-                        BarMark(
-                            x: .value("Monat", point.monthStart, unit: .month),
-                            y: .value("Lohn", Double(point.cents) / 100.0)
-                        )
-                        .cornerRadius(5)
-                        .foregroundStyle(isSelected || point.isHighlighted ? settings.themeAccent.color : .secondary.opacity(0.35))
-                        .opacity(selectedPoint == nil || isSelected ? 1 : 0.52)
-                    }
-
-                    RuleMark(y: .value("Ø", Double(yearAverageMonthlyCents) / 100.0))
-                        .foregroundStyle(.secondary)
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
-
-                    if let selectedPoint {
-                        RuleMark(x: .value("Auswahl", selectedPoint.monthStart, unit: .month))
-                            .foregroundStyle(settings.themeAccent.color.opacity(0.42))
-                            .lineStyle(StrokeStyle(lineWidth: 1.5))
-                    }
-                }
-                .frame(height: 220)
-                .chartYScale(domain: yearPayChartYDomain(for: points))
-                .chartXSelection(value: $selectedYearChartMonth)
-                .overlay(alignment: .top) {
-                    chartSelectionOverlay(
-                        title: selectedPoint.map { Self.compactMonthTitleFormatter.string(from: $0.monthStart) },
-                        value: selectedPoint.map { PayScopeFormatters.currencyString(cents: $0.cents) }
-                    )
-                }
-#else
-                HStack(alignment: .bottom, spacing: 6) {
-                    ForEach(points, id: \.monthStart) { point in
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(point.isHighlighted ? settings.themeAccent.color : .secondary.opacity(0.35))
-                            .frame(width: 10, height: max(4, (Double(point.cents) / 100.0) * 0.02))
-                    }
-                }
-                .frame(height: 220, alignment: .bottom)
-#endif
-            }
-        }
-        .payScopeCard(accent: settings.themeAccent.color, isInteractive: true)
-    }
-
-    private var monthDailyChartCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            cardHeader(title: "Stundenverlauf", subtitle: "")
-
-            let points = monthDailyPoints
-
-            if points.isEmpty {
-                Text("Noch keine Daten.")
-                    .foregroundStyle(.secondary)
-            } else {
-#if canImport(Charts)
-                let selectedPoint = selectedDailyPoint(for: selectedDailyChartDate, in: points)
-
-                Chart(points, id: \.date) { point in
-                    let isSelected = selectedPoint?.date == point.date
-
-                    BarMark(
-                        x: .value("Tag", point.date, unit: .day),
-                        y: .value("Stunden", point.hours)
-                    )
-                    .cornerRadius(4)
-                    .foregroundStyle(settings.themeAccent.color)
-                    .opacity(selectedPoint == nil || isSelected ? 1 : 0.45)
-
-                    if isSelected {
-                        RuleMark(x: .value("Auswahl", point.date, unit: .day))
-                            .foregroundStyle(settings.themeAccent.color.opacity(0.42))
-                            .lineStyle(StrokeStyle(lineWidth: 1.5))
-                    }
-                }
-                .frame(height: 220)
-                .chartYScale(domain: dailyHoursChartYDomain(for: points))
-                .chartXSelection(value: $selectedDailyChartDate)
-                .overlay(alignment: .top) {
-                    chartSelectionOverlay(
-                        title: selectedPoint.map { PayScopeFormatters.day.string(from: $0.date) },
-                        value: selectedPoint.map {
-                            "\(PayScopeFormatters.hhmmString(seconds: Int(($0.hours * 3600).rounded()))) h"
-                        }
-                    )
-                }
-#else
-                HStack(alignment: .bottom, spacing: 6) {
-                    ForEach(points, id: \.date) { point in
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(settings.themeAccent.color)
-                            .frame(width: 8, height: max(4, point.hours * 16))
-                    }
-                }
-                .frame(height: 220, alignment: .bottom)
-#endif
-            }
-        }
-        .payScopeCard(accent: settings.themeAccent.color, isInteractive: true)
-    }
-
-    private func yearPayChartYDomain(for points: [MonthPayPoint]) -> ClosedRange<Double> {
-        let maxPay = points.map { Double($0.cents) / 100.0 }.max() ?? 0
-        let averagePay = Double(yearAverageMonthlyCents) / 100.0
-        return stableChartYDomain(maxValue: max(maxPay, averagePay))
-    }
-
-    private func dailyHoursChartYDomain(for points: [(date: Date, hours: Double)]) -> ClosedRange<Double> {
-        stableChartYDomain(maxValue: points.map(\.hours).max() ?? 0)
-    }
-
-    private func stableChartYDomain(maxValue: Double) -> ClosedRange<Double> {
-        0...max(maxValue * 1.12, 1)
-    }
-
-    private func selectedYearPayPoint(for date: Date?, in points: [MonthPayPoint]) -> MonthPayPoint? {
-        guard let date else { return nil }
-        return points.first { Calendar.current.isDate($0.monthStart, equalTo: date, toGranularity: .month) }
-    }
-
-    private func selectedDailyPoint(
-        for date: Date?,
-        in points: [(date: Date, hours: Double)]
-    ) -> (date: Date, hours: Double)? {
-        guard let date else { return nil }
-        return points.first { Calendar.current.isDate($0.date, inSameDayAs: date) }
-    }
-
-    @ViewBuilder
-    private func chartSelectionOverlay(title: String?, value: String?) -> some View {
-        if let title, let value {
-            chartSelectionAnnotation(title: title, value: value)
-                .padding(.top, 8)
-                .allowsHitTesting(false)
-                .transition(.opacity)
-                .animation(.easeInOut(duration: 0.16), value: title)
-                .animation(.easeInOut(duration: 0.16), value: value)
-        }
-    }
-
-    private func chartSelectionAnnotation(title: String, value: String) -> some View {
-        VStack(spacing: 2) {
-            Text(title)
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.caption.weight(.black))
-                .monospacedDigit()
-                .payScopeNumericTransition(value: value)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .payScopeGlassControl(
-            accent: settings.themeAccent.color,
-            cornerRadius: 12,
-            tintOpacity: 0.065,
-            isInteractive: false
+        YearPayChartCard(
+            points: yearPayPoints,
+            averageMonthlyCents: yearAverageMonthlyCents,
+            referenceMonthStart: referenceMonth.startOfMonthLocal(),
+            accent: settings.themeAccent.color
         )
     }
 
-    private var monthDailyPoints: [(date: Date, hours: Double)] {
-        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
-        return monthEntries.compactMap { day -> (date: Date, hours: Double)? in
-            guard let seconds = workedSeconds(for: day, entriesByDate: entriesByDate) else { return nil }
-            return (day.date, Double(seconds) / 3600.0)
-        }
+    private var monthDailyChartCard: some View {
+        MonthDailyChartCard(
+            points: monthDailyPoints,
+            referenceMonthStart: referenceMonth.startOfMonthLocal(),
+            accent: settings.themeAccent.color
+        )
     }
 
-    private func workedSeconds(for day: DayEntry, entriesByDate: [Date: DayEntry]) -> Int? {
-        let result = service.dayComputation(for: day, entriesByDate: entriesByDate, settings: settings)
-        switch result {
-        case let .ok(seconds, _), let .warning(seconds, _, _):
-            return seconds
-        case .error:
-            return nil
-        }
+    private var monthDailyPoints: [MonthDailyPoint] {
+        derivedSnapshot.monthDailyPoints
     }
 
     @MainActor
@@ -829,12 +925,20 @@ struct StatsTabView: View {
         hasher.combine(values.count)
         for value in values.sorted(by: { $0.date < $1.date }) {
             hasher.combine(value.date.timeIntervalSinceReferenceDate)
+            hasher.combine(value.updatedAt.timeIntervalSinceReferenceDate)
             hasher.combine(value.type.rawValue)
             hasher.combine(value.manualWorkedSeconds ?? -1)
             hasher.combine(value.creditedOverrideSeconds ?? -1)
             hasher.combine(value.shiftStart?.timeIntervalSinceReferenceDate ?? -1)
             hasher.combine(value.shiftEnd?.timeIntervalSinceReferenceDate ?? -1)
             hasher.combine(value.breakSeconds ?? -1)
+            hasher.combine(value.alwaysApplyFifteenMinuteBuffer ?? false)
+            hasher.combine(value.segments.count)
+            for segment in value.segments.sorted(by: { $0.start < $1.start }) {
+                hasher.combine(segment.start.timeIntervalSinceReferenceDate)
+                hasher.combine(segment.end.timeIntervalSinceReferenceDate)
+                hasher.combine(segment.breakSeconds)
+            }
         }
         return hasher.finalize()
     }
@@ -862,10 +966,313 @@ struct StatsTabView: View {
     }
 }
 
-private struct MonthPayPoint {
+private struct MonthPayPoint: Sendable {
     let monthStart: Date
     let cents: Int
     let isHighlighted: Bool
+}
+
+private struct MonthDailyPoint: Sendable {
+    let date: Date
+    let hours: Double
+}
+
+private struct YearPayChartCard: View {
+    let points: [MonthPayPoint]
+    let averageMonthlyCents: Int
+    let referenceMonthStart: Date
+    let accent: Color
+
+    @State private var selectedMonth: Date?
+
+    private static let compactMonthTitleFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "MMM yyyy"
+        return formatter
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            StatsChartCardHeader(title: "Lohnverlauf")
+
+            if points.isEmpty {
+                Text("Noch keine Daten.")
+                    .foregroundStyle(.secondary)
+            } else {
+#if canImport(Charts)
+                let selectedPoint = selectedPayPoint(for: selectedMonth)
+
+                StaticYearPayChart(
+                    points: points,
+                    averageMonthlyCents: averageMonthlyCents,
+                    yDomain: chartYDomain,
+                    accent: accent
+                )
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        Rectangle()
+                            .fill(.clear)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { value in
+                                        updateSelection(at: value.location.x, proxy: proxy, geometry: geometry)
+                                    }
+                            )
+                    }
+                }
+                .overlay(alignment: .top) {
+                    ChartSelectionOverlay(
+                        title: selectedPoint.map { Self.compactMonthTitleFormatter.string(from: $0.monthStart) },
+                        value: selectedPoint.map { PayScopeFormatters.currencyString(cents: $0.cents) },
+                        accent: accent
+                    )
+                }
+#else
+                HStack(alignment: .bottom, spacing: 6) {
+                    ForEach(points, id: \.monthStart) { point in
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(point.isHighlighted ? accent : .secondary.opacity(0.35))
+                            .frame(width: 10, height: max(4, (Double(point.cents) / 100.0) * 0.02))
+                    }
+                }
+                .frame(height: 220, alignment: .bottom)
+#endif
+            }
+        }
+        .padding(16)
+        .payScopePureGlassSurface(
+            accent: accent,
+            cornerRadius: PayScopeModalGeometry.sheet.innerCornerRadius,
+            tintOpacity: 0.055,
+            shadowOpacity: 0.075,
+            isInteractive: false
+        )
+        .onChange(of: referenceMonthStart) { _, _ in
+            selectedMonth = nil
+        }
+    }
+
+    private var chartYDomain: ClosedRange<Double> {
+        let maxPay = points.map { Double($0.cents) / 100.0 }.max() ?? 0
+        let averagePay = Double(averageMonthlyCents) / 100.0
+        return stableChartYDomain(maxValue: max(maxPay, averagePay))
+    }
+
+    private func selectedPayPoint(for date: Date?) -> MonthPayPoint? {
+        guard let date else { return nil }
+        return points.first { Calendar.current.isDate($0.monthStart, equalTo: date, toGranularity: .month) }
+    }
+
+    private func updateSelection(at xPosition: CGFloat, proxy: ChartProxy, geometry: GeometryProxy) {
+        guard let plotFrameAnchor = proxy.plotFrame else {
+            selectedMonth = nil
+            return
+        }
+        let plotFrame = geometry[plotFrameAnchor]
+        let plotX = xPosition - plotFrame.origin.x
+        guard plotX >= 0, plotX <= plotFrame.width else {
+            selectedMonth = nil
+            return
+        }
+        guard let date: Date = proxy.value(atX: plotX) else { return }
+        let monthStart = selectedPayPoint(for: date)?.monthStart
+        guard selectedMonth != monthStart else { return }
+        selectedMonth = monthStart
+    }
+}
+
+private struct MonthDailyChartCard: View {
+    let points: [MonthDailyPoint]
+    let referenceMonthStart: Date
+    let accent: Color
+
+    @State private var selectedDate: Date?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            StatsChartCardHeader(title: "Stundenverlauf")
+
+            if points.isEmpty {
+                Text("Noch keine Daten.")
+                    .foregroundStyle(.secondary)
+            } else {
+#if canImport(Charts)
+                let selectedPoint = selectedDailyPoint(for: selectedDate)
+
+                StaticMonthDailyChart(
+                    points: points,
+                    yDomain: chartYDomain,
+                    accent: accent
+                )
+                .chartOverlay { proxy in
+                    GeometryReader { geometry in
+                        Rectangle()
+                            .fill(.clear)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { value in
+                                        updateSelection(at: value.location.x, proxy: proxy, geometry: geometry)
+                                    }
+                            )
+                    }
+                }
+                .overlay(alignment: .top) {
+                    ChartSelectionOverlay(
+                        title: selectedPoint.map { PayScopeFormatters.day.string(from: $0.date) },
+                        value: selectedPoint.map {
+                            "\(PayScopeFormatters.hhmmString(seconds: Int(($0.hours * 3600).rounded()))) h"
+                        },
+                        accent: accent
+                    )
+                }
+#else
+                HStack(alignment: .bottom, spacing: 6) {
+                    ForEach(points, id: \.date) { point in
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(accent)
+                            .frame(width: 8, height: max(4, point.hours * 16))
+                    }
+                }
+                .frame(height: 220, alignment: .bottom)
+#endif
+            }
+        }
+        .padding(16)
+        .payScopePureGlassSurface(
+            accent: accent,
+            cornerRadius: PayScopeModalGeometry.sheet.innerCornerRadius,
+            tintOpacity: 0.055,
+            shadowOpacity: 0.075,
+            isInteractive: false
+        )
+        .onChange(of: referenceMonthStart) { _, _ in
+            selectedDate = nil
+        }
+    }
+
+    private var chartYDomain: ClosedRange<Double> {
+        stableChartYDomain(maxValue: points.map(\.hours).max() ?? 0)
+    }
+
+    private func selectedDailyPoint(for date: Date?) -> MonthDailyPoint? {
+        guard let date else { return nil }
+        return points.first { Calendar.current.isDate($0.date, inSameDayAs: date) }
+    }
+
+    private func updateSelection(at xPosition: CGFloat, proxy: ChartProxy, geometry: GeometryProxy) {
+        guard let plotFrameAnchor = proxy.plotFrame else {
+            selectedDate = nil
+            return
+        }
+        let plotFrame = geometry[plotFrameAnchor]
+        let plotX = xPosition - plotFrame.origin.x
+        guard plotX >= 0, plotX <= plotFrame.width else {
+            selectedDate = nil
+            return
+        }
+        guard let date: Date = proxy.value(atX: plotX) else { return }
+        let day = selectedDailyPoint(for: date)?.date
+        guard selectedDate != day else { return }
+        selectedDate = day
+    }
+}
+
+#if canImport(Charts)
+private struct StaticYearPayChart: View {
+    let points: [MonthPayPoint]
+    let averageMonthlyCents: Int
+    let yDomain: ClosedRange<Double>
+    let accent: Color
+
+    var body: some View {
+        Chart {
+            ForEach(points, id: \.monthStart) { point in
+                BarMark(
+                    x: .value("Monat", point.monthStart, unit: .month),
+                    y: .value("Lohn", Double(point.cents) / 100.0)
+                )
+                .cornerRadius(5)
+                .foregroundStyle(point.isHighlighted ? accent : .secondary.opacity(0.35))
+            }
+
+            RuleMark(y: .value("Ø", Double(averageMonthlyCents) / 100.0))
+                .foregroundStyle(.secondary)
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+        }
+        .frame(height: 220)
+        .chartYScale(domain: yDomain)
+    }
+}
+
+private struct StaticMonthDailyChart: View {
+    let points: [MonthDailyPoint]
+    let yDomain: ClosedRange<Double>
+    let accent: Color
+
+    var body: some View {
+        Chart(points, id: \.date) { point in
+            BarMark(
+                x: .value("Tag", point.date, unit: .day),
+                y: .value("Stunden", point.hours)
+            )
+            .cornerRadius(4)
+            .foregroundStyle(accent)
+        }
+        .frame(height: 220)
+        .chartYScale(domain: yDomain)
+    }
+}
+#endif
+
+private struct StatsChartCardHeader: View {
+    let title: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.system(.headline, design: .rounded).weight(.black))
+            Spacer()
+        }
+    }
+}
+
+private struct ChartSelectionOverlay: View {
+    let title: String?
+    let value: String?
+    let accent: Color
+
+    var body: some View {
+        if let title, let value {
+            VStack(spacing: 2) {
+                Text(title)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.caption.weight(.black))
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .payScopeGlassControl(
+                accent: accent,
+                cornerRadius: 12,
+                tintOpacity: 0.065,
+                isInteractive: false
+            )
+            .padding(.top, 8)
+            .allowsHitTesting(false)
+            .transaction { transaction in
+                transaction.animation = nil
+            }
+        }
+    }
+}
+
+private func stableChartYDomain(maxValue: Double) -> ClosedRange<Double> {
+    0...max(maxValue * 1.12, 1)
 }
 
 private struct DayTypeBreakdownItem: Identifiable {

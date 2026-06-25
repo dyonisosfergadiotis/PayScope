@@ -35,9 +35,17 @@ actor LocalCloudSnapshotStore {
     func load() -> LocalCloudSnapshotEnvelope? {
         ensureDirectoryExists()
         guard let data = try? Data(contentsOf: fileURL) else {
+            print("PayScopeMac SnapshotStore: no cache at \(fileURL.path)")
             return nil
         }
-        return try? decoder.decode(LocalCloudSnapshotEnvelope.self, from: data)
+        do {
+            let envelope = try decoder.decode(LocalCloudSnapshotEnvelope.self, from: data)
+            print("PayScopeMac SnapshotStore: loaded \(data.count) bytes from \(fileURL.path)")
+            return envelope
+        } catch {
+            print("PayScopeMac SnapshotStore: decode failed at \(fileURL.path) error=\(error)")
+            return nil
+        }
     }
 
     func save(snapshot: CloudSnapshot) {
@@ -47,13 +55,24 @@ actor LocalCloudSnapshotStore {
             savedAt: Date()
         )
         guard let data = try? encoder.encode(envelope) else {
+            print("PayScopeMac SnapshotStore: encode failed")
             return
         }
-        try? data.write(to: fileURL, options: [.atomic])
+        do {
+            try data.write(to: fileURL, options: [.atomic])
+            print("PayScopeMac SnapshotStore: saved \(data.count) bytes to \(fileURL.path)")
+        } catch {
+            print("PayScopeMac SnapshotStore: save failed at \(fileURL.path) error=\(error)")
+        }
     }
 
     private func ensureDirectoryExists() {
         guard !fileManager.fileExists(atPath: directoryURL.path) else { return }
-        try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        do {
+            try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            print("PayScopeMac SnapshotStore: created directory \(directoryURL.path)")
+        } catch {
+            print("PayScopeMac SnapshotStore: create directory failed \(directoryURL.path) error=\(error)")
+        }
     }
 }

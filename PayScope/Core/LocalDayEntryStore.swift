@@ -122,28 +122,25 @@ final class LocalDayEntryStore: ObservableObject {
     }
 
     func load(on day: Date) -> DayEntry? {
-        let localKey = Self.keyFromLocalDay(day)
-        let utcKey = Self.key(for: day)
+        let localDay = day.startOfDayLocal()
+        let localKey = Self.keyFromLocalDay(localDay)
+        let canonicalKey = Self.key(for: Self.utcDateForLocalCivilDay(localDay))
+        let legacyUTCKey = Self.key(for: localDay)
+        var seenKeys = Set<String>()
+        let candidateKeys = [localKey, canonicalKey, legacyUTCKey].filter { seenKeys.insert($0).inserted }
         let cached: CachedEntry? = queue.sync {
-            // Try local-keyed file first
-            let localURL = fileURL(forKey: localKey)
-            if let data = try? Data(contentsOf: localURL) {
+            for key in candidateKeys {
+                let url = fileURL(forKey: key)
+                guard let data = try? Data(contentsOf: url) else { continue }
+
                 if let obj = try? isoDecoder.decode(CachedEntry.self, from: data) {
+                    guard Self.cachedEntry(obj, representsLocalDay: localDay) else { continue }
                     return isSuppressedByDeletionTombstone(obj) ? nil : obj
                 }
+
                 if let legacy = try? legacyDecoder.decode(LegacyCachedEntry.self, from: data) {
                     let migrated = Self.fromLegacy(legacy)
-                    return isSuppressedByDeletionTombstone(migrated) ? nil : migrated
-                }
-            }
-            // Fallback: try UTC-keyed file
-            let utcURL = fileURL(forKey: utcKey)
-            if let data = try? Data(contentsOf: utcURL) {
-                if let obj = try? isoDecoder.decode(CachedEntry.self, from: data) {
-                    return isSuppressedByDeletionTombstone(obj) ? nil : obj
-                }
-                if let legacy = try? legacyDecoder.decode(LegacyCachedEntry.self, from: data) {
-                    let migrated = Self.fromLegacy(legacy)
+                    guard Self.cachedEntry(migrated, representsLocalDay: localDay) else { continue }
                     return isSuppressedByDeletionTombstone(migrated) ? nil : migrated
                 }
             }
@@ -498,6 +495,17 @@ final class LocalDayEntryStore: ObservableObject {
         ]
         var seen = Set<String>()
         return candidates.filter { seen.insert($0).inserted }
+    }
+
+    private static func cachedEntry(_ entry: CachedEntry, representsLocalDay localDay: Date) -> Bool {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: localDay)
+        if entry.year == components.year,
+           entry.month == components.month,
+           entry.day == components.day {
+            return true
+        }
+
+        return entry.date.isSameLocalDay(as: localDay)
     }
 
     private static func fromLegacy(_ legacy: LegacyCachedEntry) -> CachedEntry {

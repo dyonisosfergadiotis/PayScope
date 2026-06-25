@@ -1,10 +1,10 @@
 import Foundation
 
-struct WorkedSecondsError: Error {
+struct WorkedSecondsError: Error, Sendable {
     let message: String
 }
 
-enum ComputationResult: Equatable {
+enum ComputationResult: Equatable, Sendable {
     case ok(valueSeconds: Int, valueCents: Int)
     case warning(valueSeconds: Int, valueCents: Int, message: String)
     case error(message: String, missingDates: [Date])
@@ -33,12 +33,453 @@ enum ComputationResult: Equatable {
     }
 }
 
-struct TotalsSummary {
+struct CalculationContext {
+    let calendar: Calendar
+    let settings: CalculationSettingsSnapshot
+    let entries: [CalculationInputSnapshot]
+    let entriesByDate: [Date: CalculationInputSnapshot]
+    private var dayCache: [String: ComputationResult] = [:]
+    private var exportCache: [String: ComputationResult] = [:]
+    private var periodCache: [String: TotalsSummary] = [:]
+    private let service: CalculationService
+
+    nonisolated init(
+        entries: [CalculationInputSnapshot],
+        settings: CalculationSettingsSnapshot,
+        calendar: Calendar = .current
+    ) {
+        self.calendar = calendar
+        self.settings = settings
+        self.entries = entries
+        self.entriesByDate = Dictionary(
+            entries
+                .filter(\.isRealTrackedDay)
+                .map { ($0.date.startOfDayLocal(calendar: calendar), $0) },
+            uniquingKeysWith: { existing, candidate in
+                candidate.updatedAt > existing.updatedAt ? candidate : existing
+            }
+        )
+        self.service = CalculationService(calendar: calendar)
+    }
+
+    nonisolated mutating func exportComputation(for day: CalculationInputSnapshot) -> ComputationResult {
+        let key = cacheKey(for: day)
+        if let cached = exportCache[key] {
+            return cached
+        }
+
+        let result: ComputationResult
+        if let savedSeconds = savedAutoCreditedSeconds(for: day) {
+            result = .ok(
+                valueSeconds: savedSeconds,
+                valueCents: service.payCents(for: savedSeconds, settings: settings)
+            )
+        } else {
+            result = dayComputation(for: day)
+        }
+
+        exportCache[key] = result
+        return result
+    }
+
+    nonisolated mutating func dayComputation(for day: CalculationInputSnapshot) -> ComputationResult {
+        let key = cacheKey(for: day)
+        if let cached = dayCache[key] {
+            return cached
+        }
+
+        let result: ComputationResult
+        switch day.type {
+        case .work, .manual:
+            switch service.workedSeconds(for: day, calculateBreaks: settings.effectiveCalculateBreaks) {
+            case let .success(seconds):
+                result = .ok(valueSeconds: seconds, valueCents: service.payCents(for: seconds, settings: settings))
+            case let .failure(message):
+                result = .error(message: message.message, missingDates: [])
+            }
+        case .vacation:
+            if let overrideSeconds = day.creditedOverrideSeconds {
+                let clamped = max(0, overrideSeconds)
+                result = .ok(valueSeconds: clamped, valueCents: service.payCents(for: clamped, settings: settings))
+            } else if settings.effectiveVacationCreditingMode == .fixedValue {
+                let fixedSeconds = settings.effectiveVacationFixedSeconds
+                result = .ok(valueSeconds: fixedSeconds, valueCents: service.payCents(for: fixedSeconds, settings: settings))
+            } else {
+                result = creditedResult(for: day)
+            }
+        case .holiday:
+            if let overrideSeconds = day.creditedOverrideSeconds {
+                let clamped = max(0, overrideSeconds)
+                result = .ok(valueSeconds: clamped, valueCents: service.payCents(for: clamped, settings: settings))
+            } else if settings.effectiveHolidayCreditingMode == .fixedValue {
+                let fixedSeconds = settings.effectiveHolidayFixedSeconds
+                result = .ok(valueSeconds: fixedSeconds, valueCents: service.payCents(for: fixedSeconds, settings: settings))
+            } else {
+                result = creditedResult(for: day)
+            }
+        case .sick:
+            if let overrideSeconds = day.creditedOverrideSeconds {
+                let clamped = max(0, overrideSeconds)
+                result = .ok(valueSeconds: clamped, valueCents: service.payCents(for: clamped, settings: settings))
+            } else {
+                result = creditedResult(for: day)
+            }
+        }
+
+        dayCache[key] = result
+        return result
+    }
+
+    nonisolated mutating func dayComputation(on date: Date) -> ComputationResult? {
+        entriesByDate[date.startOfDayLocal(calendar: calendar)].map { dayComputation(for: $0) }
+    }
+
+    nonisolated mutating func periodSummary(from startDate: Date, to endDate: Date) -> TotalsSummary {
+        let key = periodCacheKey(from: startDate, to: endDate)
+        if let cached = periodCache[key] {
+            return cached
+        }
+
+        var summary = TotalsSummary()
+        let ranged = entriesByDate.values.filter {
+            $0.isRealTrackedDay &&
+            $0.date >= startDate &&
+            $0.date <= endDate
+        }
+
+        for day in ranged {
+            let result = dayComputation(for: day)
+            switch result {
+            case let .ok(seconds, cents):
+                summary.totalSeconds += seconds
+                summary.totalCents += cents
+            case let .warning(seconds, cents, _):
+                summary.totalSeconds += seconds
+                summary.totalCents += cents
+                summary.warningCount += 1
+            case .error:
+                if day.type == .vacation || day.type == .holiday || day.type == .sick {
+                    summary.erroredDaysCount += 1
+                }
+            }
+        }
+
+        periodCache[key] = summary
+        return summary
+    }
+
+    nonisolated private func cacheKey(for day: CalculationInputSnapshot) -> String {
+        let segmentKey = day.segments.map {
+            "\($0.start.timeIntervalSinceReferenceDate):\($0.end.timeIntervalSinceReferenceDate):\($0.breakSeconds)"
+        }.joined(separator: "|")
+        return [
+            "\(day.date.timeIntervalSinceReferenceDate)",
+            "\(day.updatedAt.timeIntervalSinceReferenceDate)",
+            day.type.rawValue,
+            "\(day.manualWorkedSeconds ?? -1)",
+            "\(day.creditedOverrideSeconds ?? -1)",
+            "\(day.shiftStart?.timeIntervalSinceReferenceDate ?? -1)",
+            "\(day.shiftEnd?.timeIntervalSinceReferenceDate ?? -1)",
+            "\(day.breakSeconds ?? -1)",
+            "\(day.alwaysApplyFifteenMinuteBuffer ?? false)",
+            segmentKey
+        ].joined(separator: "#")
+    }
+
+    nonisolated private func periodCacheKey(from startDate: Date, to endDate: Date) -> String {
+        "\(startDate.timeIntervalSinceReferenceDate)#\(endDate.timeIntervalSinceReferenceDate)"
+    }
+
+    nonisolated private mutating func creditedResult(for day: CalculationInputSnapshot) -> ComputationResult {
+        let normalizedDate = day.date.startOfDayLocal(calendar: calendar)
+        let lookback = max(1, settings.vacationLookbackCount)
+
+        var values: [Int] = []
+        var missingDates: [Date] = []
+
+        for index in 1...lookback {
+            let reference = normalizedDate.addingDays(index * -7, calendar: calendar).startOfDayLocal(calendar: calendar)
+            guard let refEntry = entriesByDate[reference] else {
+                if case let .error(message, missing) = missingReferenceResult(for: reference) {
+                    return .error(message: message, missingDates: missing)
+                }
+                if settings.countMissingAsZero {
+                    values.append(0)
+                } else {
+                    missingDates.append(reference)
+                }
+                continue
+            }
+
+            let hasExplicitReferenceValue = refEntry.creditedOverrideSeconds != nil ||
+                (refEntry.type == .vacation && settings.effectiveVacationCreditingMode == .fixedValue) ||
+                (refEntry.type == .holiday && settings.effectiveHolidayCreditingMode == .fixedValue)
+            let canDeriveReferenceValue = canDeriveCreditedReferenceValue(for: refEntry)
+
+            if refEntry.isEmptyTrackedDay && !hasExplicitReferenceValue && !canDeriveReferenceValue {
+                if case let .error(message, missing) = missingReferenceResult(for: reference) {
+                    return .error(message: message, missingDates: missing)
+                }
+                if settings.countMissingAsZero {
+                    values.append(0)
+                } else {
+                    missingDates.append(reference)
+                }
+                continue
+            }
+
+            switch referenceSeconds(for: refEntry) {
+            case let .success(seconds):
+                values.append(seconds)
+            case let .failure(message):
+                return .error(message: "Reference day has invalid data: \(message.message)", missingDates: [reference])
+            }
+        }
+
+        if !missingDates.isEmpty, !settings.countMissingAsZero {
+            return .error(
+                message: "Not enough history for lookback calculation. Missing \(missingDates.count) reference day(s).",
+                missingDates: missingDates
+            )
+        }
+
+        let divisor = values.isEmpty ? 0 : values.count
+        guard divisor > 0 else {
+            return .error(
+                message: "Not enough history for lookback calculation.",
+                missingDates: missingDates
+            )
+        }
+
+        let total = values.reduce(0, +)
+        let rawAverageSeconds = Double(total) / Double(divisor)
+        let average = Int(ceil(rawAverageSeconds / 60.0) * 60.0)
+        let pay = service.payCents(for: average, settings: settings)
+
+        if values.allSatisfy({ $0 == 0 }) {
+            return .warning(valueSeconds: 0, valueCents: 0, message: "All \(lookback) lookback values are 0.")
+        }
+
+        return .ok(valueSeconds: average, valueCents: pay)
+    }
+
+    nonisolated private mutating func referenceSeconds(for day: CalculationInputSnapshot) -> Result<Int, WorkedSecondsError> {
+        if let overrideSeconds = day.creditedOverrideSeconds {
+            return .success(max(0, overrideSeconds))
+        }
+
+        if day.type == .vacation, settings.effectiveVacationCreditingMode == .fixedValue {
+            return .success(settings.effectiveVacationFixedSeconds)
+        }
+
+        if day.type == .holiday, settings.effectiveHolidayCreditingMode == .fixedValue {
+            return .success(settings.effectiveHolidayFixedSeconds)
+        }
+
+        if canDeriveCreditedReferenceValue(for: day) {
+            let result = dayComputation(for: day)
+            switch result {
+            case let .ok(valueSeconds, _), let .warning(valueSeconds, _, _):
+                return .success(valueSeconds)
+            case let .error(message, _):
+                return .failure(WorkedSecondsError(message: message))
+            }
+        }
+
+        return service.workedSeconds(for: day, calculateBreaks: settings.effectiveCalculateBreaks)
+    }
+
+    nonisolated private func savedAutoCreditedSeconds(for day: CalculationInputSnapshot) -> Int? {
+        guard day.creditedOverrideSeconds == nil else { return nil }
+        guard day.type == .vacation || day.type == .holiday || day.type == .sick else { return nil }
+        guard let seconds = day.manualWorkedSeconds else { return nil }
+        return max(0, seconds)
+    }
+
+    nonisolated private func canDeriveCreditedReferenceValue(for day: CalculationInputSnapshot) -> Bool {
+        switch day.type {
+        case .vacation:
+            return settings.effectiveVacationCreditingMode == .lookback13Weeks
+        case .holiday:
+            return settings.effectiveHolidayCreditingMode == .lookback13Weeks
+        case .sick:
+            return true
+        case .work, .manual:
+            return false
+        }
+    }
+
+    nonisolated private func missingReferenceResult(for date: Date) -> ComputationResult? {
+        if settings.strictHistoryRequired, !settings.countMissingAsZero {
+            return .error(
+                message: "Strict history required: missing reference day.",
+                missingDates: [date]
+            )
+        }
+        return nil
+    }
+}
+
+struct TotalsSummary: Equatable, Sendable {
     var totalSeconds: Int = 0
     var totalCents: Int = 0
     var warningCount: Int = 0
     var erroredDaysCount: Int = 0
     var omittedValueText: String = "Not estimated"
+
+    nonisolated init(
+        totalSeconds: Int = 0,
+        totalCents: Int = 0,
+        warningCount: Int = 0,
+        erroredDaysCount: Int = 0,
+        omittedValueText: String = "Not estimated"
+    ) {
+        self.totalSeconds = totalSeconds
+        self.totalCents = totalCents
+        self.warningCount = warningCount
+        self.erroredDaysCount = erroredDaysCount
+        self.omittedValueText = omittedValueText
+    }
+}
+
+struct TimeSegmentSnapshot: Sendable {
+    let start: Date
+    let end: Date
+    let breakSeconds: Int
+
+    nonisolated init(start: Date, end: Date, breakSeconds: Int) {
+        self.start = start
+        self.end = end
+        self.breakSeconds = breakSeconds
+    }
+
+    nonisolated init(_ segment: TimeSegment) {
+        self.init(start: segment.start, end: segment.end, breakSeconds: segment.breakSeconds)
+    }
+
+}
+
+struct CalculationInputSnapshot: Sendable {
+    let date: Date
+    let updatedAt: Date
+    let type: DayType
+    let manualWorkedSeconds: Int?
+    let creditedOverrideSeconds: Int?
+    let shiftStart: Date?
+    let shiftEnd: Date?
+    let breakSeconds: Int?
+    let alwaysApplyFifteenMinuteBuffer: Bool?
+    let tipAmountCents: Int?
+    let segments: [TimeSegmentSnapshot]
+
+    nonisolated init(
+        date: Date,
+        updatedAt: Date = Date(),
+        type: DayType = .work,
+        manualWorkedSeconds: Int? = nil,
+        creditedOverrideSeconds: Int? = nil,
+        shiftStart: Date? = nil,
+        shiftEnd: Date? = nil,
+        breakSeconds: Int? = nil,
+        alwaysApplyFifteenMinuteBuffer: Bool? = nil,
+        tipAmountCents: Int? = nil,
+        segments: [TimeSegmentSnapshot] = []
+    ) {
+        self.date = date
+        self.updatedAt = updatedAt
+        self.type = type
+        self.manualWorkedSeconds = manualWorkedSeconds
+        self.creditedOverrideSeconds = creditedOverrideSeconds
+        self.shiftStart = shiftStart
+        self.shiftEnd = shiftEnd
+        self.breakSeconds = breakSeconds
+        self.alwaysApplyFifteenMinuteBuffer = alwaysApplyFifteenMinuteBuffer
+        self.tipAmountCents = tipAmountCents
+        self.segments = segments.sorted {
+            if $0.start == $1.start {
+                return $0.end < $1.end
+            }
+            return $0.start < $1.start
+        }
+    }
+
+    nonisolated init(_ day: DayEntry) {
+        self.init(
+            date: day.date,
+            updatedAt: day.updatedAt,
+            type: day.type,
+            manualWorkedSeconds: day.manualWorkedSeconds,
+            creditedOverrideSeconds: day.creditedOverrideSeconds,
+            shiftStart: day.shiftStart,
+            shiftEnd: day.shiftEnd,
+            breakSeconds: day.breakSeconds,
+            alwaysApplyFifteenMinuteBuffer: day.alwaysApplyFifteenMinuteBuffer,
+            tipAmountCents: day.tipAmountCents,
+            segments: day.segments.map(TimeSegmentSnapshot.init)
+        )
+    }
+
+    nonisolated var isEmptyTrackedDay: Bool {
+        if let manualWorkedSeconds, manualWorkedSeconds > 0 {
+            return false
+        }
+        if let shiftStart, let shiftEnd, shiftEnd > shiftStart {
+            return false
+        }
+        return true
+    }
+
+    nonisolated var isRealTrackedDay: Bool {
+        if type != .work {
+            return true
+        }
+        if manualWorkedSeconds != nil {
+            return true
+        }
+        if creditedOverrideSeconds != nil {
+            return true
+        }
+        if !segments.isEmpty {
+            return true
+        }
+        if let shiftStart, let shiftEnd, shiftEnd > shiftStart {
+            return true
+        }
+        return false
+    }
+
+}
+
+struct CalculationSettingsSnapshot: Sendable {
+    let payMode: PayMode
+    let hourlyRateCents: Int?
+    let monthlySalaryCents: Int?
+    let weeklyTargetSeconds: Int?
+    let vacationLookbackCount: Int
+    let effectiveVacationCreditingMode: VacationCreditingMode
+    let effectiveVacationFixedSeconds: Int
+    let countMissingAsZero: Bool
+    let strictHistoryRequired: Bool
+    let effectiveCalculateBreaks: Bool
+    let effectiveHolidayCreditingMode: HolidayCreditingMode
+    let effectiveHolidayFixedSeconds: Int
+    let scheduledWorkdaysCount: Int
+
+    init(_ settings: Settings) {
+        self.payMode = settings.payMode
+        self.hourlyRateCents = settings.hourlyRateCents
+        self.monthlySalaryCents = settings.monthlySalaryCents
+        self.weeklyTargetSeconds = settings.weeklyTargetSeconds
+        self.vacationLookbackCount = settings.vacationLookbackCount
+        self.effectiveVacationCreditingMode = settings.effectiveVacationCreditingMode
+        self.effectiveVacationFixedSeconds = settings.effectiveVacationFixedSeconds
+        self.countMissingAsZero = settings.countMissingAsZero
+        self.strictHistoryRequired = settings.strictHistoryRequired
+        self.effectiveCalculateBreaks = settings.effectiveCalculateBreaks
+        self.effectiveHolidayCreditingMode = settings.effectiveHolidayCreditingMode
+        self.effectiveHolidayFixedSeconds = settings.effectiveHolidayFixedSeconds
+        self.scheduledWorkdaysCount = settings.scheduledWorkdaysCount
+    }
 }
 
 struct ShiftTimeRange: Equatable {
@@ -149,11 +590,18 @@ struct ShiftTimeRange: Equatable {
 struct CalculationService {
     let calendar: Calendar
 
-    init(calendar: Calendar = .current) {
+    nonisolated init(calendar: Calendar = .current) {
         self.calendar = calendar
     }
 
     func workedSeconds(for day: DayEntry, calculateBreaks: Bool = true) -> Result<Int, WorkedSecondsError> {
+        workedSeconds(for: CalculationInputSnapshot(day), calculateBreaks: calculateBreaks)
+    }
+
+    nonisolated fileprivate func workedSeconds(
+        for day: CalculationInputSnapshot,
+        calculateBreaks: Bool = true
+    ) -> Result<Int, WorkedSecondsError> {
         // Manual duration takes precedence for editable work/manual entries.
         // For credited types the computed value comes from day rules, not from manual cache fields.
         if let manual = day.manualWorkedSeconds {
@@ -199,6 +647,10 @@ struct CalculationService {
     }
 
     func validateSegments(_ segments: [TimeSegment]) -> [WorkedSecondsError] {
+        validateSegments(segments.map(TimeSegmentSnapshot.init))
+    }
+
+    nonisolated fileprivate func validateSegments(_ segments: [TimeSegmentSnapshot]) -> [WorkedSecondsError] {
         segments.compactMap { segment in
             guard segment.end > segment.start else {
                 return WorkedSecondsError(message: "Segment end must be after start.")
@@ -226,8 +678,8 @@ struct CalculationService {
             }
     }
 
-    private func workedSeconds(
-        forSegments segments: [TimeSegment],
+    nonisolated private func workedSeconds(
+        forSegments segments: [TimeSegmentSnapshot],
         dayType: DayType,
         calculateBreaks: Bool
     ) -> Result<Int, WorkedSecondsError> {
@@ -255,7 +707,7 @@ struct CalculationService {
 
     // Legal break tolerance correction:
     // Minutes 1...15 after 6h and 9h are not counted as work time, including :15.
-    private func applyLegalBreakToleranceCorrection(to workedSeconds: Int) -> Int {
+    nonisolated private func applyLegalBreakToleranceCorrection(to workedSeconds: Int) -> Int {
         let sixHours = 6 * 3600
         let nineHours = 9 * 3600
         let tolerance = 15 * 60
@@ -273,7 +725,7 @@ struct CalculationService {
         return max(0, workedSeconds - correction)
     }
 
-    private func legalMinimumBreakSeconds(forWorkedSeconds workedSeconds: Int) -> Int {
+    nonisolated private func legalMinimumBreakSeconds(forWorkedSeconds workedSeconds: Int) -> Int {
         let sixHours = 6 * 3600
         let nineHours = 9 * 3600
         let tolerance = 15 * 60
@@ -286,6 +738,10 @@ struct CalculationService {
     }
 
     func payCents(for seconds: Int, settings: Settings) -> Int {
+        payCents(for: seconds, settings: CalculationSettingsSnapshot(settings))
+    }
+
+    nonisolated fileprivate func payCents(for seconds: Int, settings: CalculationSettingsSnapshot) -> Int {
         switch settings.payMode {
         case .hourly:
             guard let hourlyRateCents = settings.hourlyRateCents else { return 0 }
@@ -316,19 +772,45 @@ struct CalculationService {
         let pensionRate = max(0, (pensionPercent ?? 0) / 100.0)
         let allowance = max(0, monthlyAllowanceEuro ?? 0)
 
-        let taxableBase = max(0, grossMonthly - allowance)
-        let wageTax = taxableBase * wageTaxRate
-        let pension = grossMonthly * pensionRate
+        let deductionBase = max(0, grossMonthly - allowance)
+        let wageTax = deductionBase * wageTaxRate
+        let pension = deductionBase * pensionRate
 
         return grossMonthly - wageTax - pension
     }
 
     func makeEntriesByDateLookup(from entries: [DayEntry]) -> [Date: DayEntry] {
         Dictionary(
-            entries.map { ($0.date.startOfDayLocal(calendar: calendar), $0) },
+            entries
+                .filter(\.isRealTrackedDay)
+                .map { ($0.date.startOfDayLocal(calendar: calendar), $0) },
             uniquingKeysWith: { existing, candidate in
                 candidate.updatedAt > existing.updatedAt ? candidate : existing
             }
+        )
+    }
+
+    func makeContext(
+        entries: [DayEntry],
+        settings: Settings,
+        calendar: Calendar? = nil
+    ) -> CalculationContext {
+        makeContext(
+            entrySnapshots: entries.map(CalculationInputSnapshot.init),
+            settingsSnapshot: CalculationSettingsSnapshot(settings),
+            calendar: calendar
+        )
+    }
+
+    nonisolated func makeContext(
+        entrySnapshots: [CalculationInputSnapshot],
+        settingsSnapshot: CalculationSettingsSnapshot,
+        calendar: Calendar? = nil
+    ) -> CalculationContext {
+        CalculationContext(
+            entries: entrySnapshots,
+            settings: settingsSnapshot,
+            calendar: calendar ?? self.calendar
         )
     }
 
@@ -349,52 +831,21 @@ struct CalculationService {
     }
 
     func exportComputation(for day: DayEntry, entriesByDate: [Date: DayEntry], settings: Settings) -> ComputationResult {
-        if let savedSeconds = savedAutoCreditedSeconds(for: day) {
-            return .ok(
-                valueSeconds: savedSeconds,
-                valueCents: payCents(for: savedSeconds, settings: settings)
-            )
-        }
-
-        return dayComputation(for: day, entriesByDate: entriesByDate, settings: settings)
+        let daySnapshot = CalculationInputSnapshot(day)
+        var context = makeContext(
+            entrySnapshots: Array(entriesByDate.values).map(CalculationInputSnapshot.init) + [daySnapshot],
+            settingsSnapshot: CalculationSettingsSnapshot(settings)
+        )
+        return context.exportComputation(for: daySnapshot)
     }
 
     func dayComputation(for day: DayEntry, entriesByDate: [Date: DayEntry], settings: Settings) -> ComputationResult {
-        switch day.type {
-        case .work, .manual:
-            switch workedSeconds(for: day, calculateBreaks: settings.effectiveCalculateBreaks) {
-            case let .success(seconds):
-                return .ok(valueSeconds: seconds, valueCents: payCents(for: seconds, settings: settings))
-            case let .failure(message):
-                return .error(message: message.message, missingDates: [])
-            }
-        case .vacation:
-            if let overrideSeconds = day.creditedOverrideSeconds {
-                let clamped = max(0, overrideSeconds)
-                return .ok(valueSeconds: clamped, valueCents: payCents(for: clamped, settings: settings))
-            }
-            if settings.effectiveVacationCreditingMode == .fixedValue {
-                let fixedSeconds = settings.effectiveVacationFixedSeconds
-                return .ok(valueSeconds: fixedSeconds, valueCents: payCents(for: fixedSeconds, settings: settings))
-            }
-            return creditedResult(for: day, entriesByDate: entriesByDate, settings: settings)
-        case .holiday:
-            if let overrideSeconds = day.creditedOverrideSeconds {
-                let clamped = max(0, overrideSeconds)
-                return .ok(valueSeconds: clamped, valueCents: payCents(for: clamped, settings: settings))
-            }
-            if settings.effectiveHolidayCreditingMode == .fixedValue {
-                let fixedSeconds = settings.effectiveHolidayFixedSeconds
-                return .ok(valueSeconds: fixedSeconds, valueCents: payCents(for: fixedSeconds, settings: settings))
-            }
-            return creditedResult(for: day, entriesByDate: entriesByDate, settings: settings)
-        case .sick:
-            if let overrideSeconds = day.creditedOverrideSeconds {
-                let clamped = max(0, overrideSeconds)
-                return .ok(valueSeconds: clamped, valueCents: payCents(for: clamped, settings: settings))
-            }
-            return creditedResult(for: day, entriesByDate: entriesByDate, settings: settings)
-        }
+        let daySnapshot = CalculationInputSnapshot(day)
+        var context = makeContext(
+            entrySnapshots: Array(entriesByDate.values).map(CalculationInputSnapshot.init) + [daySnapshot],
+            settingsSnapshot: CalculationSettingsSnapshot(settings)
+        )
+        return context.dayComputation(for: daySnapshot)
     }
 
     func holidayCreditedSeconds(settings: Settings) -> Int {
@@ -649,26 +1100,10 @@ struct CalculationService {
         to endDate: Date,
         settings: Settings
     ) -> TotalsSummary {
-        var summary = TotalsSummary()
-        let ranged = entries.filter { $0.date >= startDate && $0.date <= endDate }
-
-        for day in ranged {
-            let result = dayComputation(for: day, entriesByDate: entriesByDate, settings: settings)
-            switch result {
-            case let .ok(seconds, cents):
-                summary.totalSeconds += seconds
-                summary.totalCents += cents
-            case let .warning(seconds, cents, _):
-                summary.totalSeconds += seconds
-                summary.totalCents += cents
-                summary.warningCount += 1
-            case .error:
-                if day.type == .vacation || day.type == .holiday || day.type == .sick {
-                    summary.erroredDaysCount += 1
-                }
-            }
-        }
-
-        return summary
+        var context = makeContext(
+            entrySnapshots: (Array(entriesByDate.values) + entries).map(CalculationInputSnapshot.init),
+            settingsSnapshot: CalculationSettingsSnapshot(settings)
+        )
+        return context.periodSummary(from: startDate, to: endDate)
     }
 }

@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 import SwiftUI
 
-enum DayType: String, Codable, CaseIterable, Identifiable {
+enum DayType: String, Codable, CaseIterable, Identifiable, Sendable {
     case work
     case manual
     case vacation
@@ -72,7 +72,7 @@ enum DayType: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-enum PayMode: String, Codable, CaseIterable, Identifiable {
+enum PayMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case hourly
     case monthly
 
@@ -86,7 +86,7 @@ enum PayMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-enum HolidayCreditingMode: String, Codable, CaseIterable, Identifiable {
+enum HolidayCreditingMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case fixedValue
     case lookback13Weeks
     // Legacy modes kept for backwards compatibility with existing records.
@@ -108,7 +108,7 @@ enum HolidayCreditingMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-enum VacationCreditingMode: String, Codable, CaseIterable, Identifiable {
+enum VacationCreditingMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case lookback13Weeks
     case fixedValue
 
@@ -122,7 +122,7 @@ enum VacationCreditingMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-enum ThemeAccent: String, Codable, CaseIterable, Identifiable {
+enum ThemeAccent: String, Codable, CaseIterable, Identifiable, Sendable {
     case blue
     case green
     case purple
@@ -174,7 +174,7 @@ enum ThemeAccent: String, Codable, CaseIterable, Identifiable {
     ]
 }
 
-enum ShiftCategoryColor: String, Codable, CaseIterable, Identifiable {
+enum ShiftCategoryColor: String, Codable, CaseIterable, Identifiable, Sendable {
     case mint
     case sage
     case sky
@@ -219,7 +219,7 @@ enum ShiftCategoryColor: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-enum CalendarCellDisplayMode: String, Codable, CaseIterable, Identifiable {
+enum CalendarCellDisplayMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case dot
     case hours
     case pay
@@ -241,7 +241,7 @@ enum CalendarCellDisplayMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-enum CalendarHoursBreakMode: String, Codable, CaseIterable, Identifiable {
+enum CalendarHoursBreakMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case withoutBreak
     case withBreak
 
@@ -255,9 +255,10 @@ enum CalendarHoursBreakMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-enum CalendarSummaryDisplayMode: String, Codable, CaseIterable, Identifiable {
+enum CalendarSummaryDisplayMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case net = "grossNet"
     case gross = "payOnly"
+    case shiftPay
 
     var id: String { rawValue }
 
@@ -265,6 +266,7 @@ enum CalendarSummaryDisplayMode: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .net: return "Netto"
         case .gross: return "Brutto"
+        case .shiftPay: return "Schichtlohn"
         }
     }
 }
@@ -329,6 +331,35 @@ final class DayEntry {
         }
         return true
     }
+
+    var isRealTrackedDay: Bool {
+        if type != .work {
+            return true
+        }
+        if manualWorkedSeconds != nil {
+            return true
+        }
+        if creditedOverrideSeconds != nil {
+            return true
+        }
+        if !segments.isEmpty {
+            return true
+        }
+        if let shiftStart, let shiftEnd, shiftEnd > shiftStart {
+            return true
+        }
+        return false
+    }
+
+    var isTipOnlyPlaceholder: Bool {
+        guard type == .work else { return false }
+        guard max(0, tipAmountCents ?? 0) > 0 else { return false }
+        return !isRealTrackedDay
+    }
+
+    var isTipOnlyExportPlaceholder: Bool {
+        isTipOnlyPlaceholder
+    }
 }
 
 @Model
@@ -359,6 +390,7 @@ final class Settings {
     var showCalendarWeekPay: Bool?
     var showLiveActivity: Bool?
     var liveActivityShowsUpcomingShift: Bool?
+    var liveActivityPauseModeEnabled: Bool?
     var widgetShowsNextShift: Bool?
     var widgetShowsAllDayStatus: Bool?
     var alwaysApplyFifteenMinuteBuffer: Bool?
@@ -412,6 +444,7 @@ final class Settings {
         showCalendarWeekPay: Bool = false,
         showLiveActivity: Bool = true,
         liveActivityShowsUpcomingShift: Bool = true,
+        liveActivityPauseModeEnabled: Bool = true,
         widgetShowsNextShift: Bool = true,
         widgetShowsAllDayStatus: Bool = true,
         alwaysApplyFifteenMinuteBuffer: Bool? = false,
@@ -463,6 +496,7 @@ final class Settings {
         self.showCalendarWeekPay = showCalendarWeekPay
         self.showLiveActivity = showLiveActivity
         self.liveActivityShowsUpcomingShift = liveActivityShowsUpcomingShift
+        self.liveActivityPauseModeEnabled = liveActivityPauseModeEnabled
         self.widgetShowsNextShift = widgetShowsNextShift
         self.widgetShowsAllDayStatus = widgetShowsAllDayStatus
         self.alwaysApplyFifteenMinuteBuffer = alwaysApplyFifteenMinuteBuffer
@@ -516,6 +550,7 @@ extension Settings {
         showCalendarWeekPay = source.showCalendarWeekPay
         showLiveActivity = source.showLiveActivity
         liveActivityShowsUpcomingShift = source.liveActivityShowsUpcomingShift
+        liveActivityPauseModeEnabled = source.liveActivityPauseModeEnabled
         widgetShowsNextShift = source.widgetShowsNextShift
         widgetShowsAllDayStatus = source.widgetShowsAllDayStatus
         alwaysApplyFifteenMinuteBuffer = source.alwaysApplyFifteenMinuteBuffer
@@ -604,6 +639,10 @@ extension Settings {
 
     var effectiveLiveActivityShowsUpcomingShift: Bool {
         liveActivityShowsUpcomingShift ?? true
+    }
+
+    var effectiveLiveActivityPauseModeEnabled: Bool {
+        liveActivityPauseModeEnabled ?? true
     }
 
     var effectiveWidgetShowsNextShift: Bool {
@@ -817,7 +856,7 @@ final class NetWageMonthConfig {
     }
 }
 
-struct TipEntry: Identifiable, Codable, Equatable {
+struct TipEntry: Identifiable, Codable, Equatable, Sendable {
     var id: String
     var date: Date
     var amountCents: Int
@@ -837,34 +876,40 @@ struct TipEntry: Identifiable, Codable, Equatable {
 }
 
 extension Date {
-    func startOfDayLocal(calendar: Calendar = .current) -> Date {
+    nonisolated func startOfDayLocal(calendar: Calendar = .current) -> Date {
         calendar.startOfDay(for: self)
     }
 
-    func isSameLocalDay(as other: Date, calendar: Calendar = .current) -> Bool {
+    nonisolated func isSameLocalDay(as other: Date, calendar: Calendar = .current) -> Bool {
         calendar.isDate(self, inSameDayAs: other)
     }
 
-    func startOfMonthLocal(calendar: Calendar = .current) -> Date {
+    nonisolated func startOfMonthLocal(calendar: Calendar = .current) -> Date {
         let components = calendar.dateComponents([.year, .month], from: self)
         return calendar.date(from: components)?.startOfDayLocal(calendar: calendar) ?? startOfDayLocal(calendar: calendar)
     }
 
-    func addingDays(_ days: Int, calendar: Calendar = .current) -> Date {
+    nonisolated func addingDays(_ days: Int, calendar: Calendar = .current) -> Date {
         calendar.date(byAdding: .day, value: days, to: self) ?? self
     }
 
-    func startOfDayUTC() -> Date {
+    nonisolated func startOfDayUTC() -> Date {
         var utc = Calendar(identifier: .gregorian)
         utc.timeZone = TimeZone(secondsFromGMT: 0)!
         let comps = utc.dateComponents([.year, .month, .day], from: self)
         return utc.date(from: comps) ?? self
     }
 
-    func startOfMonthUTC() -> Date {
+    nonisolated func startOfMonthUTC() -> Date {
+        let localComps = Calendar.current.dateComponents([.year, .month], from: self)
         var utc = Calendar(identifier: .gregorian)
         utc.timeZone = TimeZone(secondsFromGMT: 0)!
-        let comps = utc.dateComponents([.year, .month], from: self)
+        var comps = DateComponents()
+        comps.calendar = utc
+        comps.timeZone = utc.timeZone
+        comps.year = localComps.year
+        comps.month = localComps.month
+        comps.day = 1
         return utc.date(from: comps)?.startOfDayUTC() ?? self
     }
 }

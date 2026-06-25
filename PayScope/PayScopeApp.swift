@@ -89,14 +89,36 @@ struct PayScopeApp: App {
                 .environmentObject(cloudKitService)
                 .modelContainer(Self.localModelContainer)
                 .task {
-                    await handlePendingControlCenterAction()
+                    await handlePendingControlCenterActionWithRetry()
+                }
+                .task(id: scenePhase) {
+                    guard scenePhase == .active else { return }
+                    await pollPendingControlCenterActionsWhileActive()
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     guard newPhase == .active else { return }
                     Task {
-                        await handlePendingControlCenterAction()
+                        await handlePendingControlCenterActionWithRetry()
                     }
                 }
+        }
+    }
+
+    @MainActor
+    private func handlePendingControlCenterActionWithRetry() async {
+        for attempt in 0..<3 {
+            await handlePendingControlCenterAction()
+
+            guard attempt < 2 else { return }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+    }
+
+    @MainActor
+    private func pollPendingControlCenterActionsWhileActive() async {
+        while !Task.isCancelled {
+            await handlePendingControlCenterAction()
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
     }
 
@@ -109,6 +131,10 @@ struct PayScopeApp: App {
             _ = await PayScopeIntentActionService.startShift()
         case .endShift:
             _ = await PayScopeIntentActionService.endShift()
+        case .startPause:
+            _ = await PayScopeIntentActionService.startPause()
+        case .endPause:
+            _ = await PayScopeIntentActionService.endPause()
         case .addTip:
             guard let amountEuro = action.amountEuro else { return }
             _ = await PayScopeIntentActionService.addTip(amountEuro: amountEuro)
@@ -121,6 +147,8 @@ struct PayScopeApp: App {
 enum PayScopeControlCenterActionKind: String, Codable {
     case startShift
     case endShift
+    case startPause
+    case endPause
     case addTip
     case markTodaySick
 }
@@ -155,10 +183,14 @@ struct PayScope_WidgetsAttributes: ActivityAttributes {
         var workedReferenceStart: Date
         var shiftCategoryIcon: String
         var themeAccentRawValue: String
+        var shiftCategoryColorRawValue: String? = nil
+        var isTimedShift: Bool? = true
         var isCompleted: Bool
         var completedPayCents: Int
         var nextShiftStart: Date?
         var nextShiftDurationSeconds: Int
+        var isPaused: Bool
+        var pauseStartedAt: Date?
     }
 
     var title: String
@@ -329,10 +361,14 @@ enum PayScopeLiveActivityManager {
                 workedReferenceStart: payload.workedReferenceStart,
                 shiftCategoryIcon: payload.shiftCategoryIcon,
                 themeAccentRawValue: payload.themeAccentRawValue,
+                shiftCategoryColorRawValue: payload.shiftCategoryColorRawValue,
+                isTimedShift: payload.isTimedShift,
                 isCompleted: payload.isCompleted,
                 completedPayCents: payload.completedPayCents,
                 nextShiftStart: payload.nextShiftStart,
-                nextShiftDurationSeconds: payload.nextShiftDurationSeconds
+                nextShiftDurationSeconds: payload.nextShiftDurationSeconds,
+                isPaused: payload.isPaused,
+                pauseStartedAt: payload.pauseStartedAt
             ),
             staleDate: payload.staleDate
         )
@@ -382,13 +418,15 @@ enum PayScopeLiveActivityManager {
         let dayStart = now.startOfDayLocal()
         let activeShift = activeShiftCandidate(at: now, entries: entries)
         let todayEntry = entries.first(where: { $0.date.isSameLocalDay(as: dayStart) })
-        if activeShift == nil, let todayEntry {
-            switch todayEntry.type {
-            case .vacation, .holiday, .sick:
-                return nil
-            case .work, .manual:
-                break
-            }
+        if activeShift == nil,
+           let todayEntry,
+           let statusPayload = nonTimedStatusPayload(
+               settings: settings,
+               entries: entries,
+               entry: todayEntry,
+               dayStart: dayStart
+           ) {
+            return statusPayload
         }
 
         let todayShift = shiftCandidate(on: dayStart, entries: entries)
@@ -415,10 +453,16 @@ enum PayScopeLiveActivityManager {
             return nil
         }
         let effectiveNow = min(max(now, timelineStart), timelineEnd)
+        let pauseSession = pauseSession(
+            settings: settings,
+            focusShift: focusShift,
+            now: now
+        )
         let focusShiftWorkedSeconds = workedSeconds(
             until: effectiveNow,
             for: focusShift.entry,
-            calculateBreaks: settings.effectiveCalculateBreaks
+            calculateBreaks: settings.effectiveCalculateBreaks,
+            pauseSession: pauseSession
         )
         let workedReferenceStart = max(
             timelineStart,
@@ -429,12 +473,14 @@ enum PayScopeLiveActivityManager {
         let workedTodaySeconds = workedSeconds(
             until: todayEffectiveNow,
             for: workedReferenceShift.entry,
-            calculateBreaks: settings.effectiveCalculateBreaks
+            calculateBreaks: settings.effectiveCalculateBreaks,
+            pauseSession: pauseSession
         )
         let completedPayCents = service.payCents(for: workedTodaySeconds, settings: settings)
         let isCompleted = now >= timelineEnd
         let shiftCategoryIcon = shiftIcon(for: focusShift.entry?.type)
         let shiftCategoryTitle = shiftTitle(for: focusShift.entry?.type)
+        let shiftCategoryColorRawValue = categoryColorRawValue(for: focusShift.entry?.type, settings: settings)
         let nextShift = nextShift(after: focusShift.dayStart, entries: entries, settings: settings)
         let title = focusShift.dayStart.isSameLocalDay(as: dayStart) ? "\(shiftCategoryTitle) heute" : "\(shiftCategoryTitle) läuft"
         let staleDate = nextShift?.start ?? timelineEnd.addingTimeInterval(60)
@@ -448,12 +494,86 @@ enum PayScopeLiveActivityManager {
             workedReferenceStart: workedReferenceStart,
             shiftCategoryIcon: shiftCategoryIcon,
             themeAccentRawValue: settings.themeAccent.rawValue,
+            shiftCategoryColorRawValue: shiftCategoryColorRawValue,
+            isTimedShift: true,
             isCompleted: isCompleted,
             completedPayCents: completedPayCents,
             nextShiftStart: nextShift?.start,
             nextShiftDurationSeconds: nextShift?.durationSeconds ?? 0,
+            isPaused: pauseSession != nil,
+            pauseStartedAt: pauseSession?.startedAt,
             staleDate: staleDate
         )
+    }
+
+    private static func nonTimedStatusPayload(
+        settings: Settings,
+        entries: [DayEntry],
+        entry: DayEntry,
+        dayStart: Date
+    ) -> LaunchPayload? {
+        guard entry.type != .work else { return nil }
+        guard entry.shiftStart == nil || entry.shiftEnd == nil else { return nil }
+
+        var context = CalculationContext(
+            entries: entries.map(CalculationInputSnapshot.init),
+            settings: CalculationSettingsSnapshot(settings)
+        )
+        let result = context.dayComputation(for: CalculationInputSnapshot(entry))
+        let valueSeconds = result.valueSecondsOrZero
+        let valueCents = result.valueCentsOrZero
+        let dayEnd = dayStart.addingDays(1)
+        let shiftCategoryTitle = shiftTitle(for: entry.type)
+        let nextShift = nextShift(after: dayStart, entries: entries, settings: settings)
+
+        return LaunchPayload(
+            title: "\(shiftCategoryTitle) heute",
+            shiftCategoryTitle: shiftCategoryTitle,
+            timelineStart: dayStart,
+            timelineEnd: dayEnd,
+            workedTodaySeconds: valueSeconds,
+            workedReferenceStart: dayStart,
+            shiftCategoryIcon: shiftIcon(for: entry.type),
+            themeAccentRawValue: settings.themeAccent.rawValue,
+            shiftCategoryColorRawValue: categoryColorRawValue(for: entry.type, settings: settings),
+            isTimedShift: false,
+            isCompleted: false,
+            completedPayCents: valueCents,
+            nextShiftStart: nextShift?.start,
+            nextShiftDurationSeconds: nextShift?.durationSeconds ?? 0,
+            isPaused: false,
+            pauseStartedAt: nil,
+            staleDate: dayEnd
+        )
+    }
+
+    private static func pauseSession(
+        settings: Settings,
+        focusShift: ShiftCandidate,
+        now: Date
+    ) -> PauseSessionSnapshot? {
+        guard settings.effectiveLiveActivityPauseModeEnabled else {
+            PauseSessionStore.clear()
+            return nil
+        }
+
+        guard let session = PauseSessionStore.load() else {
+            return nil
+        }
+
+        guard
+            session.shiftStart == focusShift.start,
+            session.shiftEnd == focusShift.end,
+            session.startedAt >= focusShift.start,
+            session.startedAt < focusShift.end,
+            now >= session.startedAt,
+            now < focusShift.end
+        else {
+            PauseSessionStore.clear()
+            return nil
+        }
+
+        return session
     }
 
     private static func activeShiftCandidate(at referenceDate: Date, entries: [DayEntry]) -> ShiftCandidate? {
@@ -572,7 +692,12 @@ enum PayScopeLiveActivityManager {
         return max(0, rawSeconds - breakSeconds)
     }
 
-    private static func workedSeconds(until now: Date, for day: DayEntry?, calculateBreaks: Bool) -> Int {
+    private static func workedSeconds(
+        until now: Date,
+        for day: DayEntry?,
+        calculateBreaks: Bool,
+        pauseSession: PauseSessionSnapshot? = nil
+    ) -> Int {
         guard let day else { return 0 }
 
         // Manual override
@@ -586,10 +711,31 @@ enum PayScopeLiveActivityManager {
         let effectiveNow = min(max(now, start), end)
         let rawSeconds = max(0, Int(effectiveNow.timeIntervalSince(start)))
         guard calculateBreaks else { return rawSeconds }
-        let breakSeconds = max(0, day.breakSeconds ?? 0)
+        let breakSeconds = effectiveBreakSeconds(for: day, until: effectiveNow, pauseSession: pauseSession)
 
         // Simple model: break is subtracted from worked time.
         return max(0, rawSeconds - breakSeconds)
+    }
+
+    private static func effectiveBreakSeconds(
+        for day: DayEntry,
+        until now: Date,
+        pauseSession: PauseSessionSnapshot?
+    ) -> Int {
+        let storedBreakSeconds = max(0, day.breakSeconds ?? 0)
+        guard
+            let pauseSession,
+            let shiftStart = day.shiftStart,
+            let shiftEnd = day.shiftEnd,
+            pauseSession.shiftStart == shiftStart,
+            pauseSession.shiftEnd == shiftEnd,
+            pauseSession.startedAt < now
+        else {
+            return storedBreakSeconds
+        }
+
+        let activePauseSeconds = max(0, Int(min(now, shiftEnd).timeIntervalSince(pauseSession.startedAt)))
+        return max(storedBreakSeconds, activePauseSeconds)
     }
 
     private static func shiftIcon(for type: DayType?) -> String {
@@ -622,6 +768,17 @@ enum PayScopeLiveActivityManager {
         }
     }
 
+    private static func categoryColorRawValue(for type: DayType?, settings: Settings) -> String {
+        guard let type else { return settings.themeAccent.rawValue }
+
+        switch type {
+        case .work:
+            return settings.themeAccent.rawValue
+        case .manual, .vacation, .holiday, .sick:
+            return settings.categoryColorSelection(for: type)?.rawValue ?? settings.themeAccent.rawValue
+        }
+    }
+
     private struct LaunchPayload {
         let title: String
         let shiftCategoryTitle: String
@@ -631,10 +788,14 @@ enum PayScopeLiveActivityManager {
         let workedReferenceStart: Date
         let shiftCategoryIcon: String
         let themeAccentRawValue: String
+        let shiftCategoryColorRawValue: String
+        let isTimedShift: Bool
         let isCompleted: Bool
         let completedPayCents: Int
         let nextShiftStart: Date?
         let nextShiftDurationSeconds: Int
+        let isPaused: Bool
+        let pauseStartedAt: Date?
         let staleDate: Date
     }
 

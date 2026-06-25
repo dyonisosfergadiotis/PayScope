@@ -63,6 +63,7 @@ struct SettingsTabView: View {
     @State private var resetResultMessage = ""
     @State private var searchText = ""
     @State private var resetWarningFeedbackTrigger = 0
+    @FocusState private var isSearchFocused: Bool
 
     init(settings: Settings) {
         _settings = State(initialValue: settings)
@@ -77,7 +78,9 @@ struct SettingsTabView: View {
                 advancedSettingsSection
             }
             .navigationTitle("Einstellungen")
-            .searchable(text: $searchText, prompt: "Suchen")
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                settingsBottomSearchBar
+            }
             .navigationDestination(for: SettingsRoute.self) { route in
                 settingsDestination(for: route)
             }
@@ -100,6 +103,48 @@ struct SettingsTabView: View {
                 Text(resetResultMessage)
             }
         }
+    }
+
+    private var settingsBottomSearchBar: some View {
+        let shape = Capsule(style: .continuous)
+
+        return HStack(spacing: 9) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(.subheadline, design: .rounded).weight(.bold))
+                .foregroundStyle(settings.themeAccent.color)
+
+            TextField("Suchen", text: $searchText)
+                .focused($isSearchFocused)
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+                .submitLabel(.search)
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                    isSearchFocused = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(.subheadline, design: .rounded).weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Suche löschen")
+            }
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 9)
+        .payScopePureGlassSurface(
+            accent: settings.themeAccent.color,
+            in: shape,
+            tintOpacity: 0.075,
+            shadowOpacity: 0.1,
+            isInteractive: true
+        )
+        .padding(.horizontal, 14)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder
@@ -516,19 +561,39 @@ private struct PaySettingsView: View {
 }
 
 private struct NetDefaultsSettingsView: View {
+    @Environment(\.modelContext) private var modelContext
     @EnvironmentObject private var cloudKitService: CloudKitService
     @Binding var settings: Settings
 
+    @State private var selectedMonth = Date().startOfMonthLocal()
+    @State private var config = NetWageMonthConfig(monthStart: Date().startOfMonthLocal())
     @State private var wageTaxText = ""
     @State private var pensionText = ""
     @State private var bonusTexts: [String] = []
     @State private var newBonusText = ""
+    @State private var showMonthPicker = false
+    @State private var saveFeedbackTrigger = 0
 
     var body: some View {
         Form {
+            Section("Monat") {
+                Button {
+                    showMonthPicker = true
+                } label: {
+                    HStack {
+                        Text("Gültig für")
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Text(Self.monthYearFormatter.string(from: selectedMonth))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+
             Section(
                 header: Text("Abgaben (%)"),
-                footer: Text("Diese Werte dienen als Standard für die Netto-Berechnung.")
+                footer: Text("Diese Werte gelten für den ausgewählten Monat.")
             ) {
                 HStack {
                     TextField("Lohnsteuer", text: $wageTaxText)
@@ -593,12 +658,36 @@ private struct NetDefaultsSettingsView: View {
             }
         }
         .onAppear {
-            wageTaxText = formattedPercent(settings.netWageTaxPercent)
-            pensionText = formattedPercent(settings.netPensionPercent)
-            bonusTexts = (settings.netBonusesCSV ?? "")
-                .split(separator: ";")
-                .map { formatForDisplay(from: String($0)) ?? String($0) }
+            loadConfig(for: selectedMonth)
         }
+        .onChange(of: selectedMonth) { _, newValue in
+            loadConfig(for: newValue)
+        }
+        .sensoryFeedback(.success, trigger: saveFeedbackTrigger)
+        .sheet(isPresented: $showMonthPicker) {
+            MonthYearPickerSheet(
+                initialMonth: selectedMonth,
+                yearRange: monthYearPickerRange,
+                accent: settings.themeAccent.color
+            ) { month in
+                monthPickerBinding.wrappedValue = month
+            }
+        }
+    }
+
+    private var monthYearPickerRange: ClosedRange<Int> {
+        let currentYear = Calendar.current.component(.year, from: Date())
+        let selectedYear = Calendar.current.component(.year, from: selectedMonth)
+        return min(currentYear, selectedYear) - 25...max(currentYear, selectedYear) + 25
+    }
+
+    private var monthPickerBinding: Binding<Date> {
+        Binding(
+            get: { selectedMonth },
+            set: { newValue in
+                selectedMonth = newValue.startOfMonthLocal()
+            }
+        )
     }
 
     private func bindingForBonus(at index: Int) -> Binding<String> {
@@ -626,6 +715,63 @@ private struct NetDefaultsSettingsView: View {
         return String(format: "%.2f", value).replacingOccurrences(of: ".", with: ",")
     }
 
+    private static let monthYearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "MMMM yyyy"
+        return formatter
+    }()
+
+    private func loadConfig(for month: Date) {
+        let normalizedMonth = month.startOfMonthLocal()
+        Task { @MainActor in
+            let localConfigs = fetchLocalNetConfigs()
+            let remoteConfigs = (try? await cloudKitService.fetchNetWageConfigs()) ?? []
+            for config in remoteConfigs {
+                upsertLocalNetConfig(config)
+            }
+            let configs = mergedNetConfigs(local: fetchLocalNetConfigs().isEmpty ? localConfigs : fetchLocalNetConfigs(), remote: remoteConfigs)
+            guard selectedMonth.isSameLocalDay(as: normalizedMonth) else { return }
+
+            let exactConfig = configs.first {
+                $0.monthStart.isSameLocalDay(as: normalizedMonth)
+            }
+
+            let previousConfig = previousMonthConfig(
+                for: normalizedMonth,
+                in: configs
+            )
+
+            let nextConfig = exactConfig ?? NetWageMonthConfig(
+                monthStart: normalizedMonth,
+                wageTaxPercent: previousConfig?.wageTaxPercent ?? settings.netWageTaxPercent,
+                pensionPercent: previousConfig?.pensionPercent ?? settings.netPensionPercent,
+                monthlyAllowanceEuro: previousConfig?.monthlyAllowanceEuro ?? settings.netMonthlyAllowanceEuro,
+                bonusesCSV: previousConfig?.bonusesCSV ?? settings.netBonusesCSV ?? ""
+            )
+
+            config = nextConfig
+            loadFields(from: nextConfig)
+        }
+    }
+
+    private func previousMonthConfig(for month: Date, in configs: [NetWageMonthConfig]) -> NetWageMonthConfig? {
+        guard let previousMonth = Calendar.current.date(byAdding: .month, value: -1, to: month.startOfMonthLocal()) else {
+            return nil
+        }
+        return configs.first {
+            $0.monthStart.isSameLocalDay(as: previousMonth.startOfMonthLocal())
+        }
+    }
+
+    private func loadFields(from config: NetWageMonthConfig) {
+        wageTaxText = formattedPercent(config.wageTaxPercent)
+        pensionText = formattedPercent(config.pensionPercent)
+        bonusTexts = config.bonusesCSV
+            .split(separator: ";")
+            .map { formatForDisplay(from: String($0)) ?? String($0) }
+    }
+
     private func save() {
         let wageTax = normalizedDouble(from: wageTaxText)
         let pension = normalizedDouble(from: pensionText)
@@ -634,15 +780,67 @@ private struct NetDefaultsSettingsView: View {
             .map { String(format: "%.2f", $0) }
             .joined(separator: ";")
 
-        settings.netWageTaxPercent = wageTax
-        settings.netPensionPercent = pension
-        settings.netBonusesCSV = bonusesCSV.isEmpty ? nil : bonusesCSV
+        config.monthStart = selectedMonth.startOfMonthUTC()
+        config.wageTaxPercent = wageTax
+        config.pensionPercent = pension
+        config.bonusesCSV = bonusesCSV
+        upsertLocalNetConfig(config)
 
         wageTaxText = formatForDisplay(from: wageTaxText) ?? ""
         pensionText = formatForDisplay(from: pensionText) ?? ""
         bonusTexts = bonusTexts.map { formatForDisplay(from: $0) ?? $0 }
+        saveFeedbackTrigger += 1
 
-        Task { try? await cloudKitService.saveSettings(settings) }
+        Task { try? await cloudKitService.saveNetWageConfig(config) }
+    }
+
+    private func fetchLocalNetConfigs() -> [NetWageMonthConfig] {
+        let descriptor = FetchDescriptor<NetWageMonthConfig>()
+        return (try? modelContext.fetch(descriptor)) ?? []
+    }
+
+    private func upsertLocalNetConfig(_ source: NetWageMonthConfig) {
+        let normalizedMonth = source.monthStart.startOfMonthUTC()
+        let existing = fetchLocalNetConfigs().first {
+            netConfigMonthKey($0.monthStart) == netConfigMonthKey(normalizedMonth)
+        }
+
+        if let existing {
+            existing.monthStart = normalizedMonth
+            existing.wageTaxPercent = source.wageTaxPercent
+            existing.pensionPercent = source.pensionPercent
+            existing.monthlyAllowanceEuro = source.monthlyAllowanceEuro
+            existing.bonusesCSV = source.bonusesCSV
+        } else {
+            modelContext.insert(
+                NetWageMonthConfig(
+                    monthStart: normalizedMonth,
+                    wageTaxPercent: source.wageTaxPercent,
+                    pensionPercent: source.pensionPercent,
+                    monthlyAllowanceEuro: source.monthlyAllowanceEuro,
+                    bonusesCSV: source.bonusesCSV
+                )
+            )
+        }
+        try? modelContext.save()
+    }
+
+    private func mergedNetConfigs(local: [NetWageMonthConfig], remote: [NetWageMonthConfig]) -> [NetWageMonthConfig] {
+        var byMonth: [String: NetWageMonthConfig] = [:]
+        for config in local {
+            byMonth[netConfigMonthKey(config.monthStart)] = config
+        }
+        for config in remote {
+            byMonth[netConfigMonthKey(config.monthStart)] = config
+        }
+        return byMonth.values.sorted { $0.monthStart < $1.monthStart }
+    }
+
+    private func netConfigMonthKey(_ date: Date) -> String {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let comps = utc.dateComponents([.year, .month], from: date.startOfMonthUTC())
+        return String(format: "%04d-%02d", comps.year ?? 0, comps.month ?? 0)
     }
 }
 
@@ -654,7 +852,7 @@ private struct TipsSettingsView: View {
         Form {
             Section(
                 header: Text("Trinkgeld"),
-                footer: Text("Steuert, ob der Trinkgeld-Button im Kalender erscheint und ob er den Monatsbetrag anzeigt.")
+                footer: Text("Steuert, ob der Trinkgeld-Button im Kalender erscheint, die Trinkgeldansicht umschaltet und ob er den Monatsbetrag anzeigt.")
             ) {
                 Toggle("Trinkgeld anzeigen", isOn: showTipsButtonBinding)
 
@@ -1120,23 +1318,10 @@ private struct CategoryColorPaletteView: View {
                         Circle()
                             .fill(color.color)
                             .frame(width: 36, height: 36)
-                            .background(
+                            .overlay {
                                 Circle()
-                                    .fill(color.color.opacity(isSelected ? 0.18 : 0.1))
-                            )
-                            .glassEffect(
-                                .regular
-                                    .tint(color.color.opacity(isSelected ? 0.2 : 0.14))
-                                    .interactive(true),
-                                in: Circle()
-                            )
-                            .overlay(
-                                Circle()
-                                    .stroke(
-                                        isSelected ? Color.primary.opacity(0.72) : Color.secondary.opacity(0.22),
-                                        lineWidth: isSelected ? 2 : 1
-                                    )
-                            )
+                                    .stroke(Color.primary.opacity(isSelected ? 0.72 : 0.18), lineWidth: isSelected ? 2 : 1)
+                            }
                             .overlay {
                                 if isSelected {
                                     Image(systemName: "checkmark")
@@ -1159,8 +1344,7 @@ private struct CategoryColorPaletteView: View {
         }
         .padding(16)
         .frame(width: paletteContentWidth)
-        //.payScopeGlassSurface(accent: accent, cornerRadius: PayScopeModalGeometry.popover.innerCornerRadius, tintOpacity: 0.045, shadowOpacity: 0.06)
-        //.payScopePopoverSurface(accent: accent)
+        .payScopePopoverSurface(accent: accent)
     }
 }
 
@@ -1180,7 +1364,7 @@ private struct CalendarSettingsView: View {
             
             Section(
                 header: Text("Monatsinformationen"),
-                footer: Text("Gibt an, ob der monatliche Überblick den Brutto- oder Nettolohn zeigt.")
+                footer: Text(calendarSummaryDisplayModeFooter)
         )
                 {
                     Picker("Monatswert", selection: calendarSummaryDisplayModeBinding) {
@@ -1192,6 +1376,17 @@ private struct CalendarSettingsView: View {
         }
         }
         .navigationTitle("Kalender")
+    }
+
+    private var calendarSummaryDisplayModeFooter: String {
+        switch settings.effectiveCalendarSummaryDisplayMode {
+        case .net:
+            return "Netto zeigt Schichtlohn plus Zuschläge abzüglich LS und RV."
+        case .gross:
+            return "Brutto zeigt Schichtlohn plus eingetragene Zuschläge vor Abzügen."
+        case .shiftPay:
+            return "Schichtlohn zeigt nur den berechneten Lohn aus deinen Schichten ohne Zuschläge und Abzüge."
+        }
     }
 
     private var calendarSummaryDisplayModeBinding: Binding<CalendarSummaryDisplayMode> {
@@ -1257,6 +1452,8 @@ private struct WidgetLiveActivitySettingsView: View {
             ) {
                 Toggle("Automatisch starten", isOn: showLiveActivityBinding)
                 Toggle("Nächste Schicht anzeigen", isOn: liveActivityShowsUpcomingShiftBinding)
+                    .disabled(!settings.effectiveShowLiveActivity)
+                Toggle("Pausenmodus anzeigen", isOn: liveActivityPauseModeEnabledBinding)
                     .disabled(!settings.effectiveShowLiveActivity)
             }
 
@@ -1346,6 +1543,16 @@ private struct WidgetLiveActivitySettingsView: View {
         )
     }
 
+    private var liveActivityPauseModeEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { settings.effectiveLiveActivityPauseModeEnabled },
+            set: {
+                settings.liveActivityPauseModeEnabled = $0
+                saveAndRefreshWidgets()
+            }
+        )
+    }
+
     private var widgetShowsNextShiftBinding: Binding<Bool> {
         Binding(
             get: { settings.effectiveWidgetShowsNextShift },
@@ -1402,7 +1609,6 @@ private struct ShiftShortcutsSettingsView: View {
                 onCancel: { editingShortcut = nil },
                 onSave: saveShortcutDraft
             )
-            .payScopeSheetSurface(accent: settings.themeAccent.color)
         }
     }
 
@@ -1975,6 +2181,20 @@ private enum MonthExportFormat {
     case pdf
 }
 
+private struct ExportMonthOption: Identifiable, Hashable {
+    let year: Int
+    let month: Int
+
+    var id: String {
+        String(format: "%04d-%02d", year, month)
+    }
+
+    var date: Date {
+        let components = DateComponents(year: year, month: month, day: 1)
+        return Calendar.current.date(from: components) ?? Date()
+    }
+}
+
 private struct MonthExportPreview: Identifiable {
     let id = UUID()
     let format: MonthExportFormat
@@ -2015,6 +2235,7 @@ private struct MonthExportPreviewSheet: View {
         .presentationDragIndicator(.visible)
         .sheet(isPresented: $showShare) {
             ShareSheet(items: preview.shareItems)
+                .presentationBackground(Color.clear)
         }
     }
 
@@ -2178,6 +2399,7 @@ private struct ExportSettingsView: View {
 
     @State private var exportMonthNumber = Calendar.current.component(.month, from: Date())
     @State private var exportYear = Calendar.current.component(.year, from: Date())
+    @State private var availableExportMonths: [ExportMonthOption] = []
     @State private var exportPreview: MonthExportPreview?
     @State private var showFileImporter = false
     @State private var showImportSheet = false
@@ -2187,11 +2409,11 @@ private struct ExportSettingsView: View {
     @State private var importErrorMessage: String?
     @State private var isSavingImportRows = false
     @State private var isPreparingExport = false
+    @State private var isLoadingExportMonths = false
     @State private var exportErrorMessage: String?
     @AppStorage("payscope.export.options.includeShiftTimes") private var includeShiftTimesInExport = true
     @AppStorage("payscope.export.options.includeBreaks") private var includeBreaksInExport = true
     @AppStorage("payscope.export.options.includePay") private var includePayInExport = true
-    @AppStorage("payscope.export.options.includeTips") private var includeTipsInExport = true
     @AppStorage("payscope.export.options.includeNotesAndWarnings") private var includeNotesAndWarningsInExport = true
 
     private let csvExporter = CSVExporter()
@@ -2222,13 +2444,13 @@ private struct ExportSettingsView: View {
             
             Section( footer: Text("Exportiere deine Monatsdaten in verschiedenen Formaten.")) {
                 HStack(spacing: 12) {
-                    ExportFormatButton(title: "CSV", systemImage: "tablecells", accent: settings.themeAccent.color, isDisabled: isPreparingExport) {
+                    ExportFormatButton(title: "CSV", systemImage: "tablecells", accent: settings.themeAccent.color, isDisabled: isExportActionDisabled) {
                         Task { await previewCSVExport() }
                     }
-                    ExportFormatButton(title: "Text", systemImage: "doc.text", accent: settings.themeAccent.color, isDisabled: isPreparingExport) {
+                    ExportFormatButton(title: "Text", systemImage: "doc.text", accent: settings.themeAccent.color, isDisabled: isExportActionDisabled) {
                         Task { await previewTextExport() }
                     }
-                    ExportFormatButton(title: "PDF", systemImage: "doc.richtext", accent: settings.themeAccent.color, isDisabled: isPreparingExport) {
+                    ExportFormatButton(title: "PDF", systemImage: "doc.richtext", accent: settings.themeAccent.color, isDisabled: isExportActionDisabled) {
                         Task { await previewPDFExport() }
                     }
                 }
@@ -2259,7 +2481,6 @@ private struct ExportSettingsView: View {
         .navigationTitle("Export & Import")
         .sheet(item: $exportPreview) { preview in
             MonthExportPreviewSheet(preview: preview, accent: settings.themeAccent.color)
-                .payScopeSheetSurface(accent: settings.themeAccent.color)
         }
         .fileImporter(
             isPresented: $showFileImporter,
@@ -2273,8 +2494,19 @@ private struct ExportSettingsView: View {
                 isSaving: isSavingImportRows,
                 onSave: { await saveImportedRows() }
             )
-            .payScopeSheetSurface(accent: settings.themeAccent.color)
         }
+        .onAppear {
+            refreshAvailableExportMonthsFromLocalStores()
+            Task { await refreshAvailableExportMonths() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .dayEntriesDidChange)) { _ in
+            refreshAvailableExportMonthsFromLocalStores()
+            Task { await refreshAvailableExportMonths() }
+        }
+    }
+
+    private var isExportActionDisabled: Bool {
+        isPreparingExport || availableExportMonths.isEmpty
     }
 
     private var exportOptionButtons: some View {
@@ -2297,12 +2529,6 @@ private struct ExportSettingsView: View {
                 accent: settings.themeAccent.color,
                 isOn: $includePayInExport
             )
-            ExportOptionToggleButton(
-                title: "Trinkgeld",
-                systemImage: "sparkles",
-                accent: settings.themeAccent.color,
-                isOn: $includeTipsInExport
-            )
         }
     }
 
@@ -2311,52 +2537,76 @@ private struct ExportSettingsView: View {
             includeShiftTimes: includeShiftTimesInExport,
             includeBreaks: includeBreaksInExport,
             includePay: includePayInExport,
-            includeTips: includeTipsInExport,
+            includeTips: false,
             includeNotesAndWarnings: includeNotesAndWarningsInExport
         )
     }
 
     private var exportWheelPickers: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(spacing: 4) {
-                Text("Monat")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Picker("Monat", selection: $exportMonthNumber) {
-                    ForEach(1...12, id: \.self) { month in
-                        Text(Self.germanMonthSymbols[month - 1]).tag(month)
+        Group {
+            if availableExportMonths.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: isLoadingExportMonths ? "arrow.triangle.2.circlepath" : "calendar.badge.exclamationmark")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(isLoadingExportMonths ? "Export-Monate werden geladen..." : "Noch keine Einträge zum Exportieren.")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, minHeight: 150)
+            } else {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(spacing: 4) {
+                        Text("Monat")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Picker("Monat", selection: $exportMonthNumber) {
+                            ForEach(selectableMonthsForExportYear, id: \.self) { month in
+                                Text(Self.germanMonthSymbols[month - 1]).tag(month)
+                            }
+                        }
+                        .pickerStyle(.wheel)
+                        .labelsHidden()
+                        .frame(maxWidth: .infinity)
+                        .clipped()
+                    }
+
+                    Divider()
+                        .frame(height: 150)
+
+                    VStack(spacing: 4) {
+                        Text("Jahr")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Picker("Jahr", selection: $exportYear) {
+                            ForEach(selectableYears, id: \.self) { year in
+                                Text("\(year)").tag(year)
+                            }
+                        }
+                        .pickerStyle(.wheel)
+                        .labelsHidden()
+                        .frame(maxWidth: .infinity)
+                        .clipped()
                     }
                 }
-                .pickerStyle(.wheel)
-                .labelsHidden()
-                .frame(maxWidth: .infinity)
-                .clipped()
-            }
-
-            Divider()
-                .frame(height: 150)
-
-            VStack(spacing: 4) {
-                Text("Jahr")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Picker("Jahr", selection: $exportYear) {
-                    ForEach(selectableYears, id: \.self) { year in
-                        Text("\(year)").tag(year)
-                    }
+                .frame(height: 178)
+                .onChange(of: exportYear) { _, _ in
+                    keepSelectedMonthAvailable()
                 }
-                .pickerStyle(.wheel)
-                .labelsHidden()
-                .frame(maxWidth: .infinity)
-                .clipped()
             }
         }
-        .frame(height: 178)
     }
 
     private var selectableYears: [Int] {
-        let current = Calendar.current.component(.year, from: Date())
-        return Array((current - 5)...(current + 5))
+        Array(Set(availableExportMonths.map(\.year))).sorted()
+    }
+
+    private var selectableMonthsForExportYear: [Int] {
+        availableExportMonths
+            .filter { $0.year == exportYear }
+            .map(\.month)
+            .sorted()
     }
 
     private var selectedExportMonthDate: Date {
@@ -2379,6 +2629,88 @@ private struct ExportSettingsView: View {
             to: exportInterval.start
         ) ?? exportInterval.start.addingTimeInterval(TimeInterval(-lookbackDays * 24 * 60 * 60))
         return DateInterval(start: start.startOfDayLocal(), end: exportInterval.end)
+    }
+
+    @MainActor
+    private func refreshAvailableExportMonths() async {
+        guard !isLoadingExportMonths else { return }
+        isLoadingExportMonths = true
+        defer { isLoadingExportMonths = false }
+
+        let interval = exportAvailabilityLookupInterval()
+        let deletedDaysByKey = Dictionary(
+            LocalDayEntryStore.shared.loadDeletionTombstones().map { (dayKey($0.date), $0.lastModified) },
+            uniquingKeysWith: { current, incoming in incoming > current ? incoming : current }
+        )
+        let remoteEntries = ((try? await cloudKitService.fetchDayEntries(in: interval)) ?? []).filter { entry in
+            guard let deletedAt = deletedDaysByKey[dayKey(entry.date)] else { return true }
+            return deletedAt < entry.updatedAt
+        }
+
+        if !remoteEntries.isEmpty {
+            LocalDayEntryStore.shared.upsertMany(remoteEntries.filter(\.isRealTrackedDay), notify: false)
+        }
+
+        updateAvailableExportMonths(
+            entries: LocalDayEntryStore.shared.loadAll() + remoteEntries
+        )
+    }
+
+    private func refreshAvailableExportMonthsFromLocalStores() {
+        updateAvailableExportMonths(
+            entries: LocalDayEntryStore.shared.loadAll()
+        )
+    }
+
+    private func updateAvailableExportMonths(entries: [DayEntry]) {
+        let entryDates = entries
+            .filter(\.isRealTrackedDay)
+            .map(\.date)
+        let options = exportMonthOptions(from: entryDates)
+
+        availableExportMonths = options
+        guard let selected = selectedExportMonth(in: options) ?? options.last else { return }
+        exportYear = selected.year
+        exportMonthNumber = selected.month
+    }
+
+    private func selectedExportMonth(in options: [ExportMonthOption]) -> ExportMonthOption? {
+        options.first { $0.year == exportYear && $0.month == exportMonthNumber }
+    }
+
+    private func keepSelectedMonthAvailable() {
+        guard !selectableMonthsForExportYear.contains(exportMonthNumber),
+              let month = selectableMonthsForExportYear.first
+        else { return }
+
+        exportMonthNumber = month
+    }
+
+    private func exportMonthOptions(from dates: [Date]) -> [ExportMonthOption] {
+        let calendar = Calendar.current
+        let options = dates.compactMap { date -> ExportMonthOption? in
+            let components = calendar.dateComponents([.year, .month], from: date.startOfDayLocal())
+            guard let year = components.year, let month = components.month else { return nil }
+            return ExportMonthOption(year: year, month: month)
+        }
+        return Array(Set(options)).sorted {
+            if $0.year != $1.year {
+                return $0.year < $1.year
+            }
+            return $0.month < $1.month
+        }
+    }
+
+    private func exportAvailabilityLookupInterval() -> DateInterval {
+        let calendar = Calendar.current
+        let currentYear = calendar.component(.year, from: Date())
+        let localDates = LocalDayEntryStore.shared.loadAll().filter(\.isRealTrackedDay).map(\.date)
+        let localYears = localDates.compactMap { calendar.dateComponents([.year], from: $0).year }
+        let startYear = min(localYears.min() ?? currentYear - 5, currentYear - 5)
+        let endYear = max(localYears.max() ?? currentYear + 5, currentYear + 5)
+        let start = calendar.date(from: DateComponents(year: startYear, month: 1, day: 1)) ?? Date()
+        let end = calendar.date(from: DateComponents(year: endYear + 1, month: 1, day: 1))?.addingTimeInterval(-1) ?? Date()
+        return DateInterval(start: start, end: end)
     }
 
     @MainActor
@@ -2475,37 +2807,25 @@ private struct ExportSettingsView: View {
     }
 
     private func loadExportData() async -> (entries: [DayEntry], tips: [TipEntry]) {
-        let interval = selectedExportInterval
         let lookupInterval = selectedExportLookupInterval
         let localEntries = LocalDayEntryStore.shared.loadAll(in: lookupInterval)
-        let localTips = LocalTipEntryStore.shared.loadAll(in: interval)
         let deletedDaysByKey = Dictionary(
             LocalDayEntryStore.shared.loadDeletionTombstones().map { (dayKey($0.date), $0.lastModified) },
-            uniquingKeysWith: { current, incoming in incoming > current ? incoming : current }
-        )
-        let deletedTipsByID = Dictionary(
-            LocalTipEntryStore.shared.loadDeletionTombstones().map { ($0.id, $0.lastModified) },
             uniquingKeysWith: { current, incoming in incoming > current ? incoming : current }
         )
         let remoteEntries = ((try? await cloudKitService.fetchDayEntries(in: lookupInterval)) ?? []).filter { entry in
             guard let deletedAt = deletedDaysByKey[dayKey(entry.date)] else { return true }
             return deletedAt < entry.updatedAt
         }
-        let remoteTips = ((try? await cloudKitService.fetchTipEntries(in: interval)) ?? []).filter { tip in
-            guard let deletedAt = deletedTipsByID[tip.id] else { return true }
-            return deletedAt < tip.updatedAt
-        }
+        let realRemoteEntries = remoteEntries.filter(\.isRealTrackedDay)
 
-        if !remoteEntries.isEmpty {
-            LocalDayEntryStore.shared.upsertMany(remoteEntries, notify: false)
-        }
-        if !remoteTips.isEmpty {
-            LocalTipEntryStore.shared.upsertMany(remoteTips)
+        if !realRemoteEntries.isEmpty {
+            LocalDayEntryStore.shared.upsertMany(realRemoteEntries, notify: false)
         }
 
         return (
-            entries: mergeEntriesByLocalDayKeepingNewest(local: localEntries, remote: remoteEntries),
-            tips: mergeTipEntriesKeepingNewest(local: localTips, remote: remoteTips)
+            entries: mergeEntriesByLocalDayKeepingNewest(local: localEntries, remote: realRemoteEntries),
+            tips: []
         )
     }
 
@@ -2513,25 +2833,19 @@ private struct ExportSettingsView: View {
         let byDay = Dictionary(
             (local + remote).map { (dayKey($0.date), $0) },
             uniquingKeysWith: { existing, candidate in
-                candidate.updatedAt > existing.updatedAt ? candidate : existing
+                preferredEntryForSameDay(existing: existing, candidate: candidate)
             }
         )
-        return byDay.values.sorted { $0.date < $1.date }
+        return byDay.values
+            .filter(\.isRealTrackedDay)
+            .sorted { $0.date < $1.date }
     }
 
-    private func mergeTipEntriesKeepingNewest(local: [TipEntry], remote: [TipEntry]) -> [TipEntry] {
-        let byID = Dictionary(
-            (local + remote).map { ($0.id, $0) },
-            uniquingKeysWith: { existing, candidate in
-                candidate.updatedAt > existing.updatedAt ? candidate : existing
-            }
-        )
-        return byID.values.sorted {
-            if $0.date != $1.date {
-                return $0.date < $1.date
-            }
-            return $0.updatedAt < $1.updatedAt
+    private func preferredEntryForSameDay(existing: DayEntry, candidate: DayEntry) -> DayEntry {
+        if existing.isRealTrackedDay != candidate.isRealTrackedDay {
+            return candidate.isRealTrackedDay ? candidate : existing
         }
+        return candidate.updatedAt > existing.updatedAt ? candidate : existing
     }
 
     private func dayKey(_ date: Date) -> String {

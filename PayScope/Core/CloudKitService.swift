@@ -52,6 +52,7 @@ enum CloudKitRecordKeys {
         case showCalendarWeekPay
         case showLiveActivity
         case liveActivityShowsUpcomingShift
+        case liveActivityPauseModeEnabled
         case widgetShowsNextShift
         case widgetShowsAllDayStatus
         case alwaysApplyFifteenMinuteBuffer
@@ -757,6 +758,7 @@ final class CloudKitService: ObservableObject {
         let showCalendarWeekPay = (record[CloudKitRecordKeys.Settings.showCalendarWeekPay.rawValue] as? NSNumber)?.boolValue
         let showLiveActivity = (record[CloudKitRecordKeys.Settings.showLiveActivity.rawValue] as? NSNumber)?.boolValue
         let liveActivityShowsUpcomingShift = (record[CloudKitRecordKeys.Settings.liveActivityShowsUpcomingShift.rawValue] as? NSNumber)?.boolValue
+        let liveActivityPauseModeEnabled = (record[CloudKitRecordKeys.Settings.liveActivityPauseModeEnabled.rawValue] as? NSNumber)?.boolValue
         let widgetShowsNextShift = (record[CloudKitRecordKeys.Settings.widgetShowsNextShift.rawValue] as? NSNumber)?.boolValue
         let widgetShowsAllDayStatus = (record[CloudKitRecordKeys.Settings.widgetShowsAllDayStatus.rawValue] as? NSNumber)?.boolValue
         let alwaysApplyFifteenMinuteBuffer = (record[CloudKitRecordKeys.Settings.alwaysApplyFifteenMinuteBuffer.rawValue] as? NSNumber)?.boolValue
@@ -813,6 +815,7 @@ final class CloudKitService: ObservableObject {
             showCalendarWeekPay: showCalendarWeekPay ?? false,
             showLiveActivity: showLiveActivity ?? true,
             liveActivityShowsUpcomingShift: liveActivityShowsUpcomingShift ?? true,
+            liveActivityPauseModeEnabled: liveActivityPauseModeEnabled ?? true,
             widgetShowsNextShift: widgetShowsNextShift ?? true,
             widgetShowsAllDayStatus: widgetShowsAllDayStatus ?? true,
             alwaysApplyFifteenMinuteBuffer: alwaysApplyFifteenMinuteBuffer ?? false,
@@ -849,6 +852,7 @@ final class CloudKitService: ObservableObject {
         settings.showCalendarWeekPay = showCalendarWeekPay
         settings.showLiveActivity = showLiveActivity
         settings.liveActivityShowsUpcomingShift = liveActivityShowsUpcomingShift
+        settings.liveActivityPauseModeEnabled = liveActivityPauseModeEnabled
         settings.widgetShowsNextShift = widgetShowsNextShift
         settings.widgetShowsAllDayStatus = widgetShowsAllDayStatus
         settings.alwaysApplyFifteenMinuteBuffer = alwaysApplyFifteenMinuteBuffer
@@ -1040,6 +1044,11 @@ final class CloudKitService: ObservableObject {
             record[CloudKitRecordKeys.Settings.liveActivityShowsUpcomingShift.rawValue] = NSNumber(value: liveActivityShowsUpcomingShift)
         } else {
             record[CloudKitRecordKeys.Settings.liveActivityShowsUpcomingShift.rawValue] = nil
+        }
+        if let liveActivityPauseModeEnabled = settings.liveActivityPauseModeEnabled {
+            record[CloudKitRecordKeys.Settings.liveActivityPauseModeEnabled.rawValue] = NSNumber(value: liveActivityPauseModeEnabled)
+        } else {
+            record[CloudKitRecordKeys.Settings.liveActivityPauseModeEnabled.rawValue] = nil
         }
         if let widgetShowsNextShift = settings.widgetShowsNextShift {
             record[CloudKitRecordKeys.Settings.widgetShowsNextShift.rawValue] = NSNumber(value: widgetShowsNextShift)

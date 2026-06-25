@@ -155,10 +155,14 @@ struct StartTimerIntent: SetValueIntent {
                 workedReferenceStart: now,
                 shiftCategoryIcon: "briefcase.fill",
                 themeAccentRawValue: "blue",
+                shiftCategoryColorRawValue: "blue",
+                isTimedShift: true,
                 isCompleted: false,
                 completedPayCents: 0,
                 nextShiftStart: nil,
-                nextShiftDurationSeconds: 0
+                nextShiftDurationSeconds: 0,
+                isPaused: false,
+                pauseStartedAt: nil
             ),
             staleDate: end
         )
@@ -181,20 +185,22 @@ struct StartTimerIntent: SetValueIntent {
     }
 }
 
-private enum PayScopeControlCenterActionKind: String, Codable {
+enum PayScopeControlCenterActionKind: String, Codable {
     case startShift
     case endShift
+    case startPause
+    case endPause
     case addTip
     case markTodaySick
 }
 
-private struct PayScopeControlCenterAction: Codable {
+struct PayScopeControlCenterAction: Codable {
     var id: String
     var kind: PayScopeControlCenterActionKind
     var amountEuro: Double?
 }
 
-private enum PayScopeControlCenterActionStore {
+enum PayScopeControlCenterActionStore {
     private static let appGroupIdentifier = "group.DyonisosFergadiotis.PayScope"
     private static let pendingActionKey = "payscope.controlCenter.pendingAction.v1"
 
@@ -234,6 +240,34 @@ private struct EndShiftControlIntent: AppIntent {
 
     func perform() async throws -> some IntentResult {
         PayScopeControlCenterActionStore.savePendingAction(kind: .endShift)
+        return .result()
+    }
+}
+
+struct StartPauseControlIntent: AppIntent {
+    static var title: LocalizedStringResource { "Pause starten" }
+    static var description: IntentDescription {
+        IntentDescription("Startet den Pausenmodus in PayScope.")
+    }
+    static var openAppWhenRun: Bool { true }
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        PayScopeControlCenterActionStore.savePendingAction(kind: .startPause)
+        return .result()
+    }
+}
+
+struct EndPauseControlIntent: AppIntent {
+    static var title: LocalizedStringResource { "Pause beenden" }
+    static var description: IntentDescription {
+        IntentDescription("Beendet den Pausenmodus in PayScope.")
+    }
+    static var openAppWhenRun: Bool { true }
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        PayScopeControlCenterActionStore.savePendingAction(kind: .endPause)
         return .result()
     }
 }

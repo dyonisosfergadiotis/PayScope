@@ -43,6 +43,46 @@ struct EndShiftIntent: AppIntent {
     }
 }
 
+struct StartPauseIntent: AppIntent {
+    nonisolated static var title: LocalizedStringResource { "Pause starten" }
+    nonisolated static var description: IntentDescription {
+        IntentDescription("Startet den Pausenmodus fuer die laufende Schicht in PayScope.")
+    }
+    nonisolated static var openAppWhenRun: Bool { false }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        switch await PayScopeIntentActionService.startPause() {
+        case .started:
+            return .result(dialog: "Pause gestartet.")
+        case .alreadyPaused:
+            return .result(dialog: "Die Pause läuft bereits.")
+        case .noRunningShift:
+            return .result(dialog: "Es läuft keine Schicht.")
+        }
+    }
+}
+
+struct EndPauseIntent: AppIntent {
+    nonisolated static var title: LocalizedStringResource { "Pause beenden" }
+    nonisolated static var description: IntentDescription {
+        IntentDescription("Beendet den Pausenmodus und speichert die längere Pause in PayScope.")
+    }
+    nonisolated static var openAppWhenRun: Bool { false }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        switch await PayScopeIntentActionService.endPause() {
+        case .ended:
+            return .result(dialog: "Pause beendet.")
+        case .noActivePause:
+            return .result(dialog: "Es läuft keine Pause.")
+        case .noRunningShift:
+            return .result(dialog: "Es läuft keine Schicht.")
+        }
+    }
+}
+
 struct AddTipIntent: AppIntent {
     nonisolated static var title: LocalizedStringResource { "Trinkgeld hinzufügen" }
     nonisolated static var description: IntentDescription {
@@ -110,6 +150,24 @@ struct PayScopeAppShortcuts: AppShortcutsProvider {
             systemImageName: "checkmark.circle.fill"
         )
         AppShortcut(
+            intent: StartPauseIntent(),
+            phrases: [
+                "\(.applicationName) Pause starten",
+                "Pause mit \(.applicationName) starten"
+            ],
+            shortTitle: "Pause",
+            systemImageName: "pause.circle.fill"
+        )
+        AppShortcut(
+            intent: EndPauseIntent(),
+            phrases: [
+                "\(.applicationName) Pause beenden",
+                "Pause mit \(.applicationName) beenden"
+            ],
+            shortTitle: "Pause Ende",
+            systemImageName: "play.circle.fill"
+        )
+        AppShortcut(
             intent: AddTipIntent(),
             phrases: [
                 "\(.applicationName) Trinkgeld hinzufügen",
@@ -142,6 +200,18 @@ enum PayScopeIntentActionService {
     enum EndShiftOutcome {
         case ended
         case alreadyEnded
+        case noRunningShift
+    }
+
+    enum StartPauseOutcome {
+        case started
+        case alreadyPaused
+        case noRunningShift
+    }
+
+    enum EndPauseOutcome {
+        case ended
+        case noActivePause
         case noRunningShift
     }
 
@@ -227,6 +297,68 @@ enum PayScopeIntentActionService {
         return .ended
     }
 
+    static func startPause(now: Date = .now) async -> StartPauseOutcome {
+        let settings = loadSettings()
+        guard settings?.effectiveLiveActivityPauseModeEnabled ?? true else {
+            return .noRunningShift
+        }
+
+        if let session = PauseSessionStore.load(), session.shiftEnd > now {
+            return .alreadyPaused
+        }
+
+        guard let activeEntry = calculationService.activeShiftEntry(at: now, entries: nearbyEntries(around: now)),
+              let shiftStart = activeEntry.shiftStart,
+              let shiftEnd = activeEntry.shiftEnd,
+              shiftStart < now,
+              now < shiftEnd else {
+            PauseSessionStore.clear()
+            return .noRunningShift
+        }
+
+        PauseSessionStore.save(
+            PauseSessionSnapshot(
+                startedAt: now,
+                shiftDayStart: activeEntry.date.startOfDayLocal(),
+                shiftStart: shiftStart,
+                shiftEnd: shiftEnd
+            )
+        )
+
+        await refreshSurfaces(settings: settings, now: now)
+        return .started
+    }
+
+    static func endPause(now: Date = .now) async -> EndPauseOutcome {
+        let settings = loadSettings()
+        guard let session = PauseSessionStore.load() else {
+            return .noActivePause
+        }
+
+        let activeEntry = calculationService.activeShiftEntry(at: now, entries: nearbyEntries(around: now))
+        let sessionEntry = localDayStore.load(on: session.shiftDayStart)
+        guard let target = activeEntry ?? sessionEntry,
+              let shiftStart = target.shiftStart,
+              let shiftEnd = target.shiftEnd,
+              shiftEnd > shiftStart else {
+            PauseSessionStore.clear()
+            await refreshSurfaces(settings: settings, now: now)
+            return .noRunningShift
+        }
+
+        let pauseEnd = min(max(now, session.startedAt), shiftEnd)
+        let pauseSeconds = max(0, Int(pauseEnd.timeIntervalSince(session.startedAt)))
+        target.date = utcDate(forLocalDay: target.date.startOfDayLocal())
+        target.updatedAt = now
+        target.breakSeconds = max(max(0, target.breakSeconds ?? 0), pauseSeconds)
+        target.manualWorkedSeconds = nil
+        target.creditedOverrideSeconds = nil
+
+        PauseSessionStore.clear()
+        await saveDayEntryAndRefresh(target, settings: settings, now: now)
+        return .ended
+    }
+
     static func addTip(amountEuro: Double, now: Date = .now) async -> AddTipOutcome {
         guard amountEuro.isFinite, amountEuro > 0 else {
             return .invalidAmount
@@ -241,11 +373,22 @@ enum PayScopeIntentActionService {
         localTipStore.save(tip)
 
         let dayStart = now.startOfDayLocal()
-        let target = localDayStore.load(on: dayStart) ?? DayEntry(date: utcDate(forLocalDay: dayStart))
-        target.date = utcDate(forLocalDay: dayStart)
-        target.updatedAt = now
-        target.tipAmountCents = max(0, target.tipAmountCents ?? 0) + cents
-        localDayStore.save(target)
+        let target = localDayStore.load(on: dayStart)
+        if let target, target.isTipOnlyPlaceholder {
+            localDayStore.delete(on: dayStart)
+            do {
+                try await cloudKitService.deleteDayEntry(on: dayStart)
+            } catch {
+                #if DEBUG
+                print("CloudKit tip-only day cleanup failed, local tombstone kept for retry: \(error)")
+                #endif
+            }
+        } else if let target, target.isRealTrackedDay {
+            target.date = utcDate(forLocalDay: dayStart)
+            target.updatedAt = now
+            target.tipAmountCents = max(0, target.tipAmountCents ?? 0) + cents
+            localDayStore.save(target)
+        }
 
         do {
             try await cloudKitService.saveTipEntry(tip)
@@ -256,13 +399,15 @@ enum PayScopeIntentActionService {
             #endif
         }
 
-        do {
-            try await cloudKitService.saveDayEntry(target)
-            localDayStore.save(target)
-        } catch {
-            #if DEBUG
-            print("CloudKit day tip save failed, persisted locally as fallback: \(error)")
-            #endif
+        if let target, target.isRealTrackedDay {
+            do {
+                try await cloudKitService.saveDayEntry(target)
+                localDayStore.save(target)
+            } catch {
+                #if DEBUG
+                print("CloudKit day tip save failed, persisted locally as fallback: \(error)")
+                #endif
+            }
         }
 
         WidgetCenter.shared.reloadAllTimelines()
@@ -314,14 +459,14 @@ enum PayScopeIntentActionService {
 
         let dayStart = now.startOfDayLocal()
         let interval = DateInterval(start: dayStart.addingDays(-2), end: dayStart.addingDays(35))
-        let entries = localDayStore.loadAll(in: interval)
+        let entries = localDayStore.loadAll(in: interval).filter(\.isRealTrackedDay)
         await PayScopeLiveActivityManager.syncAtAppLaunch(settings: settings, entries: entries, now: now)
     }
 
     private static func nearbyEntries(around date: Date) -> [DayEntry] {
         let dayStart = date.startOfDayLocal()
         let interval = DateInterval(start: dayStart.addingDays(-2), end: dayStart.addingDays(2))
-        return localDayStore.loadAll(in: interval)
+        return localDayStore.loadAll(in: interval).filter(\.isRealTrackedDay)
     }
 
     private static func plannedShiftDurationSeconds(settings: Settings?) -> Int {

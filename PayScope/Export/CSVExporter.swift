@@ -20,15 +20,21 @@ struct CSVExporter {
             return ""
         }
 
-        let filtered = entries
+        let exportEntries = entries.filter(\.isRealTrackedDay)
+        let filtered = exportEntries
             .filter { $0.date >= monthRange.start && $0.date < monthRange.end }
             .sorted { $0.date < $1.date }
         let monthTips = tips
             .filter { $0.date >= monthRange.start && $0.date < monthRange.end }
             .sorted { $0.date < $1.date }
+        let tipSummaries = tipSummariesByLocalDay(from: monthTips)
+        let tipAmountsByDay = Dictionary(
+            uniqueKeysWithValues: tipSummaries.map { (localDayKey(for: $0.date), $0.amountCents) }
+        )
+        let entryDayKeys = Set(filtered.map { localDayKey(for: $0.date) })
 
         var lines: [String] = [csvHeader(options: options)]
-        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
+        let entriesByDate = service.makeEntriesByDateLookup(from: exportEntries)
         for entry in filtered {
             let result = service.exportComputation(for: entry, entriesByDate: entriesByDate, settings: settings)
             let shiftColumns = ShiftCSVTransfer.exportColumns(for: entry)
@@ -86,15 +92,16 @@ struct CSVExporter {
                 fields.append(String(format: "%.2f", Double(creditedPay) / 100))
             }
             if options.includeTips {
-                fields.append("")
+                let tipAmountCents = tipAmountsByDay[localDayKey(for: entry.date)] ?? 0
+                fields.append(tipAmountCents > 0 ? tipAmountText(cents: tipAmountCents) : "")
             }
             let row = fields.map(Self.csvField).joined(separator: ",")
             lines.append(row)
         }
 
         if options.includeTips {
-            for tip in monthTips {
-                let row = tipFields(for: tip, options: options).map(Self.csvField).joined(separator: ",")
+            for summary in tipSummaries where !entryDayKeys.contains(localDayKey(for: summary.date)) {
+                let row = tipFields(for: summary, options: options).map(Self.csvField).joined(separator: ",")
                 lines.append(row)
             }
         }
@@ -134,10 +141,10 @@ struct CSVExporter {
         return columns.joined(separator: ",")
     }
 
-    private func tipFields(for tip: TipEntry, options: MonthExportOptions) -> [String] {
+    private func tipFields(for summary: DayTipSummary, options: MonthExportOptions) -> [String] {
         var fields = [
-            "eurosign.circle.fill",
-            PayScopeFormatters.isoDay.string(from: tip.date)
+            "",
+            PayScopeFormatters.isoDay.string(from: summary.date)
         ]
         if options.includeShiftTimes {
             fields.append(contentsOf: [
@@ -150,18 +157,48 @@ struct CSVExporter {
             fields.append("-")
         }
         fields.append(contentsOf: [
-            "tip",
-            "0.00"
+            "-",
+            "-"
         ])
         if options.includePay {
-            fields.append("")
+            fields.append("-")
         }
-        fields.append("0.00")
+        fields.append("-")
         if options.includePay {
-            fields.append("")
+            fields.append("-")
         }
-        fields.append(String(format: "%.2f", Double(tip.amountCents) / 100))
+        fields.append(tipAmountText(cents: summary.amountCents))
         return fields
+    }
+
+    private struct DayTipSummary {
+        let date: Date
+        let amountCents: Int
+    }
+
+    private func tipSummariesByLocalDay(from tips: [TipEntry]) -> [DayTipSummary] {
+        var totals: [String: DayTipSummary] = [:]
+
+        for tip in tips where tip.amountCents > 0 {
+            let day = tip.date.startOfDayLocal()
+            let key = localDayKey(for: day)
+            let currentAmount = totals[key]?.amountCents ?? 0
+            totals[key] = DayTipSummary(date: day, amountCents: currentAmount + tip.amountCents)
+        }
+
+        return totals.values.sorted { $0.date < $1.date }
+    }
+
+    private func localDayKey(for date: Date) -> String {
+        let day = date.startOfDayLocal()
+        let year = Calendar.current.component(.year, from: day)
+        let month = Calendar.current.component(.month, from: day)
+        let dayOfMonth = Calendar.current.component(.day, from: day)
+        return String(format: "%04d-%02d-%02d", year, month, dayOfMonth)
+    }
+
+    private func tipAmountText(cents: Int) -> String {
+        String(format: "%.2f", Double(cents) / 100)
     }
 
     private nonisolated static func csvField(_ value: String) -> String {

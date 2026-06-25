@@ -9,6 +9,52 @@ enum PayScopeTypography {
     static let metric = Font.system(.title, design: .rounded).weight(.bold)
 }
 
+struct PayScopeThemeTokens {
+    let backgroundBase: Color
+    let backgroundBaseSecondary: Color
+    let backgroundAccentOpacity: Double
+    let backgroundAccentSecondaryOpacity: Double
+    let surfaceFill: Color
+    let elevatedSurfaceFill: Color
+    let surfaceStroke: Color
+    let glassTintOpacity: Double
+    let shadowOpacity: Double
+    let categoryTintOpacity: Double
+    let highlightOpacity: Double
+
+    static func resolve(for colorScheme: ColorScheme) -> PayScopeThemeTokens {
+        if colorScheme == .light {
+            return PayScopeThemeTokens(
+                backgroundBase: Color(red: 0.992, green: 0.995, blue: 1.0),
+                backgroundBaseSecondary: Color(red: 0.963, green: 0.972, blue: 0.986),
+                backgroundAccentOpacity: 0.09,
+                backgroundAccentSecondaryOpacity: 0.045,
+                surfaceFill: Color.white.opacity(0.78),
+                elevatedSurfaceFill: Color.white.opacity(0.88),
+                surfaceStroke: Color.primary.opacity(0.075),
+                glassTintOpacity: 0.105,
+                shadowOpacity: 0.055,
+                categoryTintOpacity: 0.115,
+                highlightOpacity: 0.38
+            )
+        }
+
+        return PayScopeThemeTokens(
+            backgroundBase: Color(red: 0.055, green: 0.06, blue: 0.074),
+            backgroundBaseSecondary: Color(red: 0.105, green: 0.108, blue: 0.13),
+            backgroundAccentOpacity: 0.13,
+            backgroundAccentSecondaryOpacity: 0.065,
+            surfaceFill: Color(.secondarySystemBackground).opacity(0.58),
+            elevatedSurfaceFill: Color(.secondarySystemBackground).opacity(0.72),
+            surfaceStroke: Color.white.opacity(0.13),
+            glassTintOpacity: 0.075,
+            shadowOpacity: 0.16,
+            categoryTintOpacity: 0.085,
+            highlightOpacity: 0.18
+        )
+    }
+}
+
 struct PayScopeModalGeometry {
     static var sheet: PayScopeModalGeometry {
         PayScopeModalGeometry(displayCornerRadius: estimatedDisplayCornerRadius, edgePadding: 10)
@@ -57,19 +103,21 @@ struct PayScopeBackground: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
 
     let accent: Color
+    let intensity: Double
 
     func body(content: Content) -> some View {
-        let isLightMode = colorScheme == .light
+        let tokens = PayScopeThemeTokens.resolve(for: colorScheme)
+        let normalizedIntensity = min(1.35, max(0.65, intensity))
 
         content
             .background(
                 ZStack {
                     LinearGradient(
                         colors: [
-                            isLightMode ? Color(red: 0.994, green: 0.996, blue: 1.0) : Color(.systemBackground),
-                            accent.opacity(isLightMode ? 0.06 : 0.08),
-                            isLightMode ? Color(red: 0.982, green: 0.986, blue: 0.994) : Color(.systemGroupedBackground),
-                            accent.opacity(isLightMode ? 0.035 : 0.05)
+                            tokens.backgroundBase,
+                            accent.opacity(tokens.backgroundAccentOpacity * normalizedIntensity),
+                            tokens.backgroundBaseSecondary,
+                            accent.opacity(tokens.backgroundAccentSecondaryOpacity * normalizedIntensity)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
@@ -78,9 +126,9 @@ struct PayScopeBackground: ViewModifier {
 
                     LinearGradient(
                         colors: [
-                            .white.opacity(isLightMode ? 0.4 : 0.32),
+                            .white.opacity(tokens.highlightOpacity),
                             .clear,
-                            .white.opacity(isLightMode ? 0.2 : 0.14)
+                            .white.opacity(tokens.highlightOpacity * 0.45)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -93,8 +141,8 @@ struct PayScopeBackground: ViewModifier {
 }
 
 extension View {
-    func payScopeBackground(accent: Color) -> some View {
-        modifier(PayScopeBackground(accent: accent))
+    func payScopeBackground(accent: Color, intensity: Double = 1) -> some View {
+        modifier(PayScopeBackground(accent: accent, intensity: intensity))
     }
 
     func payScopeNumericTransition<Value: Equatable>(value: Value) -> some View {
@@ -119,7 +167,8 @@ struct PayScopeSurfaceStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         let depth = CGFloat(max(0, emphasis))
-        let isLightMode = colorScheme == .light
+        let tokens = PayScopeThemeTokens.resolve(for: colorScheme)
+        let normalizedEmphasis = min(1, max(0, emphasis))
 
         content
             .background(
@@ -127,9 +176,9 @@ struct PayScopeSurfaceStyle: ViewModifier {
                     .fill(
                         LinearGradient(
                             colors: [
-                                isLightMode ? Color.white.opacity(0.97) : Color(.secondarySystemBackground).opacity(0.96),
-                                accent.opacity((isLightMode ? 0.045 : 0.06) + (emphasis * (isLightMode ? 0.055 : 0.08))),
-                                isLightMode ? Color(red: 0.992, green: 0.994, blue: 1.0).opacity(0.99) : Color(.systemBackground).opacity(0.98)
+                                tokens.elevatedSurfaceFill,
+                                accent.opacity(tokens.glassTintOpacity + normalizedEmphasis * tokens.categoryTintOpacity),
+                                tokens.surfaceFill
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -138,15 +187,15 @@ struct PayScopeSurfaceStyle: ViewModifier {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(.white.opacity(0.22), lineWidth: 0.9)
+                    .stroke(.white.opacity(colorScheme == .light ? 0.58 : 0.18), lineWidth: 0.9)
                     .allowsHitTesting(false)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(accent.opacity(0.16 + (emphasis * 0.14)), lineWidth: 1)
+                    .stroke(accent.opacity(0.13 + normalizedEmphasis * 0.13), lineWidth: 1)
                     .allowsHitTesting(false)
             )
-            .shadow(color: .black.opacity(0.05 + (emphasis * 0.03)), radius: 6 + (depth * 7), x: 0, y: 4 + (depth * 3))
+            .shadow(color: .black.opacity(tokens.shadowOpacity + normalizedEmphasis * 0.035), radius: 6 + (depth * 7), x: 0, y: 4 + (depth * 3))
     }
 }
 
@@ -156,9 +205,133 @@ extension View {
     }
 }
 
-struct PayScopeGlassSurfaceStyle: ViewModifier {
+struct PayScopeContentSurfaceStyle<SurfaceShape: InsettableShape>: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
 
+    let accent: Color
+    let shape: SurfaceShape
+    let emphasis: Double
+    let shadowOpacity: Double
+
+    func body(content: Content) -> some View {
+        let normalizedEmphasis = min(1, max(0, emphasis))
+        let tokens = PayScopeThemeTokens.resolve(for: colorScheme)
+
+        content
+            .background(
+                shape
+                    .fill(tokens.surfaceFill)
+            )
+            .overlay(
+                shape
+                    .stroke(tokens.surfaceStroke, lineWidth: 0.75)
+                    .allowsHitTesting(false)
+            )
+            .overlay(
+                shape
+                    .stroke(accent.opacity(0.05 + normalizedEmphasis * 0.1), lineWidth: 0.75)
+                    .allowsHitTesting(false)
+            )
+            .shadow(
+                color: .black.opacity(colorScheme == .light ? shadowOpacity * 0.65 : max(shadowOpacity, tokens.shadowOpacity * 0.65)),
+                radius: 5 + normalizedEmphasis * 7,
+                x: 0,
+                y: 3 + normalizedEmphasis * 4
+            )
+    }
+}
+
+extension View {
+    func payScopeContentSurface<SurfaceShape: InsettableShape>(
+        accent: Color,
+        in shape: SurfaceShape,
+        emphasis: Double = 0.3,
+        shadowOpacity: Double = 0.06
+    ) -> some View {
+        modifier(
+            PayScopeContentSurfaceStyle(
+                accent: accent,
+                shape: shape,
+                emphasis: emphasis,
+                shadowOpacity: shadowOpacity
+            )
+        )
+    }
+
+    func payScopeContentSurface(
+        accent: Color,
+        cornerRadius: CGFloat = 18,
+        emphasis: Double = 0.3,
+        shadowOpacity: Double = 0.06
+    ) -> some View {
+        payScopeContentSurface(
+            accent: accent,
+            in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),
+            emphasis: emphasis,
+            shadowOpacity: shadowOpacity
+        )
+    }
+}
+
+struct PayScopeIconBadgeStyle<IconShape: InsettableShape>: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
+    let accent: Color
+    let shape: IconShape
+    let prominence: Double
+
+    func body(content: Content) -> some View {
+        let normalizedProminence = min(1, max(0, prominence))
+        let tokens = PayScopeThemeTokens.resolve(for: colorScheme)
+
+        content
+            .background(
+                shape
+                    .fill(accent.opacity(tokens.categoryTintOpacity + normalizedProminence * 0.045))
+            )
+            .overlay(
+                shape
+                    .stroke(tokens.surfaceStroke, lineWidth: 0.75)
+                    .allowsHitTesting(false)
+            )
+            .overlay(
+                shape
+                    .stroke(accent.opacity(0.15 + normalizedProminence * 0.11), lineWidth: 0.75)
+                    .allowsHitTesting(false)
+            )
+    }
+}
+
+extension View {
+    func payScopeIconBadge(
+        accent: Color,
+        prominence: Double = 0.5
+    ) -> some View {
+        modifier(
+            PayScopeIconBadgeStyle(
+                accent: accent,
+                shape: Circle(),
+                prominence: prominence
+            )
+        )
+    }
+
+    func payScopeIconBadge<IconShape: InsettableShape>(
+        accent: Color,
+        in shape: IconShape,
+        prominence: Double = 0.5
+    ) -> some View {
+        modifier(
+            PayScopeIconBadgeStyle(
+                accent: accent,
+                shape: shape,
+                prominence: prominence
+            )
+        )
+    }
+}
+
+struct PayScopeGlassSurfaceStyle: ViewModifier {
     let accent: Color
     let cornerRadius: CGFloat
     let tintOpacity: Double
@@ -166,32 +339,13 @@ struct PayScopeGlassSurfaceStyle: ViewModifier {
     let isInteractive: Bool
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        let isLightMode = colorScheme == .light
-
         content
-            .background(
-                shape
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                isLightMode ? Color.white.opacity(0.8) : Color(.secondarySystemBackground).opacity(0.5),
-                                accent.opacity(tintOpacity * (isLightMode ? 1.1 : 1.35)),
-                                isLightMode ? Color.white.opacity(0.64) : Color(.systemBackground).opacity(0.38)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
+            .payScopeContentSurface(
+                accent: accent,
+                cornerRadius: cornerRadius,
+                emphasis: min(0.55, tintOpacity * 4),
+                shadowOpacity: shadowOpacity
             )
-            .glassEffect(
-                .regular
-                    .tint(accent.opacity(tintOpacity))
-                    .interactive(isInteractive),
-                in: shape
-            )
-            .shadow(color: accent.opacity(shadowOpacity), radius: 12, x: 0, y: 6)
-            .shadow(color: .black.opacity(isLightMode ? 0.04 : 0.1), radius: 18, x: 0, y: 10)
     }
 }
 
@@ -215,21 +369,73 @@ extension View {
     }
 }
 
+struct PayScopePureGlassSurfaceStyle<SurfaceShape: InsettableShape>: ViewModifier {
+    let accent: Color
+    let shape: SurfaceShape
+    let tintOpacity: Double
+    let shadowOpacity: Double
+    let isInteractive: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .payScopeContentSurface(
+                accent: accent,
+                in: shape,
+                emphasis: min(0.5, tintOpacity * 4),
+                shadowOpacity: shadowOpacity
+            )
+    }
+}
+
+extension View {
+    func payScopePureGlassSurface<SurfaceShape: InsettableShape>(
+        accent: Color,
+        in shape: SurfaceShape,
+        tintOpacity: Double = 0.06,
+        shadowOpacity: Double = 0.08,
+        isInteractive: Bool = false
+    ) -> some View {
+        modifier(
+            PayScopePureGlassSurfaceStyle(
+                accent: accent,
+                shape: shape,
+                tintOpacity: tintOpacity,
+                shadowOpacity: shadowOpacity,
+                isInteractive: isInteractive
+            )
+        )
+    }
+
+    func payScopePureGlassSurface(
+        accent: Color,
+        cornerRadius: CGFloat = 18,
+        tintOpacity: Double = 0.06,
+        shadowOpacity: Double = 0.08,
+        isInteractive: Bool = false
+    ) -> some View {
+        payScopePureGlassSurface(
+            accent: accent,
+            in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),
+            tintOpacity: tintOpacity,
+            shadowOpacity: shadowOpacity,
+            isInteractive: isInteractive
+        )
+    }
+}
+
 struct PayScopeLiquidGlassStyle: ViewModifier {
     let accent: Color
     let cornerRadius: CGFloat
     let tintOpacity: Double
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-
         content
-            .background(
-                shape
-                    .fill(accent.opacity(tintOpacity))
+            .payScopeContentSurface(
+                accent: accent,
+                cornerRadius: cornerRadius,
+                emphasis: min(0.5, tintOpacity * 4),
+                shadowOpacity: 0.06
             )
-            .glassEffect(.regular.tint(accent.opacity(tintOpacity * 0.85)), in: shape)
-            .shadow(color: accent.opacity(0.08), radius: 10, x: 0, y: 5)
     }
 }
 
@@ -240,8 +446,6 @@ extension View {
 }
 
 struct PayScopeLiquidGlassIconStyle<IconShape: InsettableShape>: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
-
     let accent: Color
     let shape: IconShape
     let tintOpacity: Double
@@ -249,40 +453,12 @@ struct PayScopeLiquidGlassIconStyle<IconShape: InsettableShape>: ViewModifier {
     let isInteractive: Bool
 
     func body(content: Content) -> some View {
-        let isLightMode = colorScheme == .light
-
         content
-            .background(
-                shape
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                isLightMode ? Color.white.opacity(0.58) : Color.white.opacity(0.16),
-                                accent.opacity(tintOpacity),
-                                isLightMode ? Color.white.opacity(0.28) : Color(.systemBackground).opacity(0.22)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
+            .payScopeIconBadge(
+                accent: accent,
+                in: shape,
+                prominence: min(1, tintOpacity * 5)
             )
-            .glassEffect(
-                .regular
-                    .tint(accent.opacity(tintOpacity * 0.9))
-                    .interactive(isInteractive),
-                in: shape
-            )
-            .overlay(
-                shape
-                    .stroke(.white.opacity(isLightMode ? 0.42 : 0.22), lineWidth: 0.8)
-                    .allowsHitTesting(false)
-            )
-            .overlay(
-                shape
-                    .stroke(accent.opacity(tintOpacity * 0.78), lineWidth: 0.8)
-                    .allowsHitTesting(false)
-            )
-            .shadow(color: accent.opacity(shadowOpacity), radius: 8, x: 0, y: 4)
     }
 }
 
@@ -333,13 +509,13 @@ struct PayScopeGlassControlGroup<Content: View>: View {
     }
 
     var body: some View {
-        GlassEffectContainer(spacing: spacing) {
-            content
-        }
+        content
     }
 }
 
 struct PayScopeGlassControlStyle: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
     let accent: Color
     let cornerRadius: CGFloat
     let tintOpacity: Double
@@ -347,17 +523,33 @@ struct PayScopeGlassControlStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let tokens = PayScopeThemeTokens.resolve(for: colorScheme)
+        let activeTint = min(0.14, max(0.06, tintOpacity))
 
         content
             .background(
                 shape
-                    .fill(accent.opacity(tintOpacity * 0.65))
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                tokens.elevatedSurfaceFill,
+                                accent.opacity(activeTint * (colorScheme == .light ? 0.82 : 0.62)),
+                                tokens.surfaceFill
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
             )
-            .glassEffect(
-                .regular
-                    .tint(accent.opacity(tintOpacity))
-                    .interactive(isInteractive),
-                in: shape
+            .overlay(
+                shape
+                    .stroke(tokens.surfaceStroke, lineWidth: 0.75)
+                    .allowsHitTesting(false)
+            )
+            .overlay(
+                shape
+                    .stroke(accent.opacity(activeTint * (isInteractive ? 1.5 : 1.05)), lineWidth: 0.85)
+                    .allowsHitTesting(false)
             )
     }
 }
@@ -392,17 +584,6 @@ struct PayScopeLiquidGlassTapFeedbackStyle<FeedbackShape: InsettableShape>: View
         content
             .contentShape(shape)
             .scaleEffect(isAnimatingTap ? pressedScale : 1)
-            .overlay(
-                shape
-                    .fill(accent.opacity(isAnimatingTap ? tintOpacity : 0))
-                    .blendMode(.screen)
-                    .allowsHitTesting(false)
-            )
-            .overlay(
-                shape
-                    .stroke(.white.opacity(isAnimatingTap ? 0.28 : 0), lineWidth: 1)
-                    .allowsHitTesting(false)
-            )
             .simultaneousGesture(
                 TapGesture()
                     .onEnded {
@@ -430,17 +611,7 @@ struct PayScopeLiquidGlassPressButtonStyle<FeedbackShape: InsettableShape>: Butt
         configuration.label
             .contentShape(shape)
             .scaleEffect(configuration.isPressed ? pressedScale : 1)
-            .overlay(
-                shape
-                    .fill(accent.opacity(configuration.isPressed ? tintOpacity : 0))
-                    .blendMode(.screen)
-                    .allowsHitTesting(false)
-            )
-            .overlay(
-                shape
-                    .stroke(.white.opacity(configuration.isPressed ? 0.32 : 0), lineWidth: 1)
-                    .allowsHitTesting(false)
-            )
+            .opacity(configuration.isPressed ? 0.9 : 1)
             .animation(.smooth(duration: 0.16, extraBounce: 0.12), value: configuration.isPressed)
     }
 }
@@ -505,7 +676,7 @@ struct PayScopeSheetSurface: ViewModifier {
         content
             .scrollContentBackground(.hidden)
             .background(Color.clear)
-            .presentationBackground(.clear)
+            .presentationBackground(Color.clear)
             .presentationCornerRadius(geometry.outerCornerRadius)
     }
 }
@@ -517,7 +688,8 @@ struct PayScopePopoverSurface: ViewModifier {
         let geometry = PayScopeModalGeometry.popover
 
         content
-            .presentationBackground(.clear)
+            .background(Color.clear)
+            .presentationBackground(Color.clear)
             .presentationCornerRadius(geometry.outerCornerRadius)
     }
 }
@@ -533,9 +705,13 @@ extension View {
 }
 
 struct PayScopePrimaryButtonStyle: ButtonStyle {
+    @Environment(\.colorScheme) private var colorScheme
+
     let accent: Color
 
     func makeBody(configuration: Configuration) -> some View {
+        let tokens = PayScopeThemeTokens.resolve(for: colorScheme)
+
         configuration.label
             .font(.system(.subheadline, design: .rounded).weight(.bold))
             .padding(.horizontal, 16)
@@ -555,7 +731,7 @@ struct PayScopePrimaryButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(.white.opacity(0.28), lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 3)
+            .shadow(color: .black.opacity(tokens.shadowOpacity + 0.04), radius: 7, x: 0, y: 4)
             .opacity(configuration.isPressed ? 0.9 : 1)
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
@@ -563,9 +739,13 @@ struct PayScopePrimaryButtonStyle: ButtonStyle {
 }
 
 struct PayScopeSecondaryButtonStyle: ButtonStyle {
+    @Environment(\.colorScheme) private var colorScheme
+
     let accent: Color
 
     func makeBody(configuration: Configuration) -> some View {
+        let tokens = PayScopeThemeTokens.resolve(for: colorScheme)
+
         configuration.label
             .font(.system(.subheadline, design: .rounded).weight(.semibold))
             .padding(.horizontal, 14)
@@ -576,8 +756,8 @@ struct PayScopeSecondaryButtonStyle: ButtonStyle {
                     .fill(
                         LinearGradient(
                             colors: [
-                                accent.opacity(configuration.isPressed ? 0.2 : 0.16),
-                                Color(.systemBackground).opacity(0.86)
+                                accent.opacity(configuration.isPressed ? tokens.categoryTintOpacity + 0.08 : tokens.categoryTintOpacity),
+                                tokens.surfaceFill
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -586,7 +766,7 @@ struct PayScopeSecondaryButtonStyle: ButtonStyle {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(accent.opacity(0.3), lineWidth: 1)
+                    .stroke(accent.opacity(colorScheme == .light ? 0.24 : 0.32), lineWidth: 1)
             )
             .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
     }

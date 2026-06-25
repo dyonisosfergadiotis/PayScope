@@ -12,7 +12,7 @@ struct MonthExportOptions: Equatable {
         includeShiftTimes: Bool = true,
         includeBreaks: Bool = true,
         includePay: Bool = true,
-        includeTips: Bool = true,
+        includeTips: Bool = false,
         includeNotesAndWarnings: Bool = true
     ) {
         self.includeShiftTimes = includeShiftTimes
@@ -44,6 +44,7 @@ fileprivate struct ShiftMonthlyExportReport {
 }
 
 fileprivate struct ShiftMonthlyTipExportRow {
+    let date: Date
     let dateText: String
     let amountText: String
     let amountCents: Int
@@ -58,11 +59,18 @@ fileprivate struct ShiftMonthlyExportRow {
     let breakText: String
     let hoursText: String
     let payText: String
+    let tipAmountText: String
+    let tipAmountCents: Int
     let statusText: String?
     let statusKind: ShiftMonthlyExportStatusKind?
     let valueSeconds: Int
     let valueCents: Int
     let result: ComputationResult
+}
+
+fileprivate enum ShiftPDFTableRow {
+    case shift(ShiftMonthlyExportRow)
+    case tip(ShiftMonthlyTipExportRow)
 }
 
 struct ShiftTextExporter {
@@ -88,19 +96,26 @@ struct ShiftTextExporter {
             ""
         ]
 
-        if report.rows.isEmpty {
-            lines.append("Keine Schichten.")
-        } else {
-            for row in report.rows {
-                lines.append(line(for: row, options: options))
+        let textRows: [(date: Date, order: Int, row: ShiftPDFTableRow)] =
+            report.rows.map { (date: $0.entry.date, order: 0, row: .shift($0)) } +
+            (options.includeTips ? report.tipRows.map { (date: $0.date, order: 1, row: .tip($0)) } : [])
+        let sortedTextRows = textRows.sorted {
+            if !$0.date.isSameLocalDay(as: $1.date, calendar: calendar) {
+                return $0.date < $1.date
             }
+            return $0.order < $1.order
         }
 
-        if options.includeTips && !report.tipRows.isEmpty {
-            lines.append("")
-            lines.append("Trinkgeld")
-            for row in report.tipRows {
-                lines.append("\(row.dateText) | Trinkgeld | \(row.amountText)")
+        if sortedTextRows.isEmpty {
+            lines.append("Keine Schichten.")
+        } else {
+            for item in sortedTextRows {
+                switch item.row {
+                case let .shift(row):
+                    lines.append(line(for: row, options: options))
+                case let .tip(row):
+                    lines.append(line(for: row, options: options))
+                }
             }
         }
 
@@ -131,27 +146,35 @@ struct ShiftTextExporter {
         settings: Settings
     ) -> ShiftMonthlyExportReport {
         let interval = monthInterval(for: month)
-        let monthEntries = entries
+        let exportEntries = entries.filter(\.isRealTrackedDay)
+        let monthEntries = exportEntries
             .filter { isDate($0.date, in: interval) }
             .sorted { $0.date < $1.date }
         let monthTips = tips
             .filter { isDate($0.date, in: interval) }
             .sorted { $0.date < $1.date }
-        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
-        let rows = monthEntries.map { row(for: $0, entriesByDate: entriesByDate, settings: settings) }
-        let tipRows = monthTips.map { tip in
-            ShiftMonthlyTipExportRow(
-                dateText: PayScopeFormatters.day.string(from: tip.date),
-                amountText: PayScopeFormatters.currencyString(cents: tip.amountCents),
-                amountCents: tip.amountCents
+        let entriesByDate = service.makeEntriesByDateLookup(from: exportEntries)
+        let tipSummaries: [String: ShiftMonthlyTipExportRow] = self.tipSummariesByLocalDay(from: monthTips)
+        let entryDayKeys = Set(monthEntries.map { self.localDayKey(for: $0.date) })
+        let rows = monthEntries.map { entry in
+            let tipAmountCents = tipSummaries[self.localDayKey(for: entry.date)]?.amountCents ?? 0
+            return row(
+                for: entry,
+                entriesByDate: entriesByDate,
+                settings: settings,
+                tipAmountCents: tipAmountCents
             )
         }
+        let tipRows = tipSummaries.values
+            .filter { !entryDayKeys.contains(localDayKey(for: $0.date)) }
+            .sorted { $0.date < $1.date }
+        let totalTipCents = tipSummaries.values.reduce(0) { $0 + $1.amountCents }
 
         return ShiftMonthlyExportReport(
             month: month,
             rows: rows,
             tipRows: tipRows,
-            tipCents: tipRows.reduce(0) { $0 + $1.amountCents },
+            tipCents: totalTipCents,
             totalSeconds: rows.reduce(0) { $0 + $1.valueSeconds },
             totalCents: rows.reduce(0) { $0 + $1.valueCents },
             warningCount: rows.filter { $0.statusKind == .warning }.count,
@@ -162,7 +185,8 @@ struct ShiftTextExporter {
     private func row(
         for entry: DayEntry,
         entriesByDate: [Date: DayEntry],
-        settings: Settings
+        settings: Settings,
+        tipAmountCents: Int
     ) -> ShiftMonthlyExportRow {
         let result = service.exportComputation(for: entry, entriesByDate: entriesByDate, settings: settings)
         let status = status(for: result)
@@ -178,6 +202,8 @@ struct ShiftTextExporter {
             breakText: breakText(for: entry),
             hoursText: "\(PayScopeFormatters.hhmmString(seconds: valueSeconds)) h",
             payText: PayScopeFormatters.currencyString(cents: valueCents),
+            tipAmountText: tipAmountCents > 0 ? PayScopeFormatters.currencyString(cents: tipAmountCents) : "",
+            tipAmountCents: tipAmountCents,
             statusText: status.text,
             statusKind: status.kind,
             valueSeconds: valueSeconds,
@@ -207,10 +233,39 @@ struct ShiftTextExporter {
             parts.append("Lohn \(row.payText)")
         }
 
+        if options.includeTips && row.tipAmountCents > 0 {
+            parts.append("Trinkgeld \(row.tipAmountText)")
+        }
+
         if options.includeNotesAndWarnings, let statusText = row.statusText {
             parts.append(statusText)
         }
 
+        return parts.joined(separator: " | ")
+    }
+
+    private func line(for row: ShiftMonthlyTipExportRow, options: MonthExportOptions) -> String {
+        var parts = [
+            row.dateText,
+            "-"
+        ]
+
+        if options.includeShiftTimes {
+            parts.append("Start -")
+            parts.append("Ende -")
+        }
+
+        if options.includeBreaks {
+            parts.append("Pause -")
+        }
+
+        parts.append("Stunden -")
+
+        if options.includePay {
+            parts.append("Lohn -")
+        }
+
+        parts.append("Trinkgeld \(row.amountText)")
         return parts.joined(separator: " | ")
     }
 
@@ -258,6 +313,32 @@ struct ShiftTextExporter {
         let day = date.startOfDayLocal(calendar: calendar)
         return day >= interval.start.startOfDayLocal(calendar: calendar) &&
             day <= interval.end.startOfDayLocal(calendar: calendar)
+    }
+
+    private func tipSummariesByLocalDay(from tips: [TipEntry]) -> [String: ShiftMonthlyTipExportRow] {
+        var totals: [String: ShiftMonthlyTipExportRow] = [:]
+
+        for tip in tips where tip.amountCents > 0 {
+            let day = tip.date.startOfDayLocal(calendar: calendar)
+            let key = localDayKey(for: day)
+            let amountCents = (totals[key]?.amountCents ?? 0) + tip.amountCents
+            totals[key] = ShiftMonthlyTipExportRow(
+                date: day,
+                dateText: PayScopeFormatters.day.string(from: day),
+                amountText: PayScopeFormatters.currencyString(cents: amountCents),
+                amountCents: amountCents
+            )
+        }
+
+        return totals
+    }
+
+    private func localDayKey(for date: Date) -> String {
+        let day = date.startOfDayLocal(calendar: calendar)
+        let year = calendar.component(.year, from: day)
+        let month = calendar.component(.month, from: day)
+        let dayOfMonth = calendar.component(.day, from: day)
+        return String(format: "%04d-%02d-%02d", year, month, dayOfMonth)
     }
 
     private func compact(_ value: String) -> String {
@@ -327,6 +408,7 @@ struct ShiftPDFExporter {
         let breakColumnID = 4
         let hoursColumnID = 5
         let payColumnID = 6
+        let tipColumnID = 7
 
         var baseColumns: [(id: Int, title: String, width: CGFloat)] = [
             (dateColumnID, "Datum", 68),
@@ -346,6 +428,9 @@ struct ShiftPDFExporter {
         baseColumns.append((hoursColumnID, "Stunden", 54))
         if options.includePay {
             baseColumns.append((payColumnID, "Lohn", 68))
+        }
+        if options.includeTips {
+            baseColumns.append((tipColumnID, "Trinkgeld", 68))
         }
 
         let columns: [(id: Int, title: String, width: CGFloat)] = {
@@ -732,6 +817,79 @@ struct ShiftPDFExporter {
                     )
                 }
 
+                if row.tipAmountCents > 0,
+                   let tipFrame = columnFrame(for: tipColumnID, rowY: y, rowHeight: rowHeight) {
+                    drawText(
+                        row.tipAmountText,
+                        in: tipFrame,
+                        font: rowBoldFont,
+                        color: warningColor,
+                        lineBreak: .byTruncatingTail
+                    )
+                }
+
+                y += rowHeight + 5
+            }
+
+            func drawTipRow(_ row: ShiftMonthlyTipExportRow, index: Int) {
+                let rowHeight: CGFloat = 38
+
+                if y + rowHeight > contentBottom {
+                    beginPage(continuation: true)
+                    drawTableHeader()
+                }
+
+                let rowRect = CGRect(x: margin, y: y, width: contentWidth, height: rowHeight)
+                let rowBackground = index.isMultiple(of: 2)
+                    ? cardColor
+                    : UIColor(red: 0.945, green: 0.952, blue: 0.966, alpha: 1)
+                fillRoundedRect(rowRect, color: rowBackground, radius: 6)
+                strokeRoundedRect(rowRect, color: lineColor.withAlphaComponent(0.75), radius: 6, width: 0.5)
+
+                if let dateFrame = columnFrame(for: dateColumnID, rowY: y, rowHeight: rowHeight) {
+                    drawText(
+                        row.dateText,
+                        in: dateFrame,
+                        font: rowFont,
+                        color: inkColor,
+                        lineBreak: .byTruncatingTail
+                    )
+                }
+
+                if let typeFrame = columnFrame(for: typeColumnID, rowY: y, rowHeight: rowHeight) {
+                    drawText("-", in: typeFrame, font: rowFont, color: mutedColor, lineBreak: .byTruncatingTail)
+                }
+
+                if let startFrame = columnFrame(for: startColumnID, rowY: y, rowHeight: rowHeight) {
+                    drawText("-", in: startFrame, font: rowFont, color: mutedColor, lineBreak: .byTruncatingTail)
+                }
+
+                if let endFrame = columnFrame(for: endColumnID, rowY: y, rowHeight: rowHeight) {
+                    drawText("-", in: endFrame, font: rowFont, color: mutedColor, lineBreak: .byTruncatingTail)
+                }
+
+                if let breakFrame = columnFrame(for: breakColumnID, rowY: y, rowHeight: rowHeight) {
+                    drawText("-", in: breakFrame, font: rowFont, color: mutedColor, lineBreak: .byTruncatingTail)
+                }
+
+                if let hoursFrame = columnFrame(for: hoursColumnID, rowY: y, rowHeight: rowHeight) {
+                    drawText("-", in: hoursFrame, font: rowFont, color: mutedColor, lineBreak: .byTruncatingTail)
+                }
+
+                if let payFrame = columnFrame(for: payColumnID, rowY: y, rowHeight: rowHeight) {
+                    drawText("-", in: payFrame, font: rowFont, color: mutedColor, lineBreak: .byTruncatingTail)
+                }
+
+                if let tipFrame = columnFrame(for: tipColumnID, rowY: y, rowHeight: rowHeight) {
+                    drawText(
+                        row.amountText,
+                        in: tipFrame,
+                        font: rowBoldFont,
+                        color: warningColor,
+                        lineBreak: .byTruncatingTail
+                    )
+                }
+
                 y += rowHeight + 5
             }
 
@@ -740,11 +898,26 @@ struct ShiftPDFExporter {
             drawSummaryCards()
             drawTableHeader()
 
-            if report.rows.isEmpty {
+            let tableRows: [(date: Date, order: Int, row: ShiftPDFTableRow)] =
+                report.rows.map { (date: $0.entry.date, order: 0, row: .shift($0)) } +
+                (options.includeTips ? report.tipRows.map { (date: $0.date, order: 1, row: .tip($0)) } : [])
+            let sortedTableRows = tableRows.sorted {
+                if !$0.date.isSameLocalDay(as: $1.date) {
+                    return $0.date < $1.date
+                }
+                return $0.order < $1.order
+            }
+
+            if sortedTableRows.isEmpty {
                 drawEmptyState()
             } else {
-                for (index, row) in report.rows.enumerated() {
-                    drawRow(row, index: index)
+                for (index, item) in sortedTableRows.enumerated() {
+                    switch item.row {
+                    case let .shift(row):
+                        drawRow(row, index: index)
+                    case let .tip(row):
+                        drawTipRow(row, index: index)
+                    }
                 }
             }
         }

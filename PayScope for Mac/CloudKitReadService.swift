@@ -175,6 +175,7 @@ enum CloudKitReadServiceError: LocalizedError {
 actor CloudKitReadService {
     static let shared = CloudKitReadService()
     private static let legacyTimeSegmentRecordType = "timesegment"
+    private static let backgroundSyncRadiusMonths = 3
 
     private struct SegmentPayload {
         let start: Date
@@ -186,7 +187,7 @@ actor CloudKitReadService {
     private let container = CKContainer.default()
     private let privateDatabase = CKContainer.default().privateCloudDatabase
 
-    func fetchSnapshot() async throws -> CloudSnapshot {
+    func fetchSnapshot(in interval: DateInterval? = nil) async throws -> CloudSnapshot {
         let accountStatus = try await container.accountStatus()
         switch accountStatus {
         case .available:
@@ -203,17 +204,34 @@ actor CloudKitReadService {
             throw CloudKitReadServiceError.accountUnavailable
         }
 
-        async let settings = fetchSettingsSingleton()
-        async let dayEntries = fetchDayEntries()
-        async let netConfigs = fetchNetWageConfigs()
-        async let holidays = fetchHolidayDays()
+        let syncInterval = interval ?? Self.defaultSyncInterval()
+        let settings = try? await fetchSettingsSingleton()
+
+        async let dayEntries = fetchDayEntries(in: syncInterval)
+        async let netConfigs = fetchNetWageConfigs(in: syncInterval)
+        async let holidays = fetchHolidayDays(in: syncInterval)
 
         return CloudSnapshot(
-            settings: try? await settings,
+            settings: settings,
             dayEntries: try await dayEntries,
             netWageConfigs: (try? await netConfigs) ?? [],
             holidays: (try? await holidays) ?? []
         )
+    }
+
+    private static func defaultSyncInterval(referenceDate: Date = Date(), calendar: Calendar = .current) -> DateInterval {
+        let currentMonth = referenceDate.startOfMonthLocal(calendar: calendar)
+        let start = calendar.date(
+            byAdding: .month,
+            value: -backgroundSyncRadiusMonths,
+            to: currentMonth
+        ) ?? currentMonth.addingDays(-93, calendar: calendar)
+        let endMonth = calendar.date(
+            byAdding: .month,
+            value: backgroundSyncRadiusMonths + 1,
+            to: currentMonth
+        ) ?? currentMonth.addingDays(124, calendar: calendar)
+        return DateInterval(start: start, end: endMonth)
     }
 
     private func queryRecords(_ query: CKQuery) async throws -> [CKRecord] {
@@ -261,14 +279,42 @@ actor CloudKitReadService {
             || details.contains("record type")
     }
 
-    private func fetchDayEntries() async throws -> [CloudSnapshot.DayEntryPayload] {
-        async let dayRecordsTask: [CKRecord] = queryRecords(
-            CKQuery(recordType: CloudKitReadRecordKeys.DayEntry.type.rawValue, predicate: NSPredicate(value: true))
-        )
-        async let segmentMapTask: [String: [SegmentPayload]] = fetchTimeSegmentsByDayKey()
+    private func isLikelyQueryIndexingError(_ error: Error) -> Bool {
+        guard let ckError = error as? CKError else { return false }
+        switch ckError.code {
+        case .invalidArguments, .serverRejectedRequest, .partialFailure:
+            let diagnostics = "\(ckError.localizedDescription) \(String(describing: ckError.userInfo))".lowercased()
+            return diagnostics.contains("index") || diagnostics.contains("queryable") || diagnostics.contains("sort")
+        default:
+            return false
+        }
+    }
 
-        let records = try await dayRecordsTask
-        let segmentsByDayKey = try await segmentMapTask
+    private func fetchDayEntries(in interval: DateInterval) async throws -> [CloudSnapshot.DayEntryPayload] {
+        let records: [CKRecord]
+        do {
+            records = try await queryRecords(dayEntryQuery(in: interval))
+        } catch {
+            if isMissingRecordTypeError(error, recordType: CloudKitReadRecordKeys.DayEntry.type.rawValue) {
+                return []
+            }
+            guard isLikelyQueryIndexingError(error) else { throw error }
+            let fallback = try await queryRecords(
+                CKQuery(recordType: CloudKitReadRecordKeys.DayEntry.type.rawValue, predicate: NSPredicate(value: true))
+            )
+            records = fallback.filter { record in
+                guard let date = record[CloudKitReadRecordKeys.DayEntry.date.rawValue] as? Date else {
+                    return false
+                }
+                return interval.contains(date)
+            }
+        }
+
+        guard !records.isEmpty else {
+            return []
+        }
+
+        let segmentsByDayKey = try await fetchTimeSegmentsByDayKey(in: interval)
 
         var latestByUTCDayKey: [String: CloudSnapshot.DayEntryPayload] = [:]
 
@@ -358,7 +404,20 @@ actor CloudKitReadService {
         return deduplicateByLocalDayKeepingNewest(Array(latestByUTCDayKey.values))
     }
 
-    private func fetchTimeSegmentsByDayKey() async throws -> [String: [SegmentPayload]] {
+    private func dayEntryQuery(in interval: DateInterval) -> CKQuery {
+        let predicate = NSPredicate(
+            format: "\(CloudKitReadRecordKeys.DayEntry.date.rawValue) >= %@ AND \(CloudKitReadRecordKeys.DayEntry.date.rawValue) <= %@",
+            interval.start as NSDate,
+            interval.end as NSDate
+        )
+        let query = CKQuery(recordType: CloudKitReadRecordKeys.DayEntry.type.rawValue, predicate: predicate)
+        query.sortDescriptors = [
+            NSSortDescriptor(key: CloudKitReadRecordKeys.DayEntry.date.rawValue, ascending: false)
+        ]
+        return query
+    }
+
+    private func fetchTimeSegmentsByDayKey(in interval: DateInterval) async throws -> [String: [SegmentPayload]] {
         let recordTypes = [
             CloudKitReadRecordKeys.TimeSegment.type.rawValue,
             Self.legacyTimeSegmentRecordType
@@ -368,11 +427,23 @@ actor CloudKitReadService {
         var seenRecordTypes: Set<String> = []
 
         for recordType in recordTypes where seenRecordTypes.insert(recordType).inserted {
-            let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
+            let query = timeSegmentQuery(recordType: recordType, in: interval)
             do {
                 records.append(contentsOf: try await queryRecords(query))
             } catch {
                 if isMissingRecordTypeError(error, recordType: recordType) {
+                    continue
+                }
+                if isLikelyQueryIndexingError(error) {
+                    let fallback = try await queryRecords(
+                        CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
+                    )
+                    records.append(contentsOf: fallback.filter { record in
+                        guard let start = record[CloudKitReadRecordKeys.TimeSegment.start.rawValue] as? Date else {
+                            return false
+                        }
+                        return interval.contains(start)
+                    })
                     continue
                 }
                 throw error
@@ -404,6 +475,19 @@ actor CloudKitReadService {
         }
 
         return grouped
+    }
+
+    private func timeSegmentQuery(recordType: String, in interval: DateInterval) -> CKQuery {
+        let predicate = NSPredicate(
+            format: "\(CloudKitReadRecordKeys.TimeSegment.start.rawValue) >= %@ AND \(CloudKitReadRecordKeys.TimeSegment.start.rawValue) <= %@",
+            interval.start as NSDate,
+            interval.end as NSDate
+        )
+        let query = CKQuery(recordType: recordType, predicate: predicate)
+        query.sortDescriptors = [
+            NSSortDescriptor(key: CloudKitReadRecordKeys.TimeSegment.start.rawValue, ascending: false)
+        ]
+        return query
     }
 
     private func dayKey(for date: Date) -> String {
@@ -455,27 +539,73 @@ actor CloudKitReadService {
             return converted
         }
 
-        let query = CKQuery(
-            recordType: CloudKitReadRecordKeys.Settings.type.rawValue,
-            predicate: NSPredicate(value: true)
-        )
-        let records = try await queryRecords(query)
-        let candidates = records.compactMap { record -> (Date, CloudSnapshot.SettingsPayload)? in
-            guard let converted = convertSettings(from: record) else { return nil }
-            let updatedAt = (record[CloudKitReadRecordKeys.Settings.updatedAt.rawValue] as? Date)
-                ?? record.modificationDate
-                ?? Date.distantPast
-            return (updatedAt, converted)
+        let records: [CKRecord]
+        do {
+            let predicate = NSPredicate(format: "\(CloudKitReadRecordKeys.Settings.settingsKey.rawValue) == %@", "singleton")
+            let query = CKQuery(recordType: CloudKitReadRecordKeys.Settings.type.rawValue, predicate: predicate)
+            records = try await queryRecords(query)
+        } catch {
+            if isMissingRecordTypeError(error, recordType: CloudKitReadRecordKeys.Settings.type.rawValue) {
+                return nil
+            }
+            guard isLikelyQueryIndexingError(error) else { throw error }
+            let fallbackQuery = CKQuery(
+                recordType: CloudKitReadRecordKeys.Settings.type.rawValue,
+                predicate: NSPredicate(value: true)
+            )
+            records = try await queryRecords(fallbackQuery).filter { record in
+                if record.recordID.recordName == Self.settingsSingletonRecordID.recordName {
+                    return true
+                }
+                return record[CloudKitReadRecordKeys.Settings.settingsKey.rawValue] as? String == "singleton"
+            }
         }
+
+        let candidates = records.compactMap(settingsCandidate)
         return candidates.max(by: { $0.0 < $1.0 })?.1
     }
 
-    private func fetchHolidayDays() async throws -> [CloudSnapshot.HolidayPayload] {
-        let query = CKQuery(
-            recordType: CloudKitReadRecordKeys.HolidayCalendarDay.type.rawValue,
-            predicate: NSPredicate(value: true)
-        )
-        let records = try await queryRecords(query)
+    private func settingsCandidate(from record: CKRecord) -> (Date, CloudSnapshot.SettingsPayload)? {
+        guard let converted = convertSettings(from: record) else { return nil }
+        let updatedAt = (record[CloudKitReadRecordKeys.Settings.updatedAt.rawValue] as? Date)
+            ?? record.modificationDate
+            ?? Date.distantPast
+        return (updatedAt, converted)
+    }
+
+    private func fetchHolidayDays(in interval: DateInterval) async throws -> [CloudSnapshot.HolidayPayload] {
+        let years = years(in: interval)
+        var records: [CKRecord] = []
+
+        for year in years {
+            let predicate = NSPredicate(
+                format: "\(CloudKitReadRecordKeys.HolidayCalendarDay.sourceYear.rawValue) == %d",
+                year
+            )
+            let query = CKQuery(recordType: CloudKitReadRecordKeys.HolidayCalendarDay.type.rawValue, predicate: predicate)
+            do {
+                records.append(contentsOf: try await queryRecords(query))
+            } catch {
+                if isMissingRecordTypeError(error, recordType: CloudKitReadRecordKeys.HolidayCalendarDay.type.rawValue) {
+                    return []
+                }
+                guard isLikelyQueryIndexingError(error) else { throw error }
+                let fallbackQuery = CKQuery(
+                    recordType: CloudKitReadRecordKeys.HolidayCalendarDay.type.rawValue,
+                    predicate: NSPredicate(value: true)
+                )
+                records = try await queryRecords(fallbackQuery).filter { record in
+                    guard
+                        let sourceYear = (record[CloudKitReadRecordKeys.HolidayCalendarDay.sourceYear.rawValue] as? NSNumber)?.intValue
+                    else {
+                        return false
+                    }
+                    return years.contains(sourceYear)
+                }
+                break
+            }
+        }
+
         return records.compactMap { record in
             guard
                 let date = record[CloudKitReadRecordKeys.HolidayCalendarDay.date.rawValue] as? Date,
@@ -498,6 +628,12 @@ actor CloudKitReadService {
                 sourceYear: sourceYear
             )
         }
+    }
+
+    private func years(in interval: DateInterval, calendar: Calendar = .current) -> Set<Int> {
+        let startYear = calendar.component(.year, from: interval.start)
+        let endYear = calendar.component(.year, from: interval.end)
+        return Set(startYear...endYear)
     }
 
     private func holidayDateFromKey(_ key: String) -> Date? {
@@ -528,12 +664,36 @@ actor CloudKitReadService {
         return utc.date(from: components) ?? date
     }
 
-    private func fetchNetWageConfigs() async throws -> [CloudSnapshot.NetWageConfigPayload] {
-        let query = CKQuery(
-            recordType: CloudKitReadRecordKeys.NetWageMonthConfig.type.rawValue,
-            predicate: NSPredicate(value: true)
+    private func fetchNetWageConfigs(in interval: DateInterval) async throws -> [CloudSnapshot.NetWageConfigPayload] {
+        let startMonth = interval.start.startOfMonthUTC()
+        let endMonth = interval.end.startOfMonthUTC()
+        let predicate = NSPredicate(
+            format: "\(CloudKitReadRecordKeys.NetWageMonthConfig.monthStart.rawValue) >= %@ AND \(CloudKitReadRecordKeys.NetWageMonthConfig.monthStart.rawValue) <= %@",
+            startMonth as NSDate,
+            endMonth as NSDate
         )
-        let records = try await queryRecords(query)
+        let query = CKQuery(recordType: CloudKitReadRecordKeys.NetWageMonthConfig.type.rawValue, predicate: predicate)
+
+        let records: [CKRecord]
+        do {
+            records = try await queryRecords(query)
+        } catch {
+            if isMissingRecordTypeError(error, recordType: CloudKitReadRecordKeys.NetWageMonthConfig.type.rawValue) {
+                return []
+            }
+            guard isLikelyQueryIndexingError(error) else { throw error }
+            let fallbackQuery = CKQuery(
+                recordType: CloudKitReadRecordKeys.NetWageMonthConfig.type.rawValue,
+                predicate: NSPredicate(value: true)
+            )
+            records = try await queryRecords(fallbackQuery).filter { record in
+                guard let monthStart = record[CloudKitReadRecordKeys.NetWageMonthConfig.monthStart.rawValue] as? Date else {
+                    return false
+                }
+                return monthStart >= startMonth && monthStart <= endMonth
+            }
+        }
+
         return records.compactMap { record in
             guard let monthStart = record[CloudKitReadRecordKeys.NetWageMonthConfig.monthStart.rawValue] as? Date else {
                 return nil

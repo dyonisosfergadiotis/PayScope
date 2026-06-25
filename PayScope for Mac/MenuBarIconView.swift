@@ -37,6 +37,7 @@ struct MenuBarIconView: View {
         .padding(.horizontal, 6)
         .fixedSize()
         .onAppear {
+            print("PayScopeMac MenuBarIconView: onAppear")
             now = Date()
             reloadSnapshot()
         }
@@ -44,15 +45,19 @@ struct MenuBarIconView: View {
             now = referenceDate
         }
         .onReceive(snapshotReloadTimer) { _ in
+            print("PayScopeMac MenuBarIconView: periodic cache reload")
             reloadSnapshot()
         }
         .onReceive(NotificationCenter.default.publisher(for: .menuBarSnapshotDidReload)) { _ in
+            print("PayScopeMac MenuBarIconView: received cloud reload notification")
             reloadSnapshot()
         }
     }
 
     private func menuBarIndicator(at referenceDate: Date) -> MenuBarIndicator? {
-        guard let snapshot else { return nil }
+        guard let snapshot else {
+            return nil
+        }
         let calendar = Calendar.current
         let entriesByDate = entriesLookup(from: snapshot.dayEntries, calendar: calendar)
         let resolvedSettings = makeSettings(from: snapshot.settings)
@@ -132,6 +137,12 @@ struct MenuBarIconView: View {
     private func reloadSnapshot() {
         Task {
             let envelope = await LocalCloudSnapshotStore.shared.load()
+            if let envelope {
+                let snapshot = envelope.snapshot
+                print("PayScopeMac MenuBarIconView: cache loaded savedAt=\(envelope.savedAt) settings=\(snapshot.settings != nil) entries=\(snapshot.dayEntries.count) netConfigs=\(snapshot.netWageConfigs.count) holidays=\(snapshot.holidays.count)")
+            } else {
+                print("PayScopeMac MenuBarIconView: cache empty")
+            }
             await MainActor.run {
                 snapshot = envelope?.snapshot
             }

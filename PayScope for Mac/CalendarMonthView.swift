@@ -178,30 +178,37 @@ struct CalendarMonthView: View {
                     ForEach(0..<7, id: \.self) { col in
                         let day = days[row * 7 + col]
                         let dayKey = day.date.localDayKey(calendar: calendar)
+                        let isPreviousMonthPreview = day.date < displayedMonth.startOfMonthLocal(calendar: calendar)
                         let entry = day.isInDisplayedMonth ? entriesByDate[dayKey] : nil
                         let result = dayResults[dayKey]
                         let isHoliday = holidaySet.contains(dayKey)
                         let isSelected = selectedDate?.startOfDayLocal(calendar: calendar).isSameLocalDay(as: day.date.startOfDayLocal(calendar: calendar), calendar: calendar) ?? false
                         let revealProgress = columnRevealProgress(for: col)
 
-                        MonthDayCell(
-                            day: day.date,
-                            isInMonth: day.isInDisplayedMonth,
-                            isToday: calendar.isDateInToday(day.date),
-                            entry: entry,
-                            isHoliday: isHoliday,
-                            isSelected: isSelected,
-                            result: result,
-                            settings: settings,
-                            accentColor: accentColor
-                        )
-                        .onTapGesture {
-                            guard day.isInDisplayedMonth else { return }
-                            let isSameDay = selectedDate?.startOfDayLocal(calendar: calendar).isSameLocalDay(as: day.date.startOfDayLocal(calendar: calendar), calendar: calendar) ?? false
-                            if isSameDay {
-                                selectedDate = calendar.startOfDay(for: Date())
+                        Group {
+                            if day.isInDisplayedMonth || isPreviousMonthPreview {
+                                MonthDayCell(
+                                    day: day.date,
+                                    isInMonth: day.isInDisplayedMonth,
+                                    isToday: calendar.isDateInToday(day.date),
+                                    entry: entry,
+                                    isHoliday: isHoliday,
+                                    isSelected: isSelected,
+                                    result: result,
+                                    settings: settings,
+                                    accentColor: accentColor
+                                )
+                                .onTapGesture {
+                                    guard day.isInDisplayedMonth else { return }
+                                    let isSameDay = selectedDate?.startOfDayLocal(calendar: calendar).isSameLocalDay(as: day.date.startOfDayLocal(calendar: calendar), calendar: calendar) ?? false
+                                    if isSameDay {
+                                        selectedDate = calendar.startOfDay(for: Date())
+                                    } else {
+                                        selectedDate = day.date.startOfDayLocal(calendar: calendar)
+                                    }
+                                }
                             } else {
-                                selectedDate = day.date.startOfDayLocal(calendar: calendar)
+                                Color.clear
                             }
                         }
                         .opacity(0.9 + (0.1 * revealProgress))
