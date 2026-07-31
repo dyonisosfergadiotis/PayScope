@@ -18,15 +18,15 @@ struct PayScope_AW_WidgetsControl: ControlWidget {
             provider: Provider()
         ) { value in
             ControlWidgetToggle(
-                "Start Timer",
+                "Schicht starten",
                 isOn: value.isRunning,
                 action: StartTimerIntent(value.name)
             ) { isRunning in
-                Label(isRunning ? "On" : "Off", systemImage: "timer")
+                Label(isRunning ? "Aktiv" : "Inaktiv", systemImage: "timer")
             }
         }
-        .displayName("Timer")
-        .description("A an example control that runs a timer.")
+        .displayName("Schicht")
+        .description("Startet oder stoppt eine PayScope-Schicht.")
     }
 }
 
@@ -49,19 +49,19 @@ extension PayScope_AW_WidgetsControl {
 }
 
 struct TimerConfiguration: ControlConfigurationIntent {
-    static let title: LocalizedStringResource = "Timer Name Configuration"
+    static let title: LocalizedStringResource = "Schicht-Konfiguration"
 
-    @Parameter(title: "Timer Name", default: "Timer")
+    @Parameter(title: "Schichtname", default: "Schicht")
     var timerName: String
 }
 
 struct StartTimerIntent: SetValueIntent {
-    static let title: LocalizedStringResource = "Start a timer"
+    static let title: LocalizedStringResource = "Schicht starten"
 
-    @Parameter(title: "Timer Name")
+    @Parameter(title: "Schichtname")
     var name: String
 
-    @Parameter(title: "Timer is running")
+    @Parameter(title: "Schicht läuft")
     var value: Bool
 
     init() {}

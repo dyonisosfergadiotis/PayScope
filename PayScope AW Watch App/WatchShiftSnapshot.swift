@@ -178,6 +178,8 @@ struct WatchShiftDay: Codable, Equatable, Identifiable {
 enum WatchColorPalette {
     static func color(for rawValue: String) -> Color {
         switch rawValue {
+        case "monochrome":
+            return .primary
         case "blue":
             return .blue
         case "green":
@@ -230,6 +232,11 @@ enum WatchShiftSnapshotCache {
             return snapshot
         }
 
+        if let data = try? Data(contentsOf: appGroupFileURL),
+           let snapshot = try? JSONDecoder().decode(WatchShiftSnapshot.self, from: data) {
+            return snapshot
+        }
+
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         return try? JSONDecoder().decode(WatchShiftSnapshot.self, from: data)
     }
@@ -245,6 +252,24 @@ enum WatchShiftSnapshotCache {
             withIntermediateDirectories: true
         )
         try? data.write(to: fileURL, options: [.atomic])
+
+        if let appGroupDirectoryURL {
+            try? FileManager.default.createDirectory(
+                at: appGroupDirectoryURL,
+                withIntermediateDirectories: true
+            )
+            try? data.write(to: appGroupFileURL, options: [.atomic])
+        }
+    }
+
+    private static var appGroupDirectoryURL: URL? {
+        FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)?
+            .appendingPathComponent("PayScope", isDirectory: true)
+    }
+
+    private static var appGroupFileURL: URL {
+        appGroupDirectoryURL?.appendingPathComponent(fileName) ?? fileURL
     }
 
     private static var directoryURL: URL {

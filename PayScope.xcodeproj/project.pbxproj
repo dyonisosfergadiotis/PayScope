@@ -15,28 +15,14 @@
 		E5ABAEA42F4DAA0100031FB6 /* CloudKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5ABAEA32F4DAA0100031FB6 /* CloudKit.framework */; };
 		E5ABAFD22F4F32DB00031FB6 /* CloudKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5ABAEA32F4DAA0100031FB6 /* CloudKit.framework */; };
 		E5AC7E4D2F59885600DFE5DD /* CloudKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5AC7E4B2F59885300DFE5DD /* CloudKit.framework */; };
+		E5D368D82FF068ED00565672 /* Icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5D368D72FF068ED00565672 /* Icon.icon */; };
+		E5D368DA2FF068F300565672 /* Icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5D368D92FF068F300565672 /* Icon.icon */; };
 		E5EC73512FEC02D800E600E4 /* PayScope AW Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = E5EC73472FEC02D700E600E4 /* PayScope AW Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		E5EC736D2FEC032600E600E4 /* Blau.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC73652FEC032600E600E4 /* Blau.icon */; };
-		E5EC736E2FEC032600E600E4 /* gruen.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC73662FEC032600E600E4 /* gruen.icon */; };
-		E5EC736F2FEC032600E600E4 /* pink.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC736A2FEC032600E600E4 /* pink.icon */; };
-		E5EC73702FEC032600E600E4 /* rot.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC736B2FEC032600E600E4 /* rot.icon */; };
-		E5EC73712FEC032600E600E4 /* orange.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC73692FEC032600E600E4 /* orange.icon */; };
-		E5EC73722FEC032600E600E4 /* indigo.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC73672FEC032600E600E4 /* indigo.icon */; };
-		E5EC73732FEC032600E600E4 /* lila.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC73682FEC032600E600E4 /* lila.icon */; };
-		E5EC73742FEC032600E600E4 /* turkis.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC736C2FEC032600E600E4 /* turkis.icon */; };
 		E5EC73752FEC100000E600E4 /* WatchShiftSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC73772FEC100000E600E4 /* WatchShiftSnapshot.swift */; };
 		E5EC73762FEC100000E600E4 /* WatchShiftViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC73782FEC100000E600E4 /* WatchShiftViewModel.swift */; };
 		E5EC73792FEC100000E600E4 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC73812FEC100000E600E4 /* ContentView.swift */; };
 		E5EC737A2FEC100000E600E4 /* PayScope_AWApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC73822FEC100000E600E4 /* PayScope_AWApp.swift */; };
 		E5EC737B2FEC100000E600E4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E5EC73832FEC100000E600E4 /* Assets.xcassets */; };
-		E5EC737C2FEC100000E600E4 /* Blau.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC73842FEC100000E600E4 /* Blau.icon */; };
-		E5EC737D2FEC100000E600E4 /* gruen.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC73852FEC100000E600E4 /* gruen.icon */; };
-		E5EC737E2FEC100000E600E4 /* indigo.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC73862FEC100000E600E4 /* indigo.icon */; };
-		E5EC737F2FEC100000E600E4 /* lila.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC73872FEC100000E600E4 /* lila.icon */; };
-		E5EC73802FEC100000E600E4 /* orange.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC73882FEC100000E600E4 /* orange.icon */; };
-		E5EC73892FEC100000E600E4 /* pink.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC738F2FEC100000E600E4 /* pink.icon */; };
-		E5EC738A2FEC100000E600E4 /* rot.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC73902FEC100000E600E4 /* rot.icon */; };
-		E5EC738B2FEC100000E600E4 /* turkis.icon in Resources */ = {isa = PBXBuildFile; fileRef = E5EC73912FEC100000E600E4 /* turkis.icon */; };
 		E5EC771C2FED466100E600E4 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5ABAA5C2F458AC000031FB6 /* WidgetKit.framework */; };
 		E5EC771D2FED466100E600E4 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E5ABAA5E2F458AC000031FB6 /* SwiftUI.framework */; };
 		E5EC772C2FED466300E600E4 /* PayScope AW WidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = E5EC771B2FED466100E600E4 /* PayScope AW WidgetsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -135,28 +121,14 @@
 		E5AC7DD12F5984D800DFE5DD /* PayScope For Mac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "PayScope For Mac.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E5AC7E4B2F59885300DFE5DD /* CloudKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CloudKit.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/Library/Frameworks/CloudKit.framework; sourceTree = DEVELOPER_DIR; };
 		E5CC01072FAAAAAB00000007 /* PayScopeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PayScopeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E5D368D72FF068ED00565672 /* Icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = Icon.icon; sourceTree = "<group>"; };
+		E5D368D92FF068F300565672 /* Icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = Icon.icon; sourceTree = "<group>"; };
 		E5EC73472FEC02D700E600E4 /* PayScope AW Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "PayScope AW Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		E5EC73652FEC032600E600E4 /* Blau.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = Blau.icon; sourceTree = "<group>"; };
-		E5EC73662FEC032600E600E4 /* gruen.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = gruen.icon; sourceTree = "<group>"; };
-		E5EC73672FEC032600E600E4 /* indigo.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = indigo.icon; sourceTree = "<group>"; };
-		E5EC73682FEC032600E600E4 /* lila.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = lila.icon; sourceTree = "<group>"; };
-		E5EC73692FEC032600E600E4 /* orange.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = orange.icon; sourceTree = "<group>"; };
-		E5EC736A2FEC032600E600E4 /* pink.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = pink.icon; sourceTree = "<group>"; };
-		E5EC736B2FEC032600E600E4 /* rot.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = rot.icon; sourceTree = "<group>"; };
-		E5EC736C2FEC032600E600E4 /* turkis.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = turkis.icon; sourceTree = "<group>"; };
 		E5EC73772FEC100000E600E4 /* WatchShiftSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchShiftSnapshot.swift; sourceTree = "<group>"; };
 		E5EC73782FEC100000E600E4 /* WatchShiftViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchShiftViewModel.swift; sourceTree = "<group>"; };
 		E5EC73812FEC100000E600E4 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		E5EC73822FEC100000E600E4 /* PayScope_AWApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PayScope_AWApp.swift; sourceTree = "<group>"; };
 		E5EC73832FEC100000E600E4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		E5EC73842FEC100000E600E4 /* Blau.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = Blau.icon; sourceTree = "<group>"; };
-		E5EC73852FEC100000E600E4 /* gruen.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = gruen.icon; sourceTree = "<group>"; };
-		E5EC73862FEC100000E600E4 /* indigo.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = indigo.icon; sourceTree = "<group>"; };
-		E5EC73872FEC100000E600E4 /* lila.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = lila.icon; sourceTree = "<group>"; };
-		E5EC73882FEC100000E600E4 /* orange.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = orange.icon; sourceTree = "<group>"; };
-		E5EC738F2FEC100000E600E4 /* pink.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = pink.icon; sourceTree = "<group>"; };
-		E5EC73902FEC100000E600E4 /* rot.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = rot.icon; sourceTree = "<group>"; };
-		E5EC73912FEC100000E600E4 /* turkis.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = turkis.icon; sourceTree = "<group>"; };
 		E5EC771B2FED466100E600E4 /* PayScope AW WidgetsExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "PayScope AW WidgetsExtension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E5EC77362FED46D200E600E4 /* PayScope Atv.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "PayScope Atv.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E5F142B62FCC646C00D7043B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -343,15 +315,8 @@
 		E5EC73482FEC02D700E600E4 /* PayScope AW Watch App */ = {
 			isa = PBXGroup;
 			children = (
+				E5D368D72FF068ED00565672 /* Icon.icon */,
 				E5EC73832FEC100000E600E4 /* Assets.xcassets */,
-				E5EC73842FEC100000E600E4 /* Blau.icon */,
-				E5EC73852FEC100000E600E4 /* gruen.icon */,
-				E5EC73862FEC100000E600E4 /* indigo.icon */,
-				E5EC73872FEC100000E600E4 /* lila.icon */,
-				E5EC73882FEC100000E600E4 /* orange.icon */,
-				E5EC738F2FEC100000E600E4 /* pink.icon */,
-				E5EC73902FEC100000E600E4 /* rot.icon */,
-				E5EC73912FEC100000E600E4 /* turkis.icon */,
 				E5EC73812FEC100000E600E4 /* ContentView.swift */,
 				E5EC73822FEC100000E600E4 /* PayScope_AWApp.swift */,
 				E5EC73772FEC100000E600E4 /* WatchShiftSnapshot.swift */,
@@ -363,14 +328,7 @@
 		E5F142C42FCC646C00D7043B /* PayScope for Mac */ = {
 			isa = PBXGroup;
 			children = (
-				E5EC73652FEC032600E600E4 /* Blau.icon */,
-				E5EC73662FEC032600E600E4 /* gruen.icon */,
-				E5EC73672FEC032600E600E4 /* indigo.icon */,
-				E5EC73682FEC032600E600E4 /* lila.icon */,
-				E5EC73692FEC032600E600E4 /* orange.icon */,
-				E5EC736A2FEC032600E600E4 /* pink.icon */,
-				E5EC736B2FEC032600E600E4 /* rot.icon */,
-				E5EC736C2FEC032600E600E4 /* turkis.icon */,
+				E5D368D92FF068F300565672 /* Icon.icon */,
 				E5F142B62FCC646C00D7043B /* Assets.xcassets */,
 				E5F142B72FCC646C00D7043B /* CalendarMonthView.swift */,
 				E5F142B82FCC646C00D7043B /* CalendarTabView.swift */,
@@ -629,14 +587,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E5F142C62FCC646C00D7043B /* Assets.xcassets in Resources */,
-				E5EC736D2FEC032600E600E4 /* Blau.icon in Resources */,
-				E5EC736E2FEC032600E600E4 /* gruen.icon in Resources */,
-				E5EC736F2FEC032600E600E4 /* pink.icon in Resources */,
-				E5EC73702FEC032600E600E4 /* rot.icon in Resources */,
-				E5EC73712FEC032600E600E4 /* orange.icon in Resources */,
-				E5EC73722FEC032600E600E4 /* indigo.icon in Resources */,
-				E5EC73732FEC032600E600E4 /* lila.icon in Resources */,
-				E5EC73742FEC032600E600E4 /* turkis.icon in Resources */,
+				E5D368DA2FF068F300565672 /* Icon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -652,14 +603,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E5EC737B2FEC100000E600E4 /* Assets.xcassets in Resources */,
-				E5EC737C2FEC100000E600E4 /* Blau.icon in Resources */,
-				E5EC737D2FEC100000E600E4 /* gruen.icon in Resources */,
-				E5EC737E2FEC100000E600E4 /* indigo.icon in Resources */,
-				E5EC737F2FEC100000E600E4 /* lila.icon in Resources */,
-				E5EC73802FEC100000E600E4 /* orange.icon in Resources */,
-				E5EC73892FEC100000E600E4 /* pink.icon in Resources */,
-				E5EC738A2FEC100000E600E4 /* rot.icon in Resources */,
-				E5EC738B2FEC100000E600E4 /* turkis.icon in Resources */,
+				E5D368D82FF068ED00565672 /* Icon.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -899,8 +843,7 @@
 		E5ABA9CE2F44731200031FB6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "rot orange pink lila gruen turkis indigo";
-				ASSETCATALOG_COMPILER_APPICON_NAME = Blau;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Icon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = PayScope/PayScope.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -919,6 +862,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -939,8 +883,7 @@
 		E5ABA9CF2F44731200031FB6 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "rot orange pink lila gruen turkis indigo";
-				ASSETCATALOG_COMPILER_APPICON_NAME = Blau;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Icon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = PayScope/PayScope.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -959,6 +902,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -1041,7 +985,7 @@
 		E5AC7DDC2F5984D900DFE5DD /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = Blau;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Icon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = "PayScope for Mac/PayScope for Mac.entitlements";
@@ -1081,7 +1025,7 @@
 		E5AC7DDD2F5984D900DFE5DD /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = Blau;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Icon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = "PayScope for Mac/PayScope for Mac.entitlements";
@@ -1175,8 +1119,7 @@
 		E5EC73522FEC02D800E600E4 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "rot orange pink lila gruen turkis indigo";
-				ASSETCATALOG_COMPILER_APPICON_NAME = Blau;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Icon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "PayScope AW Watch App/PayScope AW Watch App.entitlements";
 				CODE_SIGN_STYLE = Automatic;
@@ -1210,8 +1153,7 @@
 		E5EC73532FEC02D800E600E4 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "rot orange pink lila gruen turkis indigo";
-				ASSETCATALOG_COMPILER_APPICON_NAME = Blau;
+				ASSETCATALOG_COMPILER_APPICON_NAME = Icon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "PayScope AW Watch App/PayScope AW Watch App.entitlements";
 				CODE_SIGN_STYLE = Automatic;
@@ -1253,7 +1195,7 @@
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "PayScope AW Widgets/Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "PayScope AW Widgets";
+				INFOPLIST_KEY_CFBundleDisplayName = "PayScope Schichten";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1287,7 +1229,7 @@
 				DEVELOPMENT_TEAM = 8W4U9DBYVS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "PayScope AW Widgets/Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "PayScope AW Widgets";
+				INFOPLIST_KEY_CFBundleDisplayName = "PayScope Schichten";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1333,7 +1275,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "DyonisosFergadiotis.PayScope.watchkitapp.PayScope-Atv";
+				PRODUCT_BUNDLE_IDENTIFIER = DyonisosFergadiotis.PayScope;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = appletvos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -1370,7 +1312,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "DyonisosFergadiotis.PayScope.watchkitapp.PayScope-Atv";
+				PRODUCT_BUNDLE_IDENTIFIER = DyonisosFergadiotis.PayScope;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = appletvos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

@@ -114,6 +114,7 @@ enum VacationCreditingMode: String, Codable, CaseIterable, Identifiable {
 
 enum ThemeAccent: String, Codable, CaseIterable, Identifiable {
     case system
+    case monochrome
     case blue
     case green
     case purple
@@ -128,6 +129,7 @@ enum ThemeAccent: String, Codable, CaseIterable, Identifiable {
     var color: Color {
         switch self {
         case .system: return .accentColor
+        case .monochrome: return .primary
         case .blue: return .blue
         case .green: return .green
         case .purple: return .purple
@@ -142,6 +144,7 @@ enum ThemeAccent: String, Codable, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .system: return "System"
+        case .monochrome: return "Schwarz/Weiß"
         case .blue: return "Blau"
         case .green: return "Grün"
         case .purple: return "Lila"

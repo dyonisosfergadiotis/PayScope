@@ -17,6 +17,8 @@ struct PayScope_WidgetsBundle: WidgetBundle {
         PayScopeMarkTodaySickControl()
         PayScope_WidgetsControl()
         PayScope_CurrentShiftCardWidget()
+        PayScope_NextShiftWidget()
+        PayScope_TodayPayWidget()
         PayScope_WidgetsLiveActivity()
         PayScope_WidgetsRectangularLockScreen()
         PayScope_WidgetsInlineLockScreen()

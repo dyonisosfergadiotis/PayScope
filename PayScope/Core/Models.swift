@@ -123,6 +123,7 @@ enum VacationCreditingMode: String, Codable, CaseIterable, Identifiable, Sendabl
 }
 
 enum ThemeAccent: String, Codable, CaseIterable, Identifiable, Sendable {
+    case monochrome
     case blue
     case green
     case purple
@@ -136,6 +137,7 @@ enum ThemeAccent: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var color: Color {
         switch self {
+        case .monochrome: return .primary
         case .blue: return .blue
         case .green: return .green
         case .purple: return .purple
@@ -149,6 +151,7 @@ enum ThemeAccent: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
+        case .monochrome: return "Schwarz/Weiß"
         case .blue: return "Blau"
         case .green: return "Grün"
         case .purple: return "Lila"
@@ -175,6 +178,7 @@ enum ThemeAccent: String, Codable, CaseIterable, Identifiable, Sendable {
 }
 
 enum ShiftCategoryColor: String, Codable, CaseIterable, Identifiable, Sendable {
+    case monochrome
     case mint
     case sage
     case sky
@@ -188,8 +192,22 @@ enum ShiftCategoryColor: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    static let allCases: [ShiftCategoryColor] = [
+        .monochrome,
+        .sage,
+        .sky,
+        .aqua,
+        .lavender,
+        .lilac,
+        .blush,
+        .peach,
+        .butter,
+        .coral
+    ]
+
     var color: Color {
         switch self {
+        case .monochrome: return .primary
         case .mint: return Color(red: 0.22, green: 0.78, blue: 0.56)
         case .sage: return Color(red: 0.46, green: 0.72, blue: 0.30)
         case .sky: return Color(red: 0.24, green: 0.58, blue: 0.92)
@@ -205,6 +223,7 @@ enum ShiftCategoryColor: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
+        case .monochrome: return "Schwarz/Weiß"
         case .mint: return "Mint"
         case .sage: return "Salbei"
         case .sky: return "Himmel"
@@ -405,6 +424,7 @@ final class Settings {
     var netBonusesCSV: String?
     var showTipsButton: Bool?
     var showTipsButtonAmount: Bool?
+    var workCategoryColor: ShiftCategoryColor?
     var manualCategoryColor: ShiftCategoryColor?
     var vacationCategoryColor: ShiftCategoryColor?
     var holidayCategoryColor: ShiftCategoryColor?
@@ -459,8 +479,9 @@ final class Settings {
         netBonusesCSV: String? = nil,
         showTipsButton: Bool = true,
         showTipsButtonAmount: Bool = true,
+        workCategoryColor: ShiftCategoryColor? = nil,
         manualCategoryColor: ShiftCategoryColor? = .lavender,
-        vacationCategoryColor: ShiftCategoryColor? = .mint,
+        vacationCategoryColor: ShiftCategoryColor? = .monochrome,
         holidayCategoryColor: ShiftCategoryColor? = .peach,
         sickCategoryColor: ShiftCategoryColor? = .blush,
         shiftShortcut1: String = "",
@@ -511,6 +532,7 @@ final class Settings {
         self.netBonusesCSV = netBonusesCSV
         self.showTipsButton = showTipsButton
         self.showTipsButtonAmount = showTipsButtonAmount
+        self.workCategoryColor = workCategoryColor
         self.manualCategoryColor = manualCategoryColor
         self.vacationCategoryColor = vacationCategoryColor
         self.holidayCategoryColor = holidayCategoryColor
@@ -565,6 +587,7 @@ extension Settings {
         netBonusesCSV = source.netBonusesCSV
         showTipsButton = source.showTipsButton
         showTipsButtonAmount = source.showTipsButtonAmount
+        workCategoryColor = source.workCategoryColor
         manualCategoryColor = source.manualCategoryColor
         vacationCategoryColor = source.vacationCategoryColor
         holidayCategoryColor = source.holidayCategoryColor
@@ -665,8 +688,12 @@ extension Settings {
         manualCategoryColor ?? .lavender
     }
 
+    var effectiveWorkCategoryColor: ShiftCategoryColor? {
+        workCategoryColor
+    }
+
     var effectiveVacationCategoryColor: ShiftCategoryColor {
-        vacationCategoryColor ?? .mint
+        vacationCategoryColor ?? .monochrome
     }
 
     var effectiveHolidayCategoryColor: ShiftCategoryColor {
@@ -680,7 +707,7 @@ extension Settings {
     func categoryColor(for type: DayType) -> Color {
         switch type {
         case .work:
-            return themeAccent.color
+            return effectiveWorkCategoryColor?.color ?? themeAccent.color
         case .manual:
             return effectiveManualCategoryColor.color
         case .vacation:
@@ -695,7 +722,7 @@ extension Settings {
     func categoryColorSelection(for type: DayType) -> ShiftCategoryColor? {
         switch type {
         case .work:
-            return nil
+            return effectiveWorkCategoryColor
         case .manual:
             return effectiveManualCategoryColor
         case .vacation:
@@ -710,7 +737,7 @@ extension Settings {
     func setCategoryColor(_ color: ShiftCategoryColor, for type: DayType) {
         switch type {
         case .work:
-            break
+            workCategoryColor = color
         case .manual:
             manualCategoryColor = color
         case .vacation:

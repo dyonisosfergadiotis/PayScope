@@ -4,6 +4,11 @@ import SwiftData
 import UIKit
 
 struct CalendarTabView: View {
+    private enum CalendarViewMode {
+        case month
+        case shiftList
+    }
+
     private enum DataLoadMode: Equatable {
         case localOnly
         case fullSync
@@ -117,12 +122,15 @@ struct CalendarTabView: View {
     @State private var derivedSnapshot = CalendarDerivedSnapshot.empty
     @State private var derivedSnapshotTask: Task<Void, Never>?
     @State private var pendingDerivedSnapshotKey = ""
+    @State private var calendarViewMode: CalendarViewMode = .month
 
     private let service = CalculationService()
     private let holidayImporter = HolidayImportService()
     private let previewRefreshTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     private let calendarContentHorizontalPadding: CGFloat = 16
     private let calendarCardSpacing: CGFloat = 9
+    private let shiftListDayLabelWidth: CGFloat = 52
+    private let shiftListVisibleHourCount: CGFloat = 8
     private let calendarColorAnimation = Animation.smooth(duration: 0.14, extraBounce: 0)
     private let monthChangeSettlingDelayNanoseconds: UInt64 = 180_000_000
     private static let monthYearFormatter: DateFormatter = {
@@ -137,12 +145,20 @@ struct CalendarTabView: View {
         formatter.maximumFractionDigits = 0
         return formatter
     }()
+    private static let compactWeekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "EEE"
+        return formatter
+    }()
     private let unsyncedIndicatorDebounce = RunLoop.SchedulerTimeType.Stride.milliseconds(900)
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
-                weekdayHeader
+                if calendarViewMode == .month {
+                    weekdayHeader
+                }
                 calendarSurface
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
@@ -340,11 +356,19 @@ struct CalendarTabView: View {
         }
 
         ToolbarItem(placement: .topBarLeading) {
-            calendarDisplayModeMenu
+            
+                calendarDisplayModeMenu
+               
+        }
+        
+        ToolbarSpacer(placement: .topBarLeading)
+        
+        ToolbarItem(placement: .topBarLeading)
+        {
+            calendarViewModeButton
         }
 
         if settings.effectiveShowTipsButton {
-            ToolbarSpacer(placement: .topBarTrailing)
             ToolbarItem(placement: .topBarTrailing) {
                 tipsToolbarButton
             }
@@ -1131,6 +1155,23 @@ private func monthMoneySummaryPopover(summary: TotalsSummary) -> some View {
         )
     }
 
+    private var calendarViewModeButton: some View {
+        Button {
+            withAnimation(calendarColorAnimation) {
+                selectedPopoverDay = nil
+                calendarViewMode = calendarViewMode == .month ? .shiftList : .month
+            }
+        } label: {
+            Image(systemName: calendarViewMode == .month ? "chart.bar.yaxis" : "calendar")
+                .font(.headline.weight(.semibold))
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(calendarViewMode == .month ? "Listenansicht anzeigen" : "Monatsansicht anzeigen")
+        .accessibilityValue(calendarViewMode == .month ? "Monatsansicht aktiv" : "Listenansicht aktiv")
+    }
+
     private func updateCalendarDisplayMode(_ mode: CalendarCellDisplayMode) {
         guard settings.calendarCellDisplayMode != mode else { return }
         settings.calendarCellDisplayMode = mode
@@ -1501,23 +1542,352 @@ private func monthMoneySummaryPopover(summary: TotalsSummary) -> some View {
 
     private var calendarSurface: some View {
         ZStack {
-            calendarGrid
-                .transaction { transaction in
-                    if suppressCalendarCellAnimations {
-                        transaction.animation = nil
-                        transaction.disablesAnimations = true
+            switch calendarViewMode {
+            case .month:
+                calendarGrid
+                    .transaction { transaction in
+                        if suppressCalendarCellAnimations {
+                            transaction.animation = nil
+                            transaction.disablesAnimations = true
+                        }
+                    }
+            case .shiftList:
+                shiftBarListView
+                    .transition(.opacity)
+            }
+        }
+        .padding(.top, 2)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 52)
+                .onEnded(handleMonthSwipe)
+        )
+    }
+
+    private var shiftBarListView: some View {
+        let days = displayedMonthDays()
+        let entriesByDate = service.makeEntriesByDateLookup(from: entries)
+        let dayResultsByDate = derivedSnapshot.dayResultsByDate
+        let tipCentsByDate = derivedSnapshot.tipCentsByDate
+        let bounds = shiftListTimelineBounds()
+        let rowSpacing = calendarCardSpacing
+
+        return GeometryReader { geo in
+            let rowHeight = max(54, (max(0, geo.size.height - rowSpacing * 6) / 7))
+            let timelineViewportWidth = max(1, geo.size.width - shiftListDayLabelWidth - 8)
+            let contentWidth = shiftListTimelineContentWidth(
+                viewportWidth: timelineViewportWidth,
+                bounds: bounds
+            )
+
+            ScrollView(.vertical, showsIndicators: true) {
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(spacing: rowSpacing) {
+                        ForEach(days, id: \.timeIntervalSinceReferenceDate) { day in
+                            shiftListDayLabel(day)
+                                .frame(width: shiftListDayLabelWidth, height: rowHeight)
+                        }
+                    }
+
+                    ScrollView(.horizontal, showsIndicators: true) {
+                        VStack(spacing: rowSpacing) {
+                            ForEach(Array(days.enumerated()), id: \.offset) { index, day in
+                                let dayDate = day.startOfDayLocal()
+                                let entry = entriesByDate[dayDate].flatMap { isVisibleInCalendarCell($0) ? $0 : nil }
+                                let visibleTipCents = settings.effectiveShowTipsButton ? tipCentsByDate[dayDate] ?? 0 : 0
+                                let arrowEdge: Edge = index < days.count / 2 ? .top : .bottom
+
+                                shiftListTimelineRow(
+                                    dayDate: dayDate,
+                                    entry: entry,
+                                    result: dayResultsByDate[dayDate],
+                                    tipCents: visibleTipCents,
+                                    bounds: bounds,
+                                    width: contentWidth,
+                                    height: rowHeight,
+                                    popoverArrowEdge: arrowEdge
+                                )
+                            }
+                        }
+                        .frame(width: contentWidth, alignment: .leading)
                     }
                 }
+                .padding(.bottom, 2)
+            }
         }
-            .padding(.top, 2)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 52)
-                    .onEnded(handleMonthSwipe)
+    }
+
+    private func shiftListDayLabel(_ date: Date) -> some View {
+        let calendar = Calendar.current
+        let dayNumber = calendar.component(.day, from: date)
+        let weekday = Self.compactWeekdayFormatter.string(from: date)
+        let isToday = calendar.isDateInToday(date)
+        let isWeekend = calendar.isDateInWeekend(date)
+
+        return VStack(spacing: 3) {
+            Text("\(dayNumber)")
+                .font(.system(size: 21, weight: .black, design: .rounded))
+                .foregroundStyle(isToday ? settings.themeAccent.color : .primary)
+                .monospacedDigit()
+
+            Text(weekday)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(isWeekend ? Color.secondary.opacity(0.78) : Color.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .payScopeGlassControl(
+            accent: isToday ? settings.themeAccent.color : Color.secondary,
+            cornerRadius: 14,
+            tintOpacity: isToday ? 0.12 : 0.06,
+            isInteractive: false
+        )
+    }
+
+    private func shiftListTimelineRow(
+        dayDate: Date,
+        entry: DayEntry?,
+        result: ComputationResult?,
+        tipCents: Int,
+        bounds: ClosedRange<Int>,
+        width: CGFloat,
+        height: CGFloat,
+        popoverArrowEdge: Edge
+    ) -> some View {
+        let accent = entry.map { categoryTintColor(for: $0.type, isHoliday: $0.type == .holiday) ?? settings.themeAccent.color } ?? settings.themeAccent.color
+        let rowShape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
+        return ZStack(alignment: .leading) {
+            rowShape
+                .fill(Color.primary.opacity(colorScheme == .light ? 0.035 : 0.065))
+                .overlay(
+                    rowShape
+                        .stroke(Color.primary.opacity(colorScheme == .light ? 0.065 : 0.12), lineWidth: 0.7)
+                )
+
+            shiftListTimelineGrid(bounds: bounds, width: width, height: height)
+
+            if let entry,
+               let range = shiftListRange(for: entry, on: dayDate),
+               let barFrame = shiftListBarFrame(for: range, bounds: bounds, width: width) {
+                shiftListShiftBar(
+                    dayDate: dayDate,
+                    entry: entry,
+                    result: result,
+                    tipCents: tipCents,
+                    range: range,
+                    frame: barFrame,
+                    accent: accent,
+                    height: height,
+                    popoverArrowEdge: popoverArrowEdge
+                )
+            }
+        }
+        .frame(width: width, height: height)
+    }
+
+    private func shiftListTimelineGrid(
+        bounds: ClosedRange<Int>,
+        width: CGFloat,
+        height: CGFloat
+    ) -> some View {
+        ZStack(alignment: .leading) {
+            ForEach(shiftListTimelineTicks(bounds: bounds), id: \.self) { tick in
+                Path { path in
+                    let x = shiftListX(for: tick, bounds: bounds, width: width)
+                    path.move(to: CGPoint(x: x, y: 6))
+                    path.addLine(to: CGPoint(x: x, y: max(6, height - 6)))
+                }
+                .stroke(Color.primary.opacity(0.09), style: StrokeStyle(lineWidth: 1, dash: [2, 4]))
+            }
+        }
+    }
+
+    private func shiftListShiftBar(
+        dayDate: Date,
+        entry: DayEntry,
+        result: ComputationResult?,
+        tipCents: Int,
+        range: ShiftTimeRange,
+        frame: (x: CGFloat, width: CGFloat),
+        accent: Color,
+        height: CGFloat,
+        popoverArrowEdge: Edge
+    ) -> some View {
+        let barHeight = max(44, height - 10)
+        let shape = Capsule(style: .continuous)
+
+        return Button {
+            selectedPopoverDay = dayDate
+        } label: {
+            shiftListShiftBarLabel(entry: entry, range: range, width: frame.width)
+                .frame(width: frame.width, height: barHeight)
+                .background(
+                    shape
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    accent.opacity(colorScheme == .light ? 0.92 : 0.78),
+                                    accent.opacity(colorScheme == .light ? 0.62 : 0.5)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                )
+                .overlay(
+                    shape
+                        .stroke(.white.opacity(colorScheme == .light ? 0.34 : 0.18), lineWidth: 0.8)
+                )
+                .shadow(color: accent.opacity(0.14), radius: 5, x: 0, y: 2)
+        }
+        .buttonStyle(.plain)
+        .offset(x: frame.x, y: (height - barHeight) / 2)
+        .popover(
+            isPresented: dayPopoverBinding(for: dayDate),
+            attachmentAnchor: .rect(.bounds),
+            arrowEdge: popoverArrowEdge
+        ) {
+            ShiftViewPopover(
+                date: dayDate,
+                entry: entry,
+                entries: entries,
+                tipCents: tipCents,
+                settings: settings,
+                onEditTip: presentTipEditor,
+                onDeleteTip: { deleteTipsFromCalendar(for: $0) },
+                onEdit: presentDayEditor,
+                onDelete: deleteDayFromPopover
             )
+            .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private func shiftListShiftBarLabel(
+        entry: DayEntry,
+        range: ShiftTimeRange,
+        width: CGFloat
+    ) -> some View {
+        let durationText = PayScopeFormatters.hhmmString(seconds: range.durationSeconds)
+        let startText = entry.shiftStart.map { PayScopeFormatters.time.string(from: $0) } ?? ShiftTimeRange.displayMinute(range.startMinute)
+        let endText = entry.shiftEnd.map { PayScopeFormatters.time.string(from: $0) } ?? ShiftTimeRange.displayMinute(range.endMinuteOffset)
+
+        return HStack(spacing: 5) {
+            if width >= 132 {
+                Text(startText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(durationText)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                Text(endText)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else if width >= 72 {
+                Text(durationText)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+        }
+        .font(.system(size: 11, weight: .black, design: .rounded))
+        .foregroundStyle(.white)
+        .monospacedDigit()
+        .lineLimit(1)
+        .minimumScaleFactor(0.65)
+        .padding(.horizontal, width >= 132 ? 9 : 5)
+    }
+
+    private func shiftListBarFrame(
+        for range: ShiftTimeRange,
+        bounds: ClosedRange<Int>,
+        width: CGFloat
+    ) -> (x: CGFloat, width: CGFloat)? {
+        let start = max(bounds.lowerBound, range.startMinute)
+        let end = min(bounds.upperBound, range.endMinuteOffset)
+        guard end > start else { return nil }
+        let x = shiftListX(for: start, bounds: bounds, width: width)
+        let endX = shiftListX(for: end, bounds: bounds, width: width)
+        return (x: x, width: max(2, endX - x))
+    }
+
+    private func shiftListRange(for entry: DayEntry, on dayDate: Date) -> ShiftTimeRange? {
+        guard let start = entry.shiftStart, let end = entry.shiftEnd, end > start else {
+            return nil
+        }
+        return ShiftTimeRange(anchorDate: dayDate, start: start, end: end)
+    }
+
+    private func shiftListTimelineBounds() -> ClosedRange<Int> {
+        let configuredRanges = [settings.shiftShortcut1, settings.shiftShortcut2, settings.shiftShortcut3]
+            .compactMap { shiftShortcutTimelineRange(raw: $0) }
+        let lower = configuredRanges.map(\.lowerBound).min() ?? (6 * 60)
+        let upper = configuredRanges.map(\.upperBound).max() ?? (22 * 60)
+        let minimumUpper = lower + Int(shiftListVisibleHourCount * 60)
+        return lower...max(upper, minimumUpper)
+    }
+
+    private func shiftShortcutTimelineRange(raw: String) -> ClosedRange<Int>? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let data = trimmed.data(using: .utf8),
+           let payload = try? JSONDecoder().decode(CalendarShiftShortcutBoundsPayload.self, from: data) {
+            return shiftShortcutTimelineRange(startMinute: payload.startMinute, endMinute: payload.endMinute)
+        }
+
+        let parts = trimmed.split(separator: "-")
+        guard parts.count == 2,
+              let startMinute = Int(parts[0]),
+              let endMinute = Int(parts[1]) else {
+            return nil
+        }
+        return shiftShortcutTimelineRange(startMinute: startMinute, endMinute: endMinute)
+    }
+
+    private func shiftShortcutTimelineRange(startMinute: Int, endMinute: Int) -> ClosedRange<Int>? {
+        let clampedStart = max(0, min(ShiftTimeRange.minutesPerDay - 1, startMinute))
+        let normalizedEnd = endMinute <= clampedStart ? endMinute + ShiftTimeRange.minutesPerDay : endMinute
+        let clampedEnd = max(clampedStart + 15, min(ShiftTimeRange.maxEndMinuteOffset, normalizedEnd))
+        return clampedStart...clampedEnd
+    }
+
+    private func shiftListTimelineContentWidth(
+        viewportWidth: CGFloat,
+        bounds: ClosedRange<Int>
+    ) -> CGFloat {
+        let totalMinutes = max(1, bounds.upperBound - bounds.lowerBound)
+        let visibleMinutes = max(1, Int(shiftListVisibleHourCount * 60))
+        return max(viewportWidth, viewportWidth * CGFloat(totalMinutes) / CGFloat(visibleMinutes))
+    }
+
+    private func shiftListX(
+        for minute: Int,
+        bounds: ClosedRange<Int>,
+        width: CGFloat
+    ) -> CGFloat {
+        let span = max(1, bounds.upperBound - bounds.lowerBound)
+        let clamped = max(bounds.lowerBound, min(bounds.upperBound, minute))
+        return width * CGFloat(clamped - bounds.lowerBound) / CGFloat(span)
+    }
+
+    private func shiftListTimelineTicks(bounds: ClosedRange<Int>) -> [Int] {
+        let startHour = Int(floor(Double(bounds.lowerBound) / 60.0))
+        let endHour = Int(ceil(Double(bounds.upperBound) / 60.0))
+        return (startHour...endHour)
+            .map { $0 * 60 }
+            .filter { bounds.contains($0) }
+    }
+
+    private func displayedMonthDays() -> [Date] {
+        let calendar = Calendar.current
+        let monthStart = displayedMonth.startOfMonthLocal(calendar: calendar)
+        guard let range = calendar.range(of: .day, in: .month, for: monthStart) else {
+            return []
+        }
+        return range.compactMap { day -> Date? in
+            calendar.date(byAdding: .day, value: day - 1, to: monthStart)?.startOfDayLocal(calendar: calendar)
+        }
     }
 
     private func handleMonthSwipe(_ gesture: DragGesture.Value) {
+        guard calendarViewMode == .month else { return }
         let horizontal = gesture.translation.width
         let vertical = gesture.translation.height
         let horizontalDistance = abs(horizontal)
@@ -3337,6 +3707,11 @@ private struct CalendarDaySelection: Identifiable {
     var id: String {
         "day-editor-\(date.startOfDayLocal().timeIntervalSinceReferenceDate)"
     }
+}
+
+private struct CalendarShiftShortcutBoundsPayload: Codable {
+    let startMinute: Int
+    let endMinute: Int
 }
 
 private enum CalendarSheet: Identifiable {

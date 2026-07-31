@@ -1,23 +1,42 @@
 import SwiftUI
 
+private struct TVBackgroundView: View {
+    var body: some View {
+        ZStack {
+            Color.black
+
+            EllipticalGradient(
+                colors: [
+                    Color(red: 0.22, green: 0.39, blue: 0.70).opacity(0.22),
+                    .clear
+                ],
+                center: .init(x: 0.2, y: 0.25),
+                endRadiusFraction: 0.45
+            )
+
+            EllipticalGradient(
+                colors: [
+                    Color(red: 0.39, green: 0.24, blue: 0.63).opacity(0.17),
+                    .clear
+                ],
+                center: .init(x: 0.8, y: 0.72),
+                endRadiusFraction: 0.38
+            )
+        }
+        .ignoresSafeArea()
+    }
+}
+
 struct TVWeeklyScheduleView: View {
     @ObservedObject var viewModel: TVWeeklyScheduleViewModel
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.05, green: 0.06, blue: 0.08),
-                    Color(red: 0.10, green: 0.11, blue: 0.14)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            TVBackgroundView()
 
             content
-                .padding(.horizontal, 74)
-                .padding(.vertical, 54)
+                .padding(.horizontal, 56)
+                .padding(.vertical, 38)
         }
     }
 
@@ -32,9 +51,10 @@ struct TVWeeklyScheduleView: View {
                     await viewModel.reload()
                 }
             }
-        case .loaded(let schedule):
+        case .loaded(let schedule, let notice):
             TVWeekDashboard(
                 schedule: schedule,
+                notice: notice,
                 previousWeek: { viewModel.moveWeek(by: -1) },
                 currentWeek: { viewModel.jumpToCurrentWeek() },
                 nextWeek: { viewModel.moveWeek(by: 1) }
@@ -45,60 +65,196 @@ struct TVWeeklyScheduleView: View {
 
 private struct TVWeekDashboard: View {
     let schedule: TVWeekSchedule
+    let notice: String?
     let previousWeek: () -> Void
     let currentWeek: () -> Void
     let nextWeek: () -> Void
+    @State private var selectedEntry: TVShiftEntry?
+    @FocusState private var focusedControl: TVRemoteFocusTarget?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 36) {
-            sidebar
-                .frame(width: 380)
+        VStack(alignment: .leading, spacing: 12) {
+            header
 
-            TVWeekCalendarGrid(schedule: schedule)
+            if let notice {
+                TVLocalDataNotice(message: notice)
+            }
+
+            TVWeekCalendarGrid(schedule: schedule) { entry in
+                selectedEntry = entry
+            }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .focusable()
+                .focused($focusedControl, equals: .timeline)
+
+            weekNavigator
+        }
+        .onAppear {
+            focusedControl = .currentWeek
+        }
+        .onPlayPauseCommand(perform: currentWeek)
+        .onMoveCommand { direction in
+            guard focusedControl == .timeline else { return }
+            switch direction {
+            case .left:
+                previousWeek()
+            case .right:
+                nextWeek()
+            default:
+                break
+            }
+        }
+        .alert("Eintrag", isPresented: selectedEntryBinding) {
+            Button("OK", role: .cancel) {
+                selectedEntry = nil
+            }
+        } message: {
+            if let selectedEntry {
+                Text(detailText(for: selectedEntry))
+            }
         }
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            VStack(alignment: .leading, spacing: 12) {
+    private var header: some View {
+        HStack(alignment: .bottom, spacing: 36) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("PayScope")
-                    .font(.system(size: 30, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.68))
+                    .font(.system(size: 17, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.40))
+                    .kerning(1.0)
+                    .textCase(.uppercase)
 
-                Text(weekTitle)
-                    .font(.system(size: 48, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.78)
+                HStack(alignment: .firstTextBaseline, spacing: 14) {
+                    Text("KW \(weekNumber)")
+                        .font(.system(size: 43, weight: .bold, design: .rounded))
+                    Text(weekTitle)
+                        .font(.system(size: 27, weight: .light))
+                        .foregroundStyle(.white.opacity(0.44))
+                }
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.76)
             }
 
-            TVWorkStatusCard(schedule: schedule)
+            Spacer(minLength: 30)
 
-            VStack(spacing: 14) {
-                Button(action: previousWeek) {
-                    Label("Vorige Woche", systemImage: "chevron.left")
-                }
+            HStack(spacing: 12) {
+                TVWeekMetricChip(
+                    systemImage: schedule.hasWork ? "briefcase.fill" : "checkmark.circle.fill",
+                    value: "\(schedule.entries.count)",
+                    label: "Einträge",
+                    tint: schedule.hasWork ? schedule.colorSettings.color(for: .work) : Color(red: 0.28, green: 0.76, blue: 0.44)
+                )
 
-                Button(action: currentWeek) {
-                    Label("Diese Woche", systemImage: "calendar")
-                }
+                TVWeekMetricChip(
+                    systemImage: "clock.fill",
+                    value: durationText(schedule.totalShiftSeconds),
+                    label: "Woche",
+                    tint: Color(red: 0.24, green: 0.58, blue: 0.92)
+                )
 
-                Button(action: nextWeek) {
-                    Label("Nächste Woche", systemImage: "chevron.right")
-                }
+                TVWeekMetricChip(
+                    systemImage: "arrow.clockwise",
+                    value: schedule.generatedAt.formatted(date: .omitted, time: .shortened),
+                    label: "Update",
+                    tint: Color(red: 0.52, green: 0.42, blue: 0.88)
+                )
             }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-
-            Spacer(minLength: 18)
-
-            Text("Aktualisiert \(schedule.generatedAt.formatted(date: .omitted, time: .shortened))")
-                .font(.system(size: 22, weight: .medium))
-                .foregroundStyle(.white.opacity(0.48))
         }
-        .padding(30)
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var weekNavigator: some View {
+        HStack(spacing: 10) {
+            glassNavButton(
+                label: "Vorige Woche",
+                systemImage: "chevron.left",
+                target: .previousWeek,
+                isPrimary: false,
+                action: previousWeek
+            )
+
+            glassNavButton(
+                label: "Diese Woche",
+                systemImage: "calendar",
+                target: .currentWeek,
+                isPrimary: true,
+                action: currentWeek
+            )
+
+            glassNavButton(
+                label: "Nächste Woche",
+                systemImage: "chevron.right",
+                target: .nextWeek,
+                isPrimary: false,
+                action: nextWeek
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private func glassNavButton(
+        label: String,
+        systemImage: String,
+        target: TVRemoteFocusTarget,
+        isPrimary: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        let isFocused = focusedControl == target
+
+        return Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 14, weight: isPrimary ? .semibold : .regular))
+            }
+            .foregroundStyle(isPrimary ? .white : .white.opacity(0.68))
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+            .background {
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        Capsule()
+                            .fill(.white.opacity(isPrimary ? 0.14 : 0.07))
+                    }
+                    .overlay {
+                        Capsule()
+                            .strokeBorder(
+                                isFocused ? .white.opacity(0.50) : .white.opacity(isPrimary ? 0.25 : 0.15),
+                                lineWidth: isFocused ? 1.5 : 0.5
+                            )
+                    }
+                    .overlay(alignment: .top) {
+                        Capsule()
+                            .fill(.white.opacity(0.22))
+                            .frame(height: 1)
+                            .padding(.horizontal, 18)
+                            .padding(.top, 1)
+                    }
+            }
+            .shadow(color: isFocused ? .white.opacity(0.10) : .clear, radius: 10)
+            .scaleEffect(isFocused ? 1.025 : 1.0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.75), value: isFocused)
+        }
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .focused($focusedControl, equals: target)
+    }
+
+    private var selectedEntryBinding: Binding<Bool> {
+        Binding(
+            get: { selectedEntry != nil },
+            set: { isPresented in
+                if !isPresented {
+                    selectedEntry = nil
+                }
+            }
+        )
+    }
+
+    private var weekNumber: Int {
+        Calendar.current.component(.weekOfYear, from: schedule.weekStart)
     }
 
     private var weekTitle: String {
@@ -110,49 +266,6 @@ private struct TVWeekDashboard: View {
         let end = formatter.string(from: endDate)
         return "\(start) - \(end)"
     }
-}
-
-private struct TVWorkStatusCard: View {
-    let schedule: TVWeekSchedule
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Label(statusTitle, systemImage: schedule.hasWork ? "briefcase.fill" : "checkmark.circle.fill")
-                .font(.system(size: 30, weight: .semibold))
-                .foregroundStyle(.white)
-
-            HStack(spacing: 22) {
-                metric(value: "\(schedule.timedEntries.count)", label: "Schichten")
-                metric(value: durationText(schedule.totalShiftSeconds), label: "Arbeitszeit")
-            }
-        }
-        .padding(26)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(statusTint.opacity(0.26), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(statusTint.opacity(0.55), lineWidth: 1)
-        )
-    }
-
-    private var statusTitle: String {
-        schedule.hasWork ? "Du arbeitest diese Woche" : "Keine Arbeit geplant"
-    }
-
-    private var statusTint: Color {
-        schedule.hasWork ? Color(red: 0.20, green: 0.66, blue: 0.96) : Color(red: 0.28, green: 0.76, blue: 0.44)
-    }
-
-    private func metric(value: String, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(value)
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-            Text(label)
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.white.opacity(0.62))
-        }
-    }
 
     private func durationText(_ seconds: Int) -> String {
         let hours = seconds / 3600
@@ -162,13 +275,116 @@ private struct TVWorkStatusCard: View {
         }
         return "\(hours) h \(minutes) m"
     }
+
+    private func detailText(for entry: TVShiftEntry) -> String {
+        var lines = [entry.type.label]
+        if let start = entry.shiftStart, let end = entry.shiftEnd {
+            lines.append("\(start.formatted(date: .omitted, time: .shortened))-\(end.formatted(date: .omitted, time: .shortened))")
+        } else {
+            lines.append("Ohne feste Uhrzeit")
+        }
+        if let seconds = entry.displaySeconds {
+            lines.append(durationText(seconds))
+        }
+        if entry.breakSeconds > 0 {
+            lines.append("Pause \(durationText(entry.breakSeconds))")
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+private enum TVRemoteFocusTarget: Hashable {
+    case timeline
+    case previousWeek
+    case currentWeek
+    case nextWeek
+}
+
+private struct TVWeekMetricChip: View {
+    let systemImage: String
+    let value: String
+    let label: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.system(size: 21, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 30, height: 30)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value)
+                    .font(.system(size: 25, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.72)
+                Text(label)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.52))
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 15)
+        .padding(.vertical, 10)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(tint.opacity(0.08))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
+                }
+                .overlay(alignment: .top) {
+                    Capsule()
+                        .fill(.white.opacity(0.22))
+                        .frame(height: 1)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 1)
+                }
+        }
+        .shadow(color: .black.opacity(0.30), radius: 8, y: 3)
+    }
+}
+
+private struct TVLocalDataNotice: View {
+    let message: String
+
+    var body: some View {
+        Label {
+            Text(message)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(Color(red: 1.00, green: 0.86, blue: 0.50).opacity(0.85))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: "icloud.slash")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Color(red: 1.00, green: 0.85, blue: 0.47))
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(red: 1.00, green: 0.78, blue: 0.24).opacity(0.10))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color(red: 1.00, green: 0.78, blue: 0.24).opacity(0.25), lineWidth: 0.5)
+                }
+        }
+    }
 }
 
 private struct TVWeekCalendarGrid: View {
     let schedule: TVWeekSchedule
+    let selectEntry: (TVShiftEntry) -> Void
     private let calendar = Calendar.current
-    private let axisWidth: CGFloat = 78
-    private let dayHeaderHeight: CGFloat = 88
+    private let axisWidth: CGFloat = 76
+    private let dayHeaderHeight: CGFloat = 82
 
     var body: some View {
         GeometryReader { proxy in
@@ -180,7 +396,7 @@ private struct TVWeekCalendarGrid: View {
                 gridBackground
 
                 ForEach(Array(days.enumerated()), id: \.offset) { index, day in
-                    TVDayHeader(date: day, entries: entries(on: day))
+                    TVDayHeader(date: day)
                         .frame(width: dayWidth, height: dayHeaderHeight)
                         .offset(x: axisWidth + CGFloat(index) * dayWidth)
                 }
@@ -199,15 +415,20 @@ private struct TVWeekCalendarGrid: View {
                         .offset(x: axisWidth, y: y)
                 }
 
-                ForEach(schedule.timedEntries) { entry in
+                ForEach(displayEntries) { entry in
                     if let layout = blockLayout(for: entry, range: range, height: availableHeight, dayWidth: dayWidth) {
-                        TVShiftBlock(entry: entry)
-                            .frame(width: max(96, dayWidth - 18), height: layout.height)
+                        Button {
+                            selectEntry(entry)
+                        } label: {
+                            TVShiftBlock(entry: entry, tint: schedule.colorSettings.color(for: entry.type))
+                        }
+                        .buttonStyle(.plain)
+                        .frame(width: max(110, dayWidth - 22), height: layout.height)
                             .offset(x: axisWidth + CGFloat(layout.dayIndex) * dayWidth + 9, y: dayHeaderHeight + layout.y)
                     }
                 }
 
-                if schedule.timedEntries.isEmpty {
+                if schedule.entries.isEmpty {
                     TVEmptyWeekOverlay()
                         .frame(width: proxy.size.width - axisWidth, height: availableHeight)
                         .offset(x: axisWidth, y: dayHeaderHeight)
@@ -217,12 +438,23 @@ private struct TVWeekCalendarGrid: View {
     }
 
     private var gridBackground: some View {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(.white.opacity(0.045))
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(.white.opacity(0.03))
             .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(.white.opacity(0.10), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(.white.opacity(0.06), lineWidth: 0.5)
             )
+    }
+
+    private var displayEntries: [TVShiftEntry] {
+        schedule.entries.sorted { lhs, rhs in
+            let lhsDate = lhs.shiftStart ?? lhs.date
+            let rhsDate = rhs.shiftStart ?? rhs.date
+            if lhsDate != rhsDate {
+                return lhsDate < rhsDate
+            }
+            return lhs.type.rawValue < rhs.type.rawValue
+        }
     }
 
     private var days: [Date] {
@@ -238,16 +470,12 @@ private struct TVWeekCalendarGrid: View {
         }
 
         guard let minStart = timed.map(\.0).min(), let maxEnd = timed.map(\.1).max() else {
-            return 8 * 60...18 * 60
+            return 7 * 60...18 * 60
         }
 
         let lower = max(0, (minStart / 60) * 60 - 60)
         let upper = min(36 * 60, ((maxEnd + 59) / 60) * 60 + 60)
         return lower...max(lower + 60, upper)
-    }
-
-    private func entries(on day: Date) -> [TVShiftEntry] {
-        schedule.entries.filter { calendar.isDate($0.date, inSameDayAs: day) }
     }
 
     private func blockLayout(
@@ -256,13 +484,16 @@ private struct TVWeekCalendarGrid: View {
         height: CGFloat,
         dayWidth: CGFloat
     ) -> (dayIndex: Int, y: CGFloat, height: CGFloat)? {
-        guard let start = entry.shiftStart, let end = entry.shiftEnd, end > start else { return nil }
+        guard let start = entry.shiftStart, let end = entry.shiftEnd, end > start else {
+            let dayIndex = clampedDayIndex(for: entry.date)
+            return (dayIndex, 0, min(132, max(112, height * 0.16)))
+        }
         let dayIndex = clampedDayIndex(for: start)
         let startMinute = max(range.lowerBound, minuteOfDisplayDay(for: start, entry: entry))
         let endMinute = min(range.upperBound, minuteOfDisplayDay(for: end, entry: entry))
         let duration = max(30, endMinute - startMinute)
         let y = yOffset(for: startMinute, range: range, height: height)
-        let blockHeight = max(82, CGFloat(duration) / CGFloat(range.upperBound - range.lowerBound) * height)
+        let blockHeight = max(132, CGFloat(duration) / CGFloat(range.upperBound - range.lowerBound) * height)
         return (dayIndex, y, blockHeight)
     }
 
@@ -301,34 +532,28 @@ private struct TVWeekCalendarGrid: View {
 
 private struct TVDayHeader: View {
     let date: Date
-    let entries: [TVShiftEntry]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .center, spacing: 8) {
             Text(weekday)
                 .font(.system(size: 24, weight: .bold))
                 .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
             Text(dayNumber)
-                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                .font(.system(size: 19, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.58))
-
-            HStack(spacing: 8) {
-                ForEach(entries.filter { !$0.hasTimedShift }.prefix(2)) { entry in
-                    Label(entry.type.label, systemImage: entry.type.symbolName)
-                        .labelStyle(.iconOnly)
-                        .foregroundStyle(entry.type.tint)
-                }
-            }
+                .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 10)
         .padding(.top, 14)
     }
 
     private var weekday: String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "de_DE")
-        formatter.dateFormat = "E"
+        formatter.dateFormat = "EEEE"
         return formatter.string(from: date)
     }
 
@@ -342,39 +567,80 @@ private struct TVDayHeader: View {
 
 private struct TVShiftBlock: View {
     let entry: TVShiftEntry
+    let tint: Color
+    @Environment(\.isFocused) private var isFocused
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(entry.type.label, systemImage: entry.type.symbolName)
-                .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: entry.type.symbolName)
+                    .font(.system(size: 25, weight: .bold))
+                    .frame(width: 30)
 
-            Text(timeText)
-                .font(.system(size: 20, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.78))
-                .lineLimit(1)
-
-            if entry.breakSeconds > 0 {
-                Text("Pause \(durationText(entry.breakSeconds))")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.62))
+                Text(entry.type.label)
+                    .font(.system(size: 26, weight: .bold))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.72)
             }
+            .foregroundStyle(.white)
+
+            VStack(alignment: .leading, spacing: 8) {
+                TVShiftInfoLine(systemImage: timeIconName, text: timeText, opacity: 0.88)
+
+                if let summaryText {
+                    TVShiftInfoLine(systemImage: summaryIconName, text: summaryText, opacity: 0.74)
+                }
+            }
+
+            Spacer(minLength: 0)
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(entry.type.tint.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(.white.opacity(0.22), lineWidth: 1)
-        )
-        .shadow(color: entry.type.tint.opacity(0.24), radius: 20, y: 12)
+        .liquidGlassCard(style: cardStyle, isFocused: isFocused)
+    }
+
+    private var cardStyle: TVShiftCardStyle {
+        TVShiftCardStyle(accent: tint)
     }
 
     private var timeText: String {
-        guard let start = entry.shiftStart, let end = entry.shiftEnd else { return "Ganztägig" }
-        return "\(start.formatted(date: .omitted, time: .shortened)) - \(end.formatted(date: .omitted, time: .shortened))"
+        guard let start = entry.shiftStart, let end = entry.shiftEnd else {
+            return "Ohne feste Uhrzeit"
+        }
+        return "\(start.formatted(date: .omitted, time: .shortened))-\(end.formatted(date: .omitted, time: .shortened))"
+    }
+
+    private var timeIconName: String {
+        entry.hasTimedShift ? "clock.fill" : "calendar"
+    }
+
+    private var valueIconName: String {
+        switch entry.type {
+        case .work, .manual:
+            return "hourglass"
+        case .vacation, .holiday, .sick:
+            return "checkmark.seal.fill"
+        }
+    }
+
+    private var summaryIconName: String {
+        entry.breakSeconds > 0 ? "hourglass" : valueIconName
+    }
+
+    private var summaryText: String? {
+        guard let seconds = entry.displaySeconds else { return nil }
+        switch entry.type {
+        case .work:
+            let workText = durationText(seconds)
+            if entry.breakSeconds > 0 {
+                return "\(workText) · \(durationText(entry.breakSeconds)) Pause"
+            }
+            return "\(workText) netto"
+        case .manual:
+            return "\(durationText(seconds)) Dauer"
+        case .vacation, .holiday, .sick:
+            return "\(durationText(seconds)) Gutschrift"
+        }
     }
 
     private func durationText(_ seconds: Int) -> String {
@@ -385,6 +651,100 @@ private struct TVShiftBlock: View {
         let hours = minutes / 60
         let remainder = minutes % 60
         return remainder == 0 ? "\(hours) h" : "\(hours) h \(remainder) min"
+    }
+}
+
+private struct TVShiftInfoLine: View {
+    let systemImage: String
+    let text: String
+    let opacity: Double
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .bold))
+                .frame(width: 20)
+            Text(text)
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.68)
+        }
+        .foregroundStyle(.white.opacity(opacity))
+    }
+}
+
+private struct TVShiftCardStyle {
+    let accent: Color
+
+    var gradientColors: [Color] {
+        [
+            accent.opacity(0.74),
+            accent.opacity(0.54)
+        ]
+    }
+
+    var borderColor: Color {
+        accent.opacity(0.38)
+    }
+
+    var shadowColor: Color {
+        accent.opacity(0.38)
+    }
+}
+
+private struct LiquidGlassCardBackground: ViewModifier {
+    let style: TVShiftCardStyle
+    let isFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: style.gradientColors,
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(
+                                isFocused ? .white.opacity(0.45) : style.borderColor,
+                                lineWidth: isFocused ? 1.0 : 0.5
+                            )
+                    }
+                    .overlay(alignment: .top) {
+                        Capsule()
+                            .fill(.white.opacity(isFocused ? 0.40 : 0.22))
+                            .frame(height: 1)
+                            .padding(.horizontal, 18)
+                            .padding(.top, 1.5)
+                    }
+            }
+            .shadow(
+                color: isFocused ? style.shadowColor.opacity(0.70) : style.shadowColor,
+                radius: isFocused ? 28 : 14,
+                y: isFocused ? 8 : 4
+            )
+            .overlay {
+                if isFocused {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(.white.opacity(0.55), lineWidth: 2)
+                }
+            }
+            .scaleEffect(isFocused ? 1.04 : 1.0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isFocused)
+    }
+}
+
+private extension View {
+    func liquidGlassCard(style: TVShiftCardStyle, isFocused: Bool) -> some View {
+        modifier(LiquidGlassCardBackground(style: style, isFocused: isFocused))
     }
 }
 

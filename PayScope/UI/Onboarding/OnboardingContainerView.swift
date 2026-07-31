@@ -349,9 +349,7 @@ private struct OnboardingFlowView: View {
                             settings.themeAccent = accent
                         } label: {
                             VStack(spacing: 8) {
-                                Circle()
-                                    .fill(accent.color)
-                                    .frame(width: 36, height: 36)
+                                PayScopeAccentSwatch(accent: accent, size: 36)
                                 Text(accent.label)
                                     .font(.footnote)
                             }

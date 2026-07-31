@@ -9,6 +9,42 @@ enum PayScopeTypography {
     static let metric = Font.system(.title, design: .rounded).weight(.bold)
 }
 
+struct PayScopeAccentSwatch: View {
+    let accent: ThemeAccent
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            if accent == .monochrome {
+                Circle()
+                    .fill(.white)
+
+                DiagonalHalfShape()
+                    .fill(.black)
+                    .clipShape(Circle())
+
+                Circle()
+                    .stroke(.primary.opacity(0.22), lineWidth: max(0.75, size * 0.045))
+            } else {
+                Circle()
+                    .fill(accent.color)
+            }
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+private struct DiagonalHalfShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: rect.origin)
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
 struct PayScopeThemeTokens {
     let backgroundBase: Color
     let backgroundBaseSecondary: Color

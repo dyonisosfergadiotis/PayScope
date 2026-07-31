@@ -67,6 +67,7 @@ enum CloudKitRecordKeys {
         case netBonusesCSV
         case showTipsButton
         case showTipsButtonAmount
+        case workCategoryColor
         case manualCategoryColor
         case vacationCategoryColor
         case holidayCategoryColor
@@ -773,6 +774,8 @@ final class CloudKitService: ObservableObject {
         let netBonusesCSV = record[CloudKitRecordKeys.Settings.netBonusesCSV.rawValue] as? String
         let showTipsButton = (record[CloudKitRecordKeys.Settings.showTipsButton.rawValue] as? NSNumber)?.boolValue
         let showTipsButtonAmount = (record[CloudKitRecordKeys.Settings.showTipsButtonAmount.rawValue] as? NSNumber)?.boolValue
+        let workCategoryColor = (record[CloudKitRecordKeys.Settings.workCategoryColor.rawValue] as? String)
+            .flatMap(ShiftCategoryColor.init(rawValue:))
         let manualCategoryColor = (record[CloudKitRecordKeys.Settings.manualCategoryColor.rawValue] as? String)
             .flatMap(ShiftCategoryColor.init(rawValue:))
         let vacationCategoryColor = (record[CloudKitRecordKeys.Settings.vacationCategoryColor.rawValue] as? String)
@@ -830,8 +833,9 @@ final class CloudKitService: ObservableObject {
             netBonusesCSV: netBonusesCSV,
             showTipsButton: showTipsButton ?? true,
             showTipsButtonAmount: showTipsButtonAmount ?? true,
+            workCategoryColor: workCategoryColor,
             manualCategoryColor: manualCategoryColor ?? .lavender,
-            vacationCategoryColor: vacationCategoryColor ?? .mint,
+            vacationCategoryColor: vacationCategoryColor ?? .monochrome,
             holidayCategoryColor: holidayCategoryColor ?? .peach,
             sickCategoryColor: sickCategoryColor ?? .blush,
             shiftShortcut1: shiftShortcut1,
@@ -860,6 +864,7 @@ final class CloudKitService: ObservableObject {
         settings.markPaidHolidays = markPaidHolidays
         settings.showTipsButton = showTipsButton
         settings.showTipsButtonAmount = showTipsButtonAmount
+        settings.workCategoryColor = workCategoryColor
         settings.manualCategoryColor = manualCategoryColor
         settings.vacationCategoryColor = vacationCategoryColor
         settings.holidayCategoryColor = holidayCategoryColor
@@ -1119,6 +1124,11 @@ final class CloudKitService: ObservableObject {
             record[CloudKitRecordKeys.Settings.showTipsButtonAmount.rawValue] = NSNumber(value: showTipsButtonAmount)
         } else {
             record[CloudKitRecordKeys.Settings.showTipsButtonAmount.rawValue] = nil
+        }
+        if let workCategoryColor = settings.effectiveWorkCategoryColor {
+            record[CloudKitRecordKeys.Settings.workCategoryColor.rawValue] = workCategoryColor.rawValue
+        } else {
+            record[CloudKitRecordKeys.Settings.workCategoryColor.rawValue] = nil
         }
         record[CloudKitRecordKeys.Settings.manualCategoryColor.rawValue] = settings.effectiveManualCategoryColor.rawValue
         record[CloudKitRecordKeys.Settings.vacationCategoryColor.rawValue] = settings.effectiveVacationCategoryColor.rawValue

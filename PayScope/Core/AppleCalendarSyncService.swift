@@ -650,6 +650,7 @@ private struct CalendarEventPayload {
 private extension ThemeAccent {
     var uiColor: UIColor {
         switch self {
+        case .monochrome: return .label
         case .blue: return .systemBlue
         case .green: return .systemGreen
         case .purple: return .systemPurple

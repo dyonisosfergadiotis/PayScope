@@ -215,6 +215,7 @@ enum PayScopeControlCenterActionStore {
         guard let data = try? JSONEncoder().encode(action) else { return }
 
         defaults.set(data, forKey: pendingActionKey)
+        defaults.synchronize()
     }
 }
 
@@ -244,7 +245,7 @@ private struct EndShiftControlIntent: AppIntent {
     }
 }
 
-struct StartPauseControlIntent: AppIntent {
+struct StartPauseControlIntent: LiveActivityIntent {
     static var title: LocalizedStringResource { "Pause starten" }
     static var description: IntentDescription {
         IntentDescription("Startet den Pausenmodus in PayScope.")
@@ -258,7 +259,7 @@ struct StartPauseControlIntent: AppIntent {
     }
 }
 
-struct EndPauseControlIntent: AppIntent {
+struct EndPauseControlIntent: LiveActivityIntent {
     static var title: LocalizedStringResource { "Pause beenden" }
     static var description: IntentDescription {
         IntentDescription("Beendet den Pausenmodus in PayScope.")

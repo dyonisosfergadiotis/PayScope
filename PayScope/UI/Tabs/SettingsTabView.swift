@@ -1194,7 +1194,7 @@ private struct AppearanceSettingsView: View {
         Form {
             Section(
                 header: Text("Erscheinungsbild"),
-                footer: Text("Arbeit bleibt an die Akzentfarbe gebunden. Die anderen Kategorien werden als eigene Pastelltöne gespeichert.")) {
+                footer: Text("Die Akzentfarbe steuert die App. Schichtkategorien können eigene Pastelltöne erhalten.")) {
                 HStack {
                     Text("Akzentfarbe")
                     Spacer()
@@ -1204,9 +1204,7 @@ private struct AppearanceSettingsView: View {
                                 settings.themeAccent = accent
                             } label: {
                                 HStack(spacing: 8) {
-                                    Circle()
-                                        .fill(accent.color)
-                                        .frame(width: 10, height: 10)
+                                    PayScopeAccentSwatch(accent: accent, size: 10)
                                     Text(accent.label)
                                         .foregroundStyle(accent.color)
                                 }
@@ -1214,9 +1212,7 @@ private struct AppearanceSettingsView: View {
                         }
                     } label: {
                         HStack(spacing: 8) {
-                            Circle()
-                                .fill(settings.themeAccent.color)
-                                .frame(width: 10, height: 10)
+                            PayScopeAccentSwatch(accent: settings.themeAccent, size: 10)
                             Text(settings.themeAccent.label)
                                 .foregroundStyle(settings.themeAccent.color.opacity(0.6))
                         }
@@ -1228,7 +1224,6 @@ private struct AppearanceSettingsView: View {
                 HStack(spacing: 0) {
                     ForEach(categoryTypes) { type in
                         Button {
-                            guard type != .work else { return }
                             selectedCategoryForPalette = type
                         } label: {
                             Image(systemName: type.icon)
@@ -1238,13 +1233,12 @@ private struct AppearanceSettingsView: View {
                                 .payScopeGlassControl(
                                     accent: categoryTint(for: type),
                                     cornerRadius: 14,
-                                    tintOpacity: type == .work ? 0.065 : 0.105,
-                                    isInteractive: type != .work
+                                    tintOpacity: 0.105,
+                                    isInteractive: true
                                 )
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(type.label)
-                        .opacity(type == .work ? 0.82 : 1)
                         .popover(isPresented: categoryPaletteBinding(for: type),arrowEdge: .bottom) {
                             CategoryColorPaletteView(
                                 type: type,
@@ -1303,7 +1297,7 @@ private struct CategoryColorPaletteView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
                 Image(systemName: type.icon)
-                    .foregroundStyle(type == .work ? accent : selectedColor?.color ?? accent)
+                    .foregroundStyle(selectedColor?.color ?? accent)
                 Text(type.label)
                     .font(.headline)
             }
@@ -1315,8 +1309,7 @@ private struct CategoryColorPaletteView: View {
                     Button {
                         onSelect(color)
                     } label: {
-                        Circle()
-                            .fill(color.color)
+                        CategoryColorSwatch(color: color)
                             .frame(width: 36, height: 36)
                             .overlay {
                                 Circle()
@@ -1345,6 +1338,37 @@ private struct CategoryColorPaletteView: View {
         .padding(16)
         .frame(width: paletteContentWidth)
         .payScopePopoverSurface(accent: accent)
+    }
+}
+
+private struct CategoryColorSwatch: View {
+    let color: ShiftCategoryColor
+
+    var body: some View {
+        ZStack {
+            if color == .monochrome {
+                Circle()
+                    .fill(.white)
+
+                CategoryColorDiagonalHalf()
+                    .fill(.black)
+                    .clipShape(Circle())
+            } else {
+                Circle()
+                    .fill(color.color)
+            }
+        }
+    }
+}
+
+private struct CategoryColorDiagonalHalf: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: rect.origin)
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
     }
 }
 
@@ -1479,9 +1503,7 @@ private struct WidgetLiveActivitySettingsView: View {
                                 saveAndRefreshWidgets()
                             } label: {
                                 HStack(spacing: 8) {
-                                    Circle()
-                                        .fill(accent.color)
-                                        .frame(width: 10, height: 10)
+                                    PayScopeAccentSwatch(accent: accent, size: 10)
                                     Text(accent.label)
                                         .foregroundStyle(accent.color)
                                 }
@@ -1489,9 +1511,7 @@ private struct WidgetLiveActivitySettingsView: View {
                         }
                     } label: {
                         HStack(spacing: 8) {
-                            Circle()
-                                .fill(settings.themeAccent.color)
-                                .frame(width: 10, height: 10)
+                            PayScopeAccentSwatch(accent: settings.themeAccent, size: 10)
                             Text(settings.themeAccent.label)
                                 .foregroundStyle(settings.themeAccent.color.opacity(0.6))
                         }
@@ -2039,9 +2059,7 @@ private struct AppleCalendarSettingsView: View {
                 Picker("Farbe", selection: calendarAccentBinding) {
                     ForEach(ThemeAccent.allCases) { accent in
                         HStack {
-                            Circle()
-                                .fill(accent.color)
-                                .frame(width: 12, height: 12)
+                            PayScopeAccentSwatch(accent: accent, size: 12)
                             Text(accent.label)
                         }
                         .tag(accent)

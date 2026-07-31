@@ -300,7 +300,7 @@ struct RootView: View {
         isLoadingData = true
         defer { isLoadingData = false }
 
-        let interval = liveActivitySyncInterval()
+        let interval = watchSnapshotSyncInterval()
         let localEntries = localStore.loadAll(in: interval)
         if entries.isEmpty {
             entries = localEntries.sorted { $0.date < $1.date }
@@ -473,7 +473,18 @@ private struct MainTabNavigationView: View {
                     .payScopeBackground(accent: settings.themeAccent.color)
             }
 
-            Tab("Heute", systemImage: todayTabIcon, value: MainAppTab.today, role: .search) {
+            Tab(
+                "Heute",
+                systemImage: todayTabIcon,
+                value: MainAppTab.today,
+                role: {
+                    if #available(iOS 27, *) {
+                        return .prominent
+                    } else {
+                        return .search
+                    }
+                }()
+            ) {
                 Color.clear
             }
         }
@@ -1499,8 +1510,11 @@ extension WatchSnapshotBridge: WCSessionDelegate {
             replyHandler([:])
             return
         }
+
         requestFreshSnapshotFromRootView()
-        replyHandler(currentContextForReply(from: session) ?? [:])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            replyHandler(self?.currentContextForReply(from: session) ?? [:])
+        }
     }
 
     func session(_: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {

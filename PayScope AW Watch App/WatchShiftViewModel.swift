@@ -44,8 +44,9 @@ final class WatchShiftViewModel: NSObject, ObservableObject {
 
         if session.isReachable {
             session.sendMessage(message) { [weak self] reply in
-                let didApply = self?.apply(context: reply) ?? false
-                self?.finishReloadAfterDelay(failed: !didApply)
+                guard let self else { return }
+                let didApplyFreshSnapshot = self.apply(context: reply, allowsStaleSnapshot: false)
+                self.finishReloadAfterDelay(failed: false, delay: didApplyFreshSnapshot ? 0.55 : 2.0)
             } errorHandler: { [weak self] _ in
                 self?.apply(context: session.receivedApplicationContext)
                 self?.queueBackgroundSnapshotRequest(message, on: session)
@@ -59,7 +60,7 @@ final class WatchShiftViewModel: NSObject, ObservableObject {
     }
 
     @discardableResult
-    private func apply(context: [String: Any]) -> Bool {
+    private func apply(context: [String: Any], allowsStaleSnapshot: Bool = true) -> Bool {
         guard let data = context[WatchSnapshotBridgeKeys.payloadData] as? Data else {
             return false
         }
@@ -68,9 +69,16 @@ final class WatchShiftViewModel: NSObject, ObservableObject {
             return false
         }
 
+        if !allowsStaleSnapshot,
+           let currentGeneratedAt = snapshot?.generatedAt,
+           decoded.generatedAt <= currentGeneratedAt {
+            return false
+        }
+
         WatchShiftSnapshotCache.save(decoded)
         DispatchQueue.main.async {
             self.snapshot = decoded
+            self.isReloading = false
             self.lastReloadFailed = false
             WidgetCenter.shared.reloadAllTimelines()
         }
@@ -82,8 +90,8 @@ final class WatchShiftViewModel: NSObject, ObservableObject {
         session.transferUserInfo(message)
     }
 
-    private func finishReloadAfterDelay(failed: Bool) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+    private func finishReloadAfterDelay(failed: Bool, delay: TimeInterval = 0.55) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             self.isReloading = false
             self.lastReloadFailed = failed
         }

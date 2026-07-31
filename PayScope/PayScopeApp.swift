@@ -242,6 +242,10 @@ enum PayScopeLiveActivityManager {
         await startOrUpdate(with: payload)
     }
 
+    static func syncLockScreenWidgets(settings: Settings, entries: [DayEntry], now: Date = .now) {
+        persistRectangularWidgetSnapshot(settings: settings, entries: entries, now: now)
+    }
+
     private static func persistRectangularWidgetSnapshot(settings: Settings, entries: [DayEntry], now: Date) {
         guard let defaults = UserDefaults(suiteName: rectangularWidgetAppGroupIdentifier) else { return }
 
@@ -769,14 +773,8 @@ enum PayScopeLiveActivityManager {
     }
 
     private static func categoryColorRawValue(for type: DayType?, settings: Settings) -> String {
-        guard let type else { return settings.themeAccent.rawValue }
-
-        switch type {
-        case .work:
-            return settings.themeAccent.rawValue
-        case .manual, .vacation, .holiday, .sick:
-            return settings.categoryColorSelection(for: type)?.rawValue ?? settings.themeAccent.rawValue
-        }
+        let categoryType = type ?? .work
+        return settings.categoryColorSelection(for: categoryType)?.rawValue ?? ShiftCategoryColor.monochrome.rawValue
     }
 
     private struct LaunchPayload {

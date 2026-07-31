@@ -1132,13 +1132,11 @@ struct DayEditorView: View {
                 rebuildEntryCaches()
                 refreshFollowingAutoCreditedEntries(changedFrom: dayDate)
 
-                if isTodaySave {
-                    Task { @MainActor in
-                        await PayScopeLiveActivityManager.syncAtAppLaunch(
-                            settings: settings,
-                            entries: entriesAfterDelete
-                        )
-                    }
+                Task { @MainActor in
+                    await syncLockScreenWidgetsAndLiveActivity(
+                        entries: entriesAfterDelete,
+                        isTodayChange: isTodaySave
+                    )
                 }
 
                 Task {
@@ -1199,6 +1197,10 @@ struct DayEditorView: View {
         Task {
             refreshFollowingAutoCreditedEntries(changedFrom: dayDate)
             let mergedEntriesAfterSave = mergedEntriesReplacingDay(on: dayDate, with: target)
+            await syncLockScreenWidgetsAndLiveActivity(
+                entries: mergedEntriesAfterSave,
+                isTodayChange: isTodaySave
+            )
             await AppleCalendarSyncService.shared.sync(
                 entry: target,
                 allEntries: mergedEntriesAfterSave,
@@ -1208,19 +1210,7 @@ struct DayEditorView: View {
             do {
                 try await cloudKitService.saveDayEntry(target)
                 localStore.save(target)
-                if isTodaySave {
-                    await PayScopeLiveActivityManager.syncAtAppLaunch(
-                        settings: settings,
-                        entries: mergedEntriesAfterSave
-                    )
-                }
             } catch {
-                if isTodaySave {
-                    await PayScopeLiveActivityManager.syncAtAppLaunch(
-                        settings: settings,
-                        entries: mergedEntriesAfterSave
-                    )
-                }
                 #if DEBUG
                 print("CloudKit save failed, persisted locally as fallback: \(error)")
                 #endif
@@ -1254,16 +1244,29 @@ struct DayEditorView: View {
             }
         }
 
-        // Update live activity if today
-        if dayDate.isSameLocalDay(as: Date().startOfDayLocal()) {
-            Task { @MainActor in
-                await PayScopeLiveActivityManager.syncAtAppLaunch(
-                    settings: settings,
-                    entries: entriesAfterDelete
-                )
-            }
+        // Keep lock-screen widgets fresh for future changes too.
+        Task { @MainActor in
+            await syncLockScreenWidgetsAndLiveActivity(
+                entries: entriesAfterDelete,
+                isTodayChange: dayDate.isSameLocalDay(as: Date().startOfDayLocal())
+            )
         }
         dismiss()
+    }
+
+    @MainActor
+    private func syncLockScreenWidgetsAndLiveActivity(entries: [DayEntry], isTodayChange: Bool) async {
+        if isTodayChange {
+            await PayScopeLiveActivityManager.syncAtAppLaunch(
+                settings: settings,
+                entries: entries
+            )
+        } else {
+            PayScopeLiveActivityManager.syncLockScreenWidgets(
+                settings: settings,
+                entries: entries
+            )
+        }
     }
 
     private func deleteLegacyTips(on date: Date) {

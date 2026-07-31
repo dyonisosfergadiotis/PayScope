@@ -1,0 +1,9 @@
+{
+  "id" : "ab8c23fb-f87d-4624-b04b-04cd55442e92",
+  "targets" : [
+    {
+      "id" : "821bf524-a50e-4e27-8552-dd59a4b1f4bc",
+      "name" : "PayScope"
+    }
+  ]
+}

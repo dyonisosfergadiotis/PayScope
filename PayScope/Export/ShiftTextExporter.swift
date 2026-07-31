@@ -673,6 +673,7 @@ struct ShiftPDFExporter {
 
             func uiColor(for color: ShiftCategoryColor) -> UIColor {
                 switch color {
+                case .monochrome: return UIColor.label
                 case .mint: return UIColor(red: 0.22, green: 0.78, blue: 0.56, alpha: 1)
                 case .sage: return UIColor(red: 0.46, green: 0.72, blue: 0.30, alpha: 1)
                 case .sky: return UIColor(red: 0.24, green: 0.58, blue: 0.92, alpha: 1)

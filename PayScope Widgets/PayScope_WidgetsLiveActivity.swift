@@ -35,12 +35,22 @@ struct PayScope_WidgetsLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: PayScope_WidgetsAttributes.self) { context in
             PayScopeLiveActivityLockScreenContent(context: context)
-                .activityBackgroundTint(.clear)
-                .activitySystemActionForegroundColor(Color.primary)
+                .containerBackground(for: .widget) { Color.clear }
+                .activityBackgroundTint(liveActivityBackgroundTint(for: context))
+                .activitySystemActionForegroundColor(liveActivityAccent(for: context.state))
         } dynamicIsland: { context in
             DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    PayScopeLiveActivityDynamicIslandLeadingContent(context: context)
+                }
                 DynamicIslandExpandedRegion(.center) {
-                    PayScopeLiveActivityExpandedContent(context: context)
+                    PayScopeLiveActivityDynamicIslandCenterContent(context: context)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    PayScopeLiveActivityDynamicIslandTrailingContent(context: context)
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    PayScopeLiveActivityDynamicIslandBottomContent(context: context)
                 }
             } compactLeading: {
                 if liveActivityPhase(for: context) == .completed {
@@ -50,7 +60,9 @@ struct PayScope_WidgetsLiveActivity: Widget {
                 } else {
                     switch liveActivityPhase(for: context) {
                     case .active:
-                        PayScopeLiveActivityProgressRing(context: context)
+                        Image(systemName: context.state.isPaused ? "pause.fill" : context.state.shiftCategoryIcon)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(liveActivityAccent(for: context.state))
                     case .upcoming:
                         Image(systemName: context.state.shiftCategoryIcon)
                             .font(.caption.weight(.semibold))
@@ -70,9 +82,17 @@ struct PayScope_WidgetsLiveActivity: Widget {
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(liveActivityAccent(for: context.state))
                 case .active:
-                    Text(Self.activeCompactTrailingText(context))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(liveActivityAccent(for: context.state))
+                    Group {
+                        if context.state.isTimedShift == false {
+                            Text(currencyString(cents: context.state.completedPayCents))
+                        } else if context.state.isPaused, let pauseStartedAt = context.state.pauseStartedAt {
+                            CompactElapsedTimerText(start: pauseStartedAt, end: context.attributes.timelineEnd)
+                        } else {
+                            CompactRemainingTimerText(end: context.attributes.timelineEnd)
+                        }
+                    }
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(liveActivityAccent(for: context.state))
                 }
             } minimal: {
                 Image(systemName: liveActivityPhase(for: context) == .completed ? "checkmark.circle.fill" : (context.state.isPaused ? "pause.circle.fill" : context.state.shiftCategoryIcon))
@@ -94,20 +114,6 @@ struct PayScope_WidgetsLiveActivity: Widget {
         }
 
         return compactTimeString(start)
-    }
-
-    private static func activeCompactTrailingText(_ context: ActivityViewContext<PayScope_WidgetsAttributes>) -> String {
-        if context.state.isTimedShift == false {
-            return currencyString(cents: context.state.completedPayCents)
-        }
-
-        return context.state.isPaused
-            ? "Pause"
-            : endTimeString(
-                start: context.attributes.timelineStart,
-                end: context.attributes.timelineEnd,
-                fallback: context.attributes.timelineEnd
-            )
     }
 
     private static func compactTimeString(_ date: Date) -> String {
@@ -157,12 +163,55 @@ struct PayScope_CurrentShiftCardWidget: Widget {
         ) { entry in
             PayScopeCurrentShiftCardContent(entry: entry)
                 .containerBackground(for: .widget) {
-                    Color.clear
+                    PayScopeHomeWidgetContainerBackground(
+                        accent: homeWidgetAccentColor(from: entry.snapshot.themeAccentRawValue)
+                    )
                 }
         }
-        .configurationDisplayName("Aktuelle Schicht")
-        .description("Zeigt deine aktuelle oder nächste Schicht als kompakte PayScope-Karte.")
+        .configurationDisplayName("Schicht jetzt")
+        .description("Fokussiert auf laufende Schicht und Arbeitszeit.")
         .supportedFamilies([.systemSmall, .systemMedium])
+        .contentMarginsDisabled()
+    }
+}
+
+struct PayScope_NextShiftWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(
+            kind: "PayScopeNextShiftWidget",
+            provider: PayScopeRectangularProvider()
+        ) { entry in
+            PayScopeNextShiftWidgetContent(entry: entry)
+                .containerBackground(for: .widget) {
+                    PayScopeHomeWidgetContainerBackground(
+                        accent: homeWidgetAccentColor(from: entry.snapshot.themeAccentRawValue)
+                    )
+                }
+        }
+        .configurationDisplayName("Nächste Schicht")
+        .description("Zeigt nur den nächsten Start und den Countdown.")
+        .supportedFamilies([.systemSmall, .systemMedium])
+        .contentMarginsDisabled()
+    }
+}
+
+struct PayScope_TodayPayWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(
+            kind: "PayScopeTodayPayWidget",
+            provider: PayScopeRectangularProvider()
+        ) { entry in
+            PayScopeTodayPayWidgetContent(entry: entry)
+                .containerBackground(for: .widget) {
+                    PayScopeHomeWidgetContainerBackground(
+                        accent: homeWidgetAccentColor(from: entry.snapshot.themeAccentRawValue)
+                    )
+                }
+        }
+        .configurationDisplayName("Lohn heute")
+        .description("Zeigt nur heutigen Lohn und Arbeitszeit.")
+        .supportedFamilies([.systemSmall, .systemMedium])
+        .contentMarginsDisabled()
     }
 }
 
@@ -632,14 +681,14 @@ private struct PayScopeRectangularLockScreenContent: View {
                         .lineLimit(1)
                 }
 
-                Text(nextShiftDateString(nextShiftStart))
+                RemainingTimerText(end: nextShiftStart)
                     .font(.title3.monospacedDigit().weight(.bold))
                     .foregroundStyle(accent)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                     .allowsTightening(true)
 
-                Text(timeString(nextShiftStart))
+                Text("bis \(timeString(nextShiftStart)) Uhr")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -740,7 +789,9 @@ private struct PayScopeInlineLockScreenContent: View {
         } else if let nextShiftStart = nextShiftStartForDisplay {
             HStack(spacing: 4) {
                 Image(systemName: displayedShiftCategoryIcon)
-                Text(nextShiftInlineString(nextShiftStart))
+                Text("in")
+                    .font(.caption.weight(.semibold))
+                RemainingTimerText(end: nextShiftStart)
                     .font(.caption.monospacedDigit())
                     .lineLimit(1)
                     .minimumScaleFactor(0.55)
@@ -753,216 +804,19 @@ private struct PayScopeInlineLockScreenContent: View {
     }
 }
 
-private struct PayScopeCurrentShiftCardContent: View {
-    @Environment(\.widgetFamily) private var family
-
-    let entry: PayScopeRectangularEntry
-
-    private var accent: Color {
-        liveAccentColor(from: entry.snapshot.themeAccentRawValue)
+private extension PayScopeRectangularEntry {
+    var displayIcon: String {
+        snapshot.shiftCategoryIcon ?? "briefcase.fill"
     }
 
-    private var icon: String {
-        entry.snapshot.shiftCategoryIcon ?? "briefcase.fill"
+    var displayTitle: String {
+        snapshot.shiftCategoryTitle ?? "Arbeit"
     }
 
-    private var title: String {
-        entry.snapshot.shiftCategoryTitle ?? "Arbeit"
-    }
-
-    var body: some View {
-        TimelineView(.periodic(from: entry.date, by: 60)) { timeline in
-            cardContent(at: timeline.date)
-                .padding(family == .systemSmall ? 14 : 16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .background {
-                    RoundedRectangle(cornerRadius: family == .systemSmall ? 26 : 30, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: family == .systemSmall ? 26 : 30, style: .continuous))
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: family == .systemSmall ? 26 : 30, style: .continuous)
-                        .strokeBorder(.white.opacity(0.22), lineWidth: 0.8)
-                }
-                .padding(6)
-        }
-    }
-
-    @ViewBuilder
-    private func cardContent(at now: Date) -> some View {
-        if isActive(at: now) {
-            activeShiftCard(at: now)
-        } else if isAllDayStatus(at: now) {
-            allDayCard
-        } else if let nextStart = nextShiftStartForDisplay(at: now) {
-            upcomingShiftCard(start: nextStart)
-        } else {
-            emptyCard
-        }
-    }
-
-    private func activeShiftCard(at now: Date) -> some View {
-        VStack(alignment: .leading, spacing: family == .systemSmall ? 10 : 12) {
-            header(status: "Aktiv", statusIcon: "bolt.fill")
-
-            HStack(alignment: .top) {
-                Text(workedTitle(at: now))
-                    .font(.system(size: family == .systemSmall ? 30 : 38, weight: .black, design: .rounded))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.58)
-                    .foregroundStyle(.primary)
-
-                Spacer(minLength: 8)
-
-                Text(remainingText(at: now))
-                    .font(.system(.caption, design: .rounded).weight(.bold))
-                    .monospacedDigit()
-                    .foregroundStyle(accent)
-                    .lineLimit(1)
-                    .multilineTextAlignment(.trailing)
-            }
-
-            progressTrack(progress: progress(at: now))
-
-            HStack {
-                Text(timeString(entry.snapshot.shiftStart ?? now))
-                Spacer(minLength: 8)
-                Text(endTimeString(start: entry.snapshot.shiftStart, end: entry.snapshot.shiftEnd, fallback: now))
-            }
-            .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.62)
-
-            if family == .systemMedium {
-                HStack(spacing: 10) {
-                    metric("Dauer", hhmmString(from: entry.snapshot.shiftDurationSeconds))
-                    if let cents = entry.snapshot.completedPayCents {
-                        metric("Lohn", currencyString(cents: cents))
-                    }
-                }
-            } else {
-                HStack {
-                    Text(hhmmString(from: entry.snapshot.shiftDurationSeconds))
-                    Spacer(minLength: 8)
-                    if let cents = entry.snapshot.completedPayCents {
-                        Text(currencyString(cents: cents))
-                    }
-                }
-                .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.62)
-            }
-        }
-    }
-
-    private var allDayCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header(status: "Heute", statusIcon: "calendar")
-            Spacer(minLength: 0)
-            Text(title)
-                .font(.system(size: family == .systemSmall ? 28 : 34, weight: .black, design: .rounded))
-                .lineLimit(2)
-                .minimumScaleFactor(0.7)
-            Text("Ganztag")
-                .font(.system(.caption, design: .rounded).weight(.bold))
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func upcomingShiftCard(start: Date) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header(status: "Nächste", statusIcon: "clock.fill")
-            Spacer(minLength: 0)
-            Text(nextShiftDateString(start))
-                .font(.system(size: family == .systemSmall ? 24 : 32, weight: .black, design: .rounded))
-                .lineLimit(1)
-                .minimumScaleFactor(0.58)
-                .foregroundStyle(.primary)
-            Text("\(timeString(start)) Uhr")
-                .font(.system(.headline, design: .rounded).weight(.bold))
-                .monospacedDigit()
-                .foregroundStyle(accent)
-        }
-    }
-
-    private var emptyCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header(status: "PayScope", statusIcon: "sparkle")
-            Spacer(minLength: 0)
-            Text("Keine Schicht")
-                .font(.system(size: family == .systemSmall ? 24 : 32, weight: .black, design: .rounded))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            Text("Heute ist nichts geplant")
-                .font(.system(.caption, design: .rounded).weight(.bold))
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func header(status: String, statusIcon: String) -> some View {
-        HStack(spacing: 9) {
-            ZStack {
-                Circle()
-                    .fill(accent.opacity(0.18))
-                Image(systemName: icon)
-                    .font(.system(size: family == .systemSmall ? 15 : 17, weight: .bold))
-                    .foregroundStyle(accent)
-            }
-            .frame(width: family == .systemSmall ? 32 : 36, height: family == .systemSmall ? 32 : 36)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.system(.caption, design: .rounded).weight(.bold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Label(status, systemImage: statusIcon)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(.secondary)
-                    .labelStyle(.titleAndIcon)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func metric(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-            Text(value)
-                .font(.system(size: 13, weight: .bold, design: .rounded).monospacedDigit())
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.65)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func progressTrack(progress: Double) -> some View {
-        GeometryReader { proxy in
-            let width = max(0, proxy.size.width * min(max(progress, 0), 1))
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(.secondary.opacity(0.16))
-                Capsule()
-                    .fill(accent)
-                    .frame(width: width)
-                    .shadow(color: accent.opacity(0.35), radius: 7, y: 1)
-            }
-        }
-        .frame(height: family == .systemSmall ? 7 : 8)
-    }
-
-    private func isActive(at now: Date) -> Bool {
+    func isActive(at now: Date) -> Bool {
         guard
-            let start = entry.snapshot.shiftStart,
-            let end = entry.snapshot.shiftEnd,
+            let start = snapshot.shiftStart,
+            let end = snapshot.shiftEnd,
             end > start
         else {
             return false
@@ -971,153 +825,615 @@ private struct PayScopeCurrentShiftCardContent: View {
         return now >= start && now < end
     }
 
-    private func isAllDayStatus(at now: Date) -> Bool {
-        guard entry.snapshot.hasAllDayStatus, let date = entry.snapshot.allDayDisplayDate else {
+    func isAllDayStatus(at now: Date) -> Bool {
+        guard snapshot.hasAllDayStatus, let date = snapshot.allDayDisplayDate else {
             return false
         }
+
         return Calendar.current.isDate(date, inSameDayAs: now)
     }
 
-    private func nextShiftStartForDisplay(at now: Date) -> Date? {
+    func nextShiftStartForDisplay(at now: Date) -> Date? {
         if
-            let start = entry.snapshot.shiftStart,
-            let end = entry.snapshot.shiftEnd,
+            let start = snapshot.shiftStart,
+            let end = snapshot.shiftEnd,
             end > start,
             now < start
         {
             return start
         }
 
-        if let nextShiftStart = entry.snapshot.nextShiftStart, nextShiftStart > now {
+        if let nextShiftStart = snapshot.nextShiftStart, nextShiftStart > now {
             return nextShiftStart
         }
 
         return nil
     }
 
-    private func workedSeconds(at now: Date) -> Int {
-        if let referenceStart = entry.snapshot.workedReferenceStart {
-            return max(0, Int(now.timeIntervalSince(referenceStart)))
+    func workedSeconds(at now: Date) -> Int {
+        let cappedNow = snapshot.shiftEnd.map { min(now, $0) } ?? now
+
+        if let referenceStart = snapshot.workedReferenceStart {
+            return max(0, Int(cappedNow.timeIntervalSince(referenceStart)))
         }
 
-        guard let start = entry.snapshot.shiftStart else {
-            return entry.snapshot.workedTodaySeconds ?? 0
+        guard let start = snapshot.shiftStart else {
+            return snapshot.workedTodaySeconds ?? 0
         }
 
-        return max(0, Int(now.timeIntervalSince(start)))
+        return max(0, Int(cappedNow.timeIntervalSince(start)))
     }
 
-    private func workedTitle(at now: Date) -> String {
+    func workedTitle(at now: Date) -> String {
         "\(hhmmString(from: workedSeconds(at: now))) h"
     }
 
-    private func remainingText(at now: Date) -> String {
-        guard let end = entry.snapshot.shiftEnd else { return "läuft" }
-        let remaining = max(0, Int(end.timeIntervalSince(now)))
-        return "\(hhmmString(from: remaining)) h übrig"
-    }
-
-    private func progress(at now: Date) -> Double {
-        let total = max(1, entry.snapshot.shiftDurationSeconds)
+    func progress(at now: Date) -> Double {
+        let total = max(1, snapshot.shiftDurationSeconds)
         return min(max(Double(workedSeconds(at: now)) / Double(total), 0), 1)
     }
 }
 
-private struct PayScopeWatchLiveActivitySmallContent: View {
-    let context: ActivityViewContext<PayScope_WidgetsAttributes>
-    let now: Date
+private enum PayScopeHomeWidgetStyle {
+    static let primary = Color.white
+    static let secondary = Color.white.opacity(0.72)
+    static let muted = Color.white.opacity(0.48)
+}
 
-    private var accent: Color {
-        liveActivityAccent(for: context.state)
+private struct PayScopeHomeWidgetContainerBackground: View {
+    let accent: Color
+
+    var body: some View {
+        Color(red: 0.045, green: 0.050, blue: 0.062)
+            .overlay {
+                LinearGradient(
+                    colors: [
+                        accent.opacity(0.22),
+                        Color(red: 0.045, green: 0.050, blue: 0.062).opacity(0.10),
+                        Color.black.opacity(0.20)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
     }
+}
 
-    private var phase: LiveActivityPhase {
-        liveActivityPhase(for: context)
+private struct PayScopeHomeWidgetChrome<Content: View>: View {
+    @Environment(\.widgetFamily) private var family
+
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
     }
 
     var body: some View {
-        VStack(spacing: 7) {
-            PayScopeWatchActivityRing(
-                progress: ringProgress,
-                iconName: iconName,
-                accent: accent,
-                lineWidth: 5
-            )
-            .frame(width: 48, height: 48)
+        content
+            .padding(family == .systemSmall ? 9 : 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
 
-            VStack(spacing: 1) {
-                Text(primaryText)
-                    .font(.system(size: 14, weight: .black, design: .rounded).monospacedDigit())
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.56)
+private struct PayScopeHomeWidgetHeader: View {
+    let title: String
+    let subtitle: String?
+    let icon: String
+    let accent: Color
 
-                Text(secondaryText)
-                    .font(.system(size: 9, weight: .bold, design: .rounded))
+    var body: some View {
+        HStack(spacing: 7) {
+            ZStack {
+                Circle()
+                    .fill(accent.opacity(0.22))
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .black))
                     .foregroundStyle(accent)
+            }
+            .frame(width: 25, height: 25)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 11, weight: .black, design: .rounded))
+                    .foregroundStyle(PayScopeHomeWidgetStyle.primary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.64)
+                    .minimumScaleFactor(0.7)
+
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(PayScopeHomeWidgetStyle.muted)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
             }
-        }
-        .padding(8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background {
-            PayScopeLiveActivityEdgeFade(accent: accent)
-        }
-    }
 
-    private var ringProgress: Double {
-        switch phase {
-        case .completed:
-            return 1
-        case .upcoming:
-            return 0
-        case .active:
-            return context.state.isTimedShift == false ? 1 : liveActivityProgress(for: context, now: now)
-        }
-    }
-
-    private var iconName: String {
-        switch phase {
-        case .completed:
-            return "checkmark"
-        case .upcoming:
-            return context.state.shiftCategoryIcon
-        case .active:
-            return context.state.isPaused ? "pause.fill" : context.state.shiftCategoryIcon
-        }
-    }
-
-    private var primaryText: String {
-        switch phase {
-        case .completed:
-            return currencyString(cents: context.state.completedPayCents)
-        case .upcoming:
-            return timeString(context.attributes.timelineStart)
-        case .active:
-            if context.state.isTimedShift == false {
-                return hhmmString(from: context.state.workedTodaySeconds)
-            }
-            if context.state.isPaused, let pauseStartedAt = context.state.pauseStartedAt {
-                return hhmmString(from: max(0, Int(min(now, context.attributes.timelineEnd).timeIntervalSince(pauseStartedAt))))
-            }
-            return hhmmString(from: max(0, Int(context.attributes.timelineEnd.timeIntervalSince(now))))
-        }
-    }
-
-    private var secondaryText: String {
-        switch phase {
-        case .completed:
-            return "fertig"
-        case .upcoming:
-            return "Start"
-        case .active:
-            return context.state.isPaused ? "Pause" : "läuft"
+            Spacer(minLength: 0)
         }
     }
 }
 
-private struct PayScopeWatchLiveActivityMediumContent: View {
+private struct PayScopeHomeLayerCard<Content: View>: View {
+    let accent: Color
+    let prominence: Double
+    let content: Content
+
+    init(accent: Color, prominence: Double = 0.12, @ViewBuilder content: () -> Content) {
+        self.accent = accent
+        self.prominence = prominence
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.white.opacity(0.075))
+                    .overlay(alignment: .topLeading) {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(accent.opacity(prominence))
+                    }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 0.75)
+            }
+    }
+}
+
+private struct PayScopeHomeInfoPill: View {
+    let text: String
+    let icon: String
+    let accent: Color
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .black))
+            Text(text)
+                .font(.system(size: 10, weight: .black, design: .rounded).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.62)
+        }
+        .foregroundStyle(PayScopeHomeWidgetStyle.primary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background {
+            Capsule()
+                .fill(accent.opacity(0.20))
+        }
+    }
+}
+
+private struct PayScopeHomeProgressBar: View {
+    let accent: Color
+    let progress: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = max(0, proxy.size.width * min(max(progress, 0), 1))
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(PayScopeHomeWidgetStyle.primary.opacity(0.16))
+                Capsule()
+                    .fill(accent)
+                    .frame(width: width)
+            }
+        }
+        .frame(height: 7)
+    }
+}
+
+private struct PayScopeCurrentShiftCardContent: View {
+    @Environment(\.widgetFamily) private var family
+
+    let entry: PayScopeRectangularEntry
+
+    private var accent: Color {
+        homeWidgetAccentColor(from: entry.snapshot.themeAccentRawValue)
+    }
+
+    var body: some View {
+        TimelineView(.periodic(from: entry.date, by: 1)) { timeline in
+            PayScopeHomeWidgetChrome {
+                if entry.isActive(at: timeline.date) {
+                    activeContent(at: timeline.date)
+                } else if entry.isAllDayStatus(at: timeline.date) {
+                    allDayContent
+                } else if let nextStart = entry.nextShiftStartForDisplay(at: timeline.date) {
+                    inactiveContent(nextStart: nextStart, now: timeline.date)
+                } else {
+                    emptyContent
+                }
+            }
+        }
+    }
+
+    private func activeContent(at now: Date) -> some View {
+        VStack(alignment: .leading, spacing: family == .systemSmall ? 7 : 9) {
+            PayScopeHomeWidgetHeader(title: "Jetzt", subtitle: entry.displayTitle, icon: entry.displayIcon, accent: accent)
+
+            PayScopeHomeLayerCard(accent: accent, prominence: 0.18) {
+                VStack(alignment: .leading, spacing: family == .systemSmall ? 5 : 7) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(entry.workedTitle(at: now))
+                            .font(.system(size: family == .systemSmall ? 27 : 40, weight: .black, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(PayScopeHomeWidgetStyle.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.46)
+
+                        Spacer(minLength: 4)
+
+                        Text("\(Int(entry.progress(at: now) * 100))%")
+                            .font(.system(size: family == .systemSmall ? 11 : 13, weight: .black, design: .rounded).monospacedDigit())
+                            .foregroundStyle(accent)
+                            .lineLimit(1)
+                    }
+
+                    PayScopeHomeProgressBar(accent: accent, progress: entry.progress(at: now))
+
+                    HStack(spacing: 6) {
+                        PayScopeHomeInfoPill(text: activeFooter(at: now), icon: "flag.checkered", accent: accent)
+                        if family != .systemSmall, let nextStart = entry.snapshot.nextShiftStart {
+                            PayScopeHomeInfoPill(text: "danach \(nextShiftInlineString(nextStart))", icon: "calendar.badge.clock", accent: accent)
+                        }
+                    }
+                }
+            }
+
+            if family == .systemSmall, let nextStart = entry.snapshot.nextShiftStart {
+                compactLayer(title: "Danach", value: nextShiftInlineString(nextStart), icon: "calendar.badge.clock")
+            } else if family != .systemSmall {
+                compactLayer(title: "Lohn heute", value: currencyString(cents: entry.snapshot.completedPayCents ?? 0), icon: "eurosign.circle.fill")
+            }
+        }
+    }
+
+    private var allDayContent: some View {
+        VStack(alignment: .leading, spacing: family == .systemSmall ? 7 : 9) {
+            PayScopeHomeWidgetHeader(title: "Heute", subtitle: nil, icon: entry.displayIcon, accent: accent)
+
+            PayScopeHomeLayerCard(accent: accent, prominence: 0.18) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(entry.displayTitle)
+                        .font(.system(size: family == .systemSmall ? 25 : 36, weight: .black, design: .rounded))
+                        .foregroundStyle(PayScopeHomeWidgetStyle.primary)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.58)
+
+                    Text("Ganztag")
+                        .font(.system(size: family == .systemSmall ? 11 : 13, weight: .black, design: .rounded))
+                        .foregroundStyle(accent)
+                }
+            }
+
+            if let date = entry.snapshot.allDayDisplayDate {
+                compactLayer(title: "Datum", value: allDayStatusDateString(date), icon: "calendar")
+            }
+        }
+    }
+
+    private func inactiveContent(nextStart: Date, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: family == .systemSmall ? 7 : 9) {
+            PayScopeHomeWidgetHeader(title: "Heute frei", subtitle: entry.displayTitle, icon: entry.displayIcon, accent: accent)
+
+            PayScopeHomeLayerCard(accent: accent, prominence: 0.18) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Nächste")
+                        .font(.system(size: family == .systemSmall ? 24 : 36, weight: .black, design: .rounded))
+                        .foregroundStyle(PayScopeHomeWidgetStyle.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+
+                    Text(nextShiftInlineString(nextStart))
+                        .font(.system(size: family == .systemSmall ? 11 : 14, weight: .black, design: .rounded).monospacedDigit())
+                        .foregroundStyle(accent)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.62)
+                }
+            }
+
+            compactLayer(title: "Countdown", value: compactRemainingString(to: nextStart, from: now), icon: "timer")
+        }
+    }
+
+    private var emptyContent: some View {
+        VStack(alignment: .leading, spacing: family == .systemSmall ? 7 : 9) {
+            PayScopeHomeWidgetHeader(title: "PayScope", subtitle: nil, icon: "sparkle", accent: accent)
+
+            PayScopeHomeLayerCard(accent: accent, prominence: 0.14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Frei")
+                        .font(.system(size: family == .systemSmall ? 30 : 42, weight: .black, design: .rounded))
+                        .foregroundStyle(PayScopeHomeWidgetStyle.primary)
+                        .lineLimit(1)
+
+                    Text("Keine Schicht aktiv")
+                        .font(.system(size: family == .systemSmall ? 11 : 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(PayScopeHomeWidgetStyle.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    private func compactLayer(title: String, value: String, icon: String) -> some View {
+        PayScopeHomeLayerCard(accent: accent, prominence: 0.10) {
+            HStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .black))
+                    .foregroundStyle(accent)
+                    .frame(width: 14)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 9, weight: .black, design: .rounded))
+                        .foregroundStyle(PayScopeHomeWidgetStyle.muted)
+                        .lineLimit(1)
+
+                    Text(value)
+                        .font(.system(size: family == .systemSmall ? 11 : 13, weight: .black, design: .rounded).monospacedDigit())
+                        .foregroundStyle(PayScopeHomeWidgetStyle.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.58)
+                }
+            }
+        }
+    }
+
+    private func activeFooter(at now: Date) -> String {
+        guard let end = entry.snapshot.shiftEnd else {
+            return "läuft gerade"
+        }
+
+        return "bis \(endTimeString(start: entry.snapshot.shiftStart, end: end, fallback: now)) Uhr"
+    }
+}
+
+private struct PayScopeNextShiftWidgetContent: View {
+    @Environment(\.widgetFamily) private var family
+
+    let entry: PayScopeRectangularEntry
+
+    private var accent: Color {
+        homeWidgetAccentColor(from: entry.snapshot.themeAccentRawValue)
+    }
+
+    var body: some View {
+        TimelineView(.periodic(from: entry.date, by: 1)) { timeline in
+            PayScopeHomeWidgetChrome {
+                if let nextStart = entry.nextShiftStartForDisplay(at: timeline.date) {
+                    nextShiftContent(start: nextStart, now: timeline.date)
+                } else if entry.isActive(at: timeline.date) {
+                    activeFallback(at: timeline.date)
+                } else if entry.isAllDayStatus(at: timeline.date) {
+                    allDayFallback
+                } else {
+                    emptyContent
+                }
+            }
+        }
+    }
+
+    private func nextShiftContent(start: Date, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: family == .systemSmall ? 7 : 9) {
+            PayScopeHomeWidgetHeader(title: "Nächste", subtitle: entry.displayTitle, icon: "calendar.badge.clock", accent: accent)
+
+            PayScopeHomeLayerCard(accent: accent, prominence: 0.18) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("in")
+                        .font(.system(size: 10, weight: .black, design: .rounded))
+                        .foregroundStyle(PayScopeHomeWidgetStyle.muted)
+
+                    RemainingTimerText(end: start)
+                        .font(.system(size: family == .systemSmall ? 27 : 42, weight: .black, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(PayScopeHomeWidgetStyle.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.44)
+                }
+            }
+
+            HStack(spacing: 7) {
+                miniMetric(title: "Start", value: nextShiftInlineString(start), icon: "clock.fill")
+                if family != .systemSmall {
+                    miniMetric(title: "Heute", value: entry.workedTitle(at: now), icon: "briefcase.fill")
+                }
+            }
+        }
+    }
+
+    private func activeFallback(at now: Date) -> some View {
+        VStack(alignment: .leading, spacing: family == .systemSmall ? 7 : 9) {
+            PayScopeHomeWidgetHeader(title: "Nächste", subtitle: "läuft gerade", icon: entry.displayIcon, accent: accent)
+
+            PayScopeHomeLayerCard(accent: accent, prominence: 0.18) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Jetzt")
+                        .font(.system(size: family == .systemSmall ? 29 : 42, weight: .black, design: .rounded))
+                        .foregroundStyle(PayScopeHomeWidgetStyle.primary)
+                        .lineLimit(1)
+
+                    Text(activeEndText(at: now))
+                        .font(.system(size: family == .systemSmall ? 11 : 14, weight: .black, design: .rounded).monospacedDigit())
+                        .foregroundStyle(accent)
+                        .lineLimit(1)
+                }
+            }
+
+            if let nextStart = entry.snapshot.nextShiftStart {
+                miniMetric(title: "Danach", value: nextShiftInlineString(nextStart), icon: "calendar")
+            }
+        }
+    }
+
+    private var allDayFallback: some View {
+        VStack(alignment: .leading, spacing: family == .systemSmall ? 7 : 9) {
+            PayScopeHomeWidgetHeader(title: "Heute", subtitle: "Ganztag", icon: entry.displayIcon, accent: accent)
+
+            PayScopeHomeLayerCard(accent: accent, prominence: 0.18) {
+                Text(entry.displayTitle)
+                    .font(.system(size: family == .systemSmall ? 27 : 40, weight: .black, design: .rounded))
+                    .foregroundStyle(PayScopeHomeWidgetStyle.primary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.56)
+            }
+        }
+    }
+
+    private var emptyContent: some View {
+        VStack(alignment: .leading, spacing: family == .systemSmall ? 7 : 9) {
+            PayScopeHomeWidgetHeader(title: "Nächste", subtitle: nil, icon: "calendar.badge.clock", accent: accent)
+
+            PayScopeHomeLayerCard(accent: accent, prominence: 0.14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Keine")
+                        .font(.system(size: family == .systemSmall ? 30 : 42, weight: .black, design: .rounded))
+                        .foregroundStyle(PayScopeHomeWidgetStyle.primary)
+                        .lineLimit(1)
+
+                    Text("Schicht geplant")
+                        .font(.system(size: family == .systemSmall ? 11 : 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(PayScopeHomeWidgetStyle.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    private func miniMetric(title: String, value: String, icon: String) -> some View {
+        PayScopeHomeLayerCard(accent: accent, prominence: 0.10) {
+            HStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .black))
+                    .foregroundStyle(accent)
+                    .frame(width: 13)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 9, weight: .black, design: .rounded))
+                        .foregroundStyle(PayScopeHomeWidgetStyle.muted)
+                        .lineLimit(1)
+
+                    Text(value)
+                        .font(.system(size: family == .systemSmall ? 10 : 12, weight: .black, design: .rounded).monospacedDigit())
+                        .foregroundStyle(PayScopeHomeWidgetStyle.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.56)
+                }
+            }
+        }
+    }
+
+    private func activeEndText(at now: Date) -> String {
+        guard let end = entry.snapshot.shiftEnd else {
+            return "läuft gerade"
+        }
+
+        return "bis \(endTimeString(start: entry.snapshot.shiftStart, end: end, fallback: now)) Uhr"
+    }
+}
+
+private struct PayScopeTodayPayWidgetContent: View {
+    @Environment(\.widgetFamily) private var family
+
+    let entry: PayScopeRectangularEntry
+
+    private var accent: Color {
+        homeWidgetAccentColor(from: entry.snapshot.themeAccentRawValue)
+    }
+
+    var body: some View {
+        TimelineView(.periodic(from: entry.date, by: 1)) { timeline in
+            PayScopeHomeWidgetChrome {
+                payContent(at: timeline.date)
+            }
+        }
+    }
+
+    private func payContent(at now: Date) -> some View {
+        VStack(alignment: .leading, spacing: family == .systemSmall ? 7 : 9) {
+            PayScopeHomeWidgetHeader(title: "Lohn", subtitle: "Heute", icon: "eurosign.circle.fill", accent: accent)
+
+            PayScopeHomeLayerCard(accent: accent, prominence: 0.18) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(currencyString(cents: entry.snapshot.completedPayCents ?? 0))
+                        .font(.system(size: family == .systemSmall ? 27 : 42, weight: .black, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(PayScopeHomeWidgetStyle.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.44)
+
+                    Text(workedSubtitle(at: now))
+                        .font(.system(size: family == .systemSmall ? 10 : 13, weight: .black, design: .rounded).monospacedDigit())
+                        .foregroundStyle(accent)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.58)
+                }
+            }
+
+            if entry.isActive(at: now) {
+                hybridLayer(title: "Aktuell", value: activeEndText(at: now), icon: entry.displayIcon)
+            } else if let nextStart = entry.nextShiftStartForDisplay(at: now) {
+                hybridLayer(title: "Nächste", value: nextShiftInlineString(nextStart), icon: "calendar.badge.clock")
+            } else if entry.isAllDayStatus(at: now) {
+                hybridLayer(title: "Heute", value: "Ganztag", icon: entry.displayIcon)
+            } else {
+                hybridLayer(title: "Status", value: "frei", icon: "moon.zzz.fill")
+            }
+        }
+    }
+
+    private func workedSubtitle(at now: Date) -> String {
+        let seconds = entry.workedSeconds(at: now)
+
+        guard seconds > 0 else {
+            return "noch keine Arbeitszeit"
+        }
+
+        return "\(hhmmString(from: seconds)) h gearbeitet"
+    }
+
+    private func activeEndText(at now: Date) -> String {
+        guard let end = entry.snapshot.shiftEnd else {
+            return "läuft"
+        }
+
+        return "bis \(endTimeString(start: entry.snapshot.shiftStart, end: end, fallback: now))"
+    }
+
+    private func hybridLayer(title: String, value: String, icon: String) -> some View {
+        PayScopeHomeLayerCard(accent: accent, prominence: 0.10) {
+            HStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .black))
+                    .foregroundStyle(accent)
+                    .frame(width: 14)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 9, weight: .black, design: .rounded))
+                        .foregroundStyle(PayScopeHomeWidgetStyle.muted)
+                        .lineLimit(1)
+
+                    Text(value)
+                        .font(.system(size: family == .systemSmall ? 11 : 13, weight: .black, design: .rounded).monospacedDigit())
+                        .foregroundStyle(PayScopeHomeWidgetStyle.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.56)
+                }
+            }
+        }
+    }
+}
+
+private struct PayScopeWatchLiveActivitySmallContent: View {
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+
     let context: ActivityViewContext<PayScope_WidgetsAttributes>
     let now: Date
 
@@ -1126,74 +1442,50 @@ private struct PayScopeWatchLiveActivityMediumContent: View {
     }
 
     private var phase: LiveActivityPhase {
-        liveActivityPhase(for: context)
+        liveActivityPhase(for: context, now: now)
     }
 
     var body: some View {
-        HStack(spacing: 11) {
-            PayScopeWatchActivityRing(
-                progress: ringProgress,
-                iconName: iconName,
+        VStack(alignment: .leading, spacing: 8) {
+            primaryCountdown
+                .font(.system(size: 40, weight: .black, design: .rounded).monospacedDigit())
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.42)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            PayScopeWatchLiveActivityProgressBar(
                 accent: accent,
-                lineWidth: 6
+                progress: progress,
+                isLuminanceReduced: isLuminanceReduced,
+                height: 5
             )
-            .frame(width: 58, height: 58)
 
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .top, spacing: 8) {
-                    Text(title)
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.74))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-
-                    Spacer(minLength: 6)
-
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text(currencyString(cents: context.state.completedPayCents))
-                            .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
-                            .foregroundStyle(accent)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.62)
-
-                        Text("Start \(timeString(context.attributes.timelineStart))")
-                            .font(.system(size: 9, weight: .bold, design: .rounded).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.46))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.68)
-                    }
-                    .fixedSize(horizontal: true, vertical: false)
-                }
-
-                Text(primaryText)
-                    .font(.system(size: 22, weight: .black, design: .rounded).monospacedDigit())
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.52)
-
-                HStack(alignment: .center, spacing: 8) {
-                    Text(secondaryText)
-                        .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.48))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.62)
-
-                    Spacer(minLength: 6)
-
-                    pauseButton
-                }
+            HStack(spacing: 8) {
+                watchTime(value: timeString(context.attributes.timelineStart))
+                Spacer(minLength: 0)
+                watchTime(
+                    value: endTimeString(
+                        start: context.attributes.timelineStart,
+                        end: context.attributes.timelineEnd,
+                        fallback: context.attributes.timelineEnd
+                    )
+                )
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 10)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background {
-            PayScopeLiveActivityEdgeFade(accent: accent)
+            WatchLiveActivityGlassBackground(
+                accent: accent,
+                isActive: phase == .active,
+                isLuminanceReduced: isLuminanceReduced
+            )
         }
     }
 
-    private var ringProgress: Double {
+    private var progress: Double {
         switch phase {
         case .completed:
             return 1
@@ -1204,58 +1496,140 @@ private struct PayScopeWatchLiveActivityMediumContent: View {
         }
     }
 
-    private var iconName: String {
+    @ViewBuilder
+    private var primaryCountdown: some View {
         switch phase {
         case .completed:
-            return "checkmark"
+            Text(hhmmString(from: context.state.workedTodaySeconds))
         case .upcoming:
-            return context.state.shiftCategoryIcon
-        case .active:
-            return context.state.isPaused ? "pause.fill" : context.state.shiftCategoryIcon
-        }
-    }
-
-    private var title: String {
-        switch phase {
-        case .completed:
-            return "Schicht beendet"
-        case .upcoming:
-            return "Nächste Schicht"
-        case .active:
-            return context.state.isPaused ? "Pause läuft" : context.attributes.title
-        }
-    }
-
-    private var primaryText: String {
-        switch phase {
-        case .completed:
-            return hhmmString(from: context.state.workedTodaySeconds)
-        case .upcoming:
-            return timeString(context.attributes.timelineStart)
+            let current = min(Date(), context.attributes.timelineStart)
+            Text(timerInterval: current...context.attributes.timelineStart, countsDown: true, showsHours: true)
         case .active:
             if context.state.isTimedShift == false {
-                return hhmmString(from: context.state.workedTodaySeconds)
+                Text(hhmmString(from: context.state.workedTodaySeconds))
+            } else if context.state.isPaused, let pauseStartedAt = context.state.pauseStartedAt {
+                Text(timerInterval: pauseStartedAt...context.attributes.timelineEnd, countsDown: false, showsHours: true)
+            } else {
+                let current = min(Date(), context.attributes.timelineEnd)
+                Text(timerInterval: current...context.attributes.timelineEnd, countsDown: true, showsHours: true)
             }
-            if context.state.isPaused, let pauseStartedAt = context.state.pauseStartedAt {
-                return hhmmString(from: max(0, Int(min(now, context.attributes.timelineEnd).timeIntervalSince(pauseStartedAt))))
-            }
-            return hhmmString(from: max(0, Int(context.attributes.timelineEnd.timeIntervalSince(now))))
         }
     }
 
-    private var secondaryText: String {
-        switch phase {
-        case .completed:
-            return "gearbeitet"
-        case .upcoming:
-            return nextShiftDateString(context.attributes.timelineStart)
-        case .active:
-            return context.state.isPaused ? "Pause" : endTimeString(
-                start: context.attributes.timelineStart,
-                end: context.attributes.timelineEnd,
-                fallback: context.attributes.timelineEnd
+    private func watchTime(value: String) -> some View {
+        Text(value)
+            .font(.system(size: 12, weight: .black, design: .rounded).monospacedDigit())
+            .foregroundStyle(.white.opacity(isLuminanceReduced ? 0.70 : 0.88))
+            .lineLimit(1)
+            .minimumScaleFactor(0.68)
+    }
+}
+
+private struct PayScopeWatchLiveActivityMediumContent: View {
+    @Environment(\.isLuminanceReduced) private var isLuminanceReduced
+
+    let context: ActivityViewContext<PayScope_WidgetsAttributes>
+    let now: Date
+
+    private var accent: Color {
+        liveActivityAccent(for: context.state)
+    }
+
+    private var phase: LiveActivityPhase {
+        liveActivityPhase(for: context, now: now)
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let layout = WatchLiveActivityMediumLayout(size: geometry.size)
+
+            ZStack(alignment: .top) {
+                WatchLiveActivityGlassBackground(
+                    accent: accent,
+                    isActive: phase == .active,
+                    isLuminanceReduced: isLuminanceReduced
+                )
+
+                VStack(alignment: .leading, spacing: layout.stackSpacing) {
+                    watchCountdown(layout: layout)
+                    PayScopeWatchLiveActivityProgressBar(
+                        accent: accent,
+                        progress: progress,
+                        isLuminanceReduced: isLuminanceReduced,
+                        height: layout.progressHeight
+                    )
+                    watchTimeRow(layout: layout)
+                }
+                .padding(.horizontal, layout.horizontalPadding)
+                .padding(.vertical, layout.verticalPadding)
+            }
+        }
+    }
+
+    private func watchCountdown(layout: WatchLiveActivityMediumLayout) -> some View {
+        primaryCountdown
+            .font(.system(size: layout.countdownFontSize, weight: .black, design: .rounded).monospacedDigit())
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .minimumScaleFactor(0.40)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func watchTimeRow(layout: WatchLiveActivityMediumLayout) -> some View {
+        HStack(alignment: .top, spacing: layout.metricSpacing) {
+            watchMetric(value: timeString(context.attributes.timelineStart), alignment: .leading)
+
+            Spacer(minLength: 0)
+
+            watchMetric(
+                value: endTimeString(
+                    start: context.attributes.timelineStart,
+                    end: context.attributes.timelineEnd,
+                    fallback: context.attributes.timelineEnd
+                ),
+                alignment: .trailing
             )
         }
+    }
+
+    private var progress: Double {
+        switch phase {
+        case .completed:
+            return 1
+        case .upcoming:
+            return 0
+        case .active:
+            return context.state.isTimedShift == false ? 1 : liveActivityProgress(for: context, now: now)
+        }
+    }
+
+    @ViewBuilder
+    private var primaryCountdown: some View {
+        switch phase {
+        case .completed:
+            Text(hhmmString(from: context.state.workedTodaySeconds))
+        case .upcoming:
+            let current = min(Date(), context.attributes.timelineStart)
+            Text(timerInterval: current...context.attributes.timelineStart, countsDown: true, showsHours: true)
+        case .active:
+            if context.state.isTimedShift == false {
+                Text(hhmmString(from: context.state.workedTodaySeconds))
+            } else if context.state.isPaused, let pauseStartedAt = context.state.pauseStartedAt {
+                Text(timerInterval: pauseStartedAt...context.attributes.timelineEnd, countsDown: false, showsHours: true)
+            } else {
+                let current = min(Date(), context.attributes.timelineEnd)
+                Text(timerInterval: current...context.attributes.timelineEnd, countsDown: true, showsHours: true)
+            }
+        }
+    }
+
+    private func watchMetric(value: String, alignment: HorizontalAlignment) -> some View {
+        Text(value)
+            .font(.system(size: 20, weight: .black, design: .rounded).monospacedDigit())
+            .foregroundStyle(.white.opacity(isLuminanceReduced ? 0.72 : 0.94))
+            .lineLimit(1)
+            .minimumScaleFactor(0.64)
+        .frame(minWidth: 50, alignment: alignment == .trailing ? .trailing : .leading)
     }
 
     @ViewBuilder
@@ -1286,29 +1660,70 @@ private struct PayScopeWatchLiveActivityMediumContent: View {
     }
 }
 
-private struct PayScopeWatchActivityRing: View {
-    let progress: Double
-    let iconName: String
+private struct PayScopeWatchLiveActivityProgressBar: View {
     let accent: Color
-    let lineWidth: CGFloat
+    let progress: Double
+    let isLuminanceReduced: Bool
+    let height: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            let clampedProgress = min(max(progress, 0), 1)
+            let width = proxy.size.width * clampedProgress
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.white.opacity(isLuminanceReduced ? 0.10 : 0.14))
+
+                Capsule()
+                    .fill(isLuminanceReduced ? .white.opacity(0.68) : accent)
+                    .frame(width: width)
+            }
+        }
+        .frame(height: height)
+    }
+}
+
+private struct WatchLiveActivityGlassBackground: View {
+    let accent: Color
+    let isActive: Bool
+    var isLuminanceReduced: Bool = false
 
     var body: some View {
         ZStack {
-            Circle()
-                .stroke(accent.opacity(0.18), lineWidth: lineWidth)
+            Color.black
 
-            Circle()
-                .trim(from: 0, to: min(max(progress, 0), 1))
-                .stroke(
-                    accent,
-                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+            if !isLuminanceReduced {
+                LinearGradient(
+                    colors: [
+                        accent.opacity(isActive ? 0.20 : 0.12),
+                        Color(red: 0.06, green: 0.10, blue: 0.12).opacity(0.74),
+                        Color.black.opacity(0.94)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
                 )
-                .rotationEffect(.degrees(-90))
-
-            Image(systemName: iconName)
-                .font(.system(size: lineWidth > 5 ? 20 : 16, weight: .black))
-                .foregroundStyle(accent)
+            }
         }
+    }
+}
+
+private struct WatchLiveActivityMediumLayout {
+    let horizontalPadding: CGFloat
+    let verticalPadding: CGFloat
+    let stackSpacing: CGFloat
+    let countdownFontSize: CGFloat
+    let progressHeight: CGFloat
+    let metricSpacing: CGFloat
+
+    init(size: CGSize) {
+        let compactness = min(max((size.height - 150) / 42, 0), 1)
+        horizontalPadding = max(10, min(14, size.width * 0.055))
+        verticalPadding = max(12, min(16, size.height * 0.074))
+        stackSpacing = 12 + compactness * 3
+        countdownFontSize = max(58, min(74, size.width * 0.32))
+        progressHeight = max(6, min(8, size.height * 0.038))
+        metricSpacing = max(14, min(22, size.width * 0.08))
     }
 }
 
@@ -1326,101 +1741,180 @@ private struct PayScopeLiveActivityLockScreenContent: View {
     }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { timeline in
+        TimelineView(.periodic(from: .now, by: 1)) { timeline in
             if activityFamily == .small {
-                PayScopeWatchLiveActivitySmallContent(
-                    context: context,
-                    now: timeline.date
-                )
-            } else if activityFamily == .medium {
-                PayScopeWatchLiveActivityMediumContent(
-                    context: context,
-                    now: timeline.date
-                )
-            } else {
-                Group {
-                    switch phase {
-                    case .completed:
-                        completedContent
-                    case .upcoming:
-                        upcomingContent
-                    case .active:
-                        activeContent
+                GeometryReader { geometry in
+                    if geometry.size.width > 260 {
+                        lockScreenContent(at: timeline.date)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    } else {
+                        PayScopeWatchLiveActivitySmallContent(
+                            context: context,
+                            now: timeline.date
+                        )
                     }
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background {
-                    PayScopeLiveActivityEdgeFade(accent: accent)
+            } else if activityFamily == .medium {
+                GeometryReader { geometry in
+                    if geometry.size.width > 320 {
+                        lockScreenContent(at: timeline.date)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    } else {
+                        PayScopeWatchLiveActivityMediumContent(
+                            context: context,
+                            now: timeline.date
+                        )
+                    }
                 }
+            } else {
+                lockScreenContent(at: timeline.date)
             }
         }
     }
 
     @ViewBuilder
-    private var activeContent: some View {
-        if context.state.isTimedShift == false {
-            staticStatusContent
-        } else {
-            timedActiveContent
+    private func lockScreenContent(at now: Date) -> some View {
+        switch liveActivityPhase(for: context, now: now) {
+        case .completed:
+            completedContent
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 0)
+                .padding(.vertical, 2)
+        case .upcoming:
+            upcomingContent
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background {
+                    PayScopeLiveActivityEdgeFade(accent: accent)
+                }
+        case .active:
+            activeContent(at: now)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 0)
+                .padding(.vertical, 2)
         }
     }
 
-    private var timedActiveContent: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(context.attributes.title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .textCase(.uppercase)
-                    .tracking(0.7)
-                    .foregroundStyle(.white.opacity(0.52))
-                    .lineLimit(1)
-
-                Spacer(minLength: 12)
-
-                Text(currencyString(cents: context.state.completedPayCents))
-                    .font(.system(size: 13, weight: .bold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(accent)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-            }
-
-            HStack(alignment: .bottom, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    primaryCountdown
-
-                    Text(shiftArrowRangeString(
-                        start: context.attributes.timelineStart,
-                        end: context.attributes.timelineEnd
-                    ))
-                    .font(.system(size: 10, weight: .regular).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.38))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
+    @ViewBuilder
+    private func activeContent(at now: Date) -> some View {
+        if context.state.isTimedShift == false {
+            staticStatusContent
+                .padding(16)
+                .background {
+                    PayScopeLiveActivityEdgeFade(accent: accent)
                 }
-                .layoutPriority(2)
+        } else {
+            timedActiveContent(at: now)
+        }
+    }
 
-                Spacer(minLength: 12)
+    private func timedActiveContent(at now: Date) -> some View {
+        HStack(spacing: 10) {
+            PayScopeLockScreenCountdownRing(
+                progress: liveActivityProgress(for: context, now: now),
+                timerInterval: context.attributes.timelineStart...context.attributes.timelineEnd,
+                iconName: context.state.isPaused ? "pause.fill" : context.state.shiftCategoryIcon,
+                accent: accent
+            )
+            .frame(width: 44, height: 44)
 
-                VStack(alignment: .trailing, spacing: 2) {
-                    workedTimer
-                        .font(.system(size: 17, weight: .bold, design: .rounded).monospacedDigit())
+            VStack(alignment: .leading, spacing: 1) {
+
+                lockScreenPrimaryCountdown
+
+                HStack{
+                    Text(lockScreenTimeRange)
+                        .font(.system(size: 8, weight: .black, design: .rounded))
                         .foregroundStyle(accent)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-
-                    Text("gearbeitet")
-                        .font(.system(size: 9, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.32))
+                        .minimumScaleFactor(0.72)
+                        .padding(.leading, 5)
                 }
+                    
             }
-            .padding(.top, 4)
+            .layoutPriority(2)
 
-            HStack {
-                Spacer(minLength: 0)
-                pauseButton
+            Spacer(minLength: 4)
+
+            lockScreenPauseButton
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+        /*.background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.black.opacity(0.18))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    //accent.opacity(0.13),
+                                    .clear
+                                    //.white.opacity(0.03)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .strokeBorder(accent.opacity(0.16), lineWidth: 0.75)
+                }
+        }*/
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private var lockScreenTimeRange: String {
+        "\(timeString(context.attributes.timelineStart)) → \(endTimeString(start: context.attributes.timelineStart, end: context.attributes.timelineEnd, fallback: context.attributes.timelineEnd))"
+    }
+
+    @ViewBuilder
+    private var lockScreenPrimaryCountdown: some View {
+        if context.state.isPaused, let pauseStartedAt = context.state.pauseStartedAt {
+            PauseTimerText(start: pauseStartedAt, end: context.attributes.timelineEnd)
+                .font(.system(size: 27, weight: .black, design: .rounded).monospacedDigit())
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.58)
+        } else {
+            RemainingTimerText(end: context.attributes.timelineEnd)
+                .font(.system(size: 27, weight: .black, design: .rounded).monospacedDigit())
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.58)
+        }
+    }
+
+    @ViewBuilder
+    private var lockScreenPauseButton: some View {
+        if context.state.isPaused {
+            Button(intent: EndPauseControlIntent()) {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 15, weight: .black))
+                    .foregroundStyle(accent)
+                    .frame(width: 38, height: 38)
+                    .background(accent.opacity(0.13), in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(accent.opacity(0.30), lineWidth: 1)
+                    }
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
+            .buttonStyle(.plain)
+        } else {
+            Button(intent: StartPauseControlIntent()) {
+                Image(systemName: "pause.fill")
+                    .font(.system(size: 15, weight: .black))
+                    .foregroundStyle(accent)
+                    .frame(width: 38, height: 38)
+                    //.background(accent.opacity(0.13), in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(accent.opacity(0.30), lineWidth: 1)
+                    }
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -1473,78 +1967,74 @@ private struct PayScopeLiveActivityLockScreenContent: View {
     }
 
     private var completedContent: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 7) {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(accent)
-                    .frame(width: 20, height: 20)
-                    .overlay {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
+        HStack(alignment: .center, spacing: 10) {
+            PayScopeLockScreenCountdownRing(
+                progress: 1,
+                iconName: "checkmark",
+                accent: accent
+            )
+            .frame(width: 44, height: 44)
 
-                Text("PayScope")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.56))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Schicht beendet")
+                    .font(.system(size: 17, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                    .allowsTightening(true)
 
-                Spacer(minLength: 8)
-
-                Text("jetzt")
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.34))
+                Text("Gut gemacht!")
+                    .font(.system(size: 10, weight: .black))
+                    .textCase(.uppercase)
+                    .tracking(0.6)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
             }
-            .padding(.bottom, 10)
+            .layoutPriority(2)
 
-            Text("Guter Job heute")
-                .font(.system(size: 10, weight: .semibold))
-                .textCase(.uppercase)
-                .tracking(0.6)
-                .foregroundStyle(.white.opacity(0.36))
-                .padding(.bottom, 3)
+            Spacer(minLength: 8)
 
-            Text("Schicht beendet")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.bottom, 10)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(currencyString(cents: context.state.completedPayCents))
+                    .font(.system(size: 13, weight: .black, design: .rounded).monospacedDigit())
+                    .foregroundStyle(accent)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.68)
 
-            HStack(spacing: 6) {
-                liveActivityPill(
-                    currencyString(cents: context.state.completedPayCents),
-                    foreground: accent,
-                    background: accent.opacity(0.18),
-                    border: accent.opacity(0.35)
-                )
-
-                liveActivityPill(
-                    workedHoursSummaryString(from: context.state.workedTodaySeconds),
-                    foreground: .white.opacity(0.66),
-                    background: .white.opacity(0.08),
-                    border: .white.opacity(0.15)
-                )
-            }
-            .padding(.bottom, context.state.nextShiftStart == nil ? 0 : 10)
-
-            if let nextShiftStart = context.state.nextShiftStart {
-                Divider()
-                    .overlay(.white.opacity(0.1))
-                    .padding(.bottom, 8)
-
-                HStack {
-                    Text("Nächste Schicht")
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.36))
-
-                    Spacer(minLength: 8)
-
-                    Text(nextShiftInlineString(nextShiftStart))
-                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.68))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-                }
+                Text(workedHoursSummaryString(from: context.state.workedTodaySeconds))
+                    .font(.system(size: 10, weight: .bold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
             }
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+        /*.background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.black.opacity(0.30))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    accent.opacity(0.18),
+                                    .white.opacity(0.03),
+                                    .clear
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .strokeBorder(.white.opacity(0.14), lineWidth: 0.75)
+                }
+        }*/
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private var upcomingContent: some View {
@@ -1659,21 +2149,23 @@ private struct PayScopeLiveActivityExpandedContent: View {
     }
 
     var body: some View {
-        Group {
-            switch phase {
-            case .completed:
-                completedContent
-            case .upcoming:
-                upcomingContent
-            case .active:
-                activeContent
+        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+            Group {
+                switch liveActivityPhase(for: context, now: timeline.date) {
+                case .completed:
+                    completedContent
+                case .upcoming:
+                    upcomingContent
+                case .active:
+                    activeContent
+                }
             }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            PayScopeLiveActivityEdgeFade(accent: accent)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                PayScopeLiveActivityEdgeFade(accent: accent)
+            }
         }
     }
 
@@ -1696,42 +2188,21 @@ private struct PayScopeLiveActivityExpandedContent: View {
 
                 Spacer(minLength: 10)
 
-                Text(currencyString(cents: context.state.completedPayCents))
-                    .font(.system(size: 13, weight: .bold, design: .rounded).monospacedDigit())
+                Image(systemName: context.state.isPaused ? "pause.fill" : context.state.shiftCategoryIcon)
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(accent)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.68)
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    primaryCountdown
+            VStack(alignment: .leading, spacing: 4) {
+                primaryCountdown
 
-                    Text(shiftArrowRangeString(
-                        start: context.attributes.timelineStart,
-                        end: context.attributes.timelineEnd
-                    ))
-                    .font(.system(size: 10).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.38))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-                }
-                .layoutPriority(2)
-
-                Spacer(minLength: 10)
-
-                VStack(alignment: .trailing, spacing: 2) {
-                    workedTimer
-                        .font(.system(size: 15, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.66)
-
-                    Text("gearbeitet")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.white.opacity(0.36))
-                }
+                shiftEndpointRow(
+                    start: context.attributes.timelineStart,
+                    end: context.attributes.timelineEnd,
+                    foreground: .white.opacity(0.42)
+                )
             }
+            .layoutPriority(2)
 
             HStack {
                 Spacer()
@@ -1925,6 +2396,20 @@ private func liveActivityPill(
         )
 }
 
+private func shiftEndpointRow(start: Date, end: Date, foreground: Color) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 10) {
+        Text("Start \(timeString(start))")
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+        Text("Ende \(endTimeString(start: start, end: end, fallback: end))")
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+    .foregroundStyle(foreground)
+    .lineLimit(1)
+    .minimumScaleFactor(0.72)
+}
+
 private struct PayScopeLiveActivityProgressBar: View {
     let accent: Color
     let progress: Double
@@ -1953,65 +2438,9 @@ private struct PayScopeLiveActivityEdgeFade: View {
     let accent: Color
 
     var body: some View {
-        GeometryReader { proxy in
-            let horizontalDepth = min(proxy.size.width * 0.48, 180)
-            let verticalDepth = min(proxy.size.height * 0.65, 130)
-
-            ZStack {
-                accent.opacity(0.015)
-
-                HStack(spacing: 0) {
-                    horizontalEdgeGradient
-                        .frame(width: horizontalDepth)
-
-                    Spacer(minLength: 0)
-
-                    horizontalEdgeGradient
-                        .rotationEffect(.degrees(180))
-                        .frame(width: horizontalDepth)
-                }
-
-                VStack(spacing: 0) {
-                    verticalEdgeGradient
-                        .frame(height: verticalDepth)
-
-                    Spacer(minLength: 0)
-
-                    verticalEdgeGradient
-                        .rotationEffect(.degrees(180))
-                        .frame(height: verticalDepth)
-                }
-            }
-            .mask(ContainerRelativeShape())
-        }
+        Color.clear
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-    }
-
-    private var horizontalEdgeGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                accent.opacity(0.26),
-                accent.opacity(0.11),
-                accent.opacity(0.04),
-                accent.opacity(0.015)
-            ],
-            startPoint: .leading,
-            endPoint: .trailing
-        )
-    }
-
-    private var verticalEdgeGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                accent.opacity(0.26),
-                accent.opacity(0.11),
-                accent.opacity(0.04),
-                accent.opacity(0.015)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
     }
 }
 
@@ -2032,6 +2461,76 @@ private struct PayScopeLiveActivityProgressRing: View {
     }
 }
 
+private struct PayScopeDynamicIslandProgressRing: View {
+    let progress: Double
+    let iconName: String
+    let accent: Color
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(accent.opacity(0.20), lineWidth: 4)
+
+            Circle()
+                .trim(from: 0, to: min(max(progress, 0), 1))
+                .stroke(accent, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+
+            Image(systemName: iconName)
+                .font(.system(size: 13, weight: .black))
+                .foregroundStyle(accent)
+        }
+        .frame(width: 34, height: 34)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct PayScopeLockScreenCountdownRing: View {
+    let progress: Double
+    var timerInterval: ClosedRange<Date>? = nil
+    let iconName: String
+    let accent: Color
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(accent.opacity(0.18), lineWidth: 4)
+
+            progressLayer
+
+            Circle()
+                .fill(accent.opacity(0.1))
+                .padding(3)
+
+            Image(systemName: iconName)
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(accent)
+        }
+    }
+
+    @ViewBuilder
+    private var progressLayer: some View {
+        if let timerInterval {
+            ProgressView(
+                timerInterval: timerInterval,
+                countsDown: false,
+                label: { EmptyView() },
+                currentValueLabel: { EmptyView() }
+            )
+            .progressViewStyle(.circular)
+            .tint(accent)
+        } else {
+            Circle()
+                .trim(from: 0, to: min(max(progress, 0), 1))
+                .stroke(
+                    accent,
+                    style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+        }
+    }
+}
+
 private struct PayScopeLiveActivityDynamicIslandLeadingContent: View {
     let context: ActivityViewContext<PayScope_WidgetsAttributes>
 
@@ -2042,46 +2541,94 @@ private struct PayScopeLiveActivityDynamicIslandLeadingContent: View {
     var body: some View {
         switch liveActivityPhase(for: context) {
         case .completed:
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Nächste Schicht")
-                    .font(.caption.weight(.semibold))
+            HStack(spacing: 7) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 18, weight: .black))
                     .foregroundStyle(accent)
-            }
-        case .upcoming:
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Nächste Schicht")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-            }
-        case .active:
-            VStack(alignment: .leading, spacing: 2) {
-                Text(context.state.isTimedShift == false ? context.attributes.title : (context.state.isPaused ? "Pause läuft" : context.attributes.title))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
 
-                if context.state.isTimedShift == false {
-                    Text(hhmmString(from: context.state.workedTodaySeconds))
-                        .font(.headline.monospacedDigit().weight(.bold))
-                        .foregroundStyle(accent)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-                } else if context.state.isPaused, let pauseStartedAt = context.state.pauseStartedAt {
-                    PauseTimerText(start: pauseStartedAt, end: context.attributes.timelineEnd)
-                        .font(.headline.monospacedDigit().weight(.bold))
-                        .foregroundStyle(accent)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-                } else {
-                    RemainingTimerText(end: context.attributes.timelineEnd)
-                        .font(.headline.monospacedDigit().weight(.bold))
-                        .foregroundStyle(accent)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Fertig")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.primary)
+
+                    Text("Schicht beendet")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
                 }
             }
+        case .upcoming:
+            HStack(spacing: 7) {
+                PayScopeDynamicIslandProgressRing(
+                    progress: 0,
+                    iconName: context.state.shiftCategoryIcon,
+                    accent: accent
+                )
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Nächste")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text("Schicht")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        case .active:
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Start")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.58))
+
+                Text(timeString(context.attributes.timelineStart))
+                    .font(.system(size: 15, weight: .black, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+private struct PayScopeLiveActivityDynamicIslandCenterContent: View {
+    let context: ActivityViewContext<PayScope_WidgetsAttributes>
+
+    private var accent: Color {
+        liveActivityAccent(for: context.state)
+    }
+
+    var body: some View {
+        switch liveActivityPhase(for: context) {
+        case .active:
+            VStack(spacing: 1) {
+                Text("Dauer")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.58))
+
+                Text(activeDurationText)
+                    .font(.system(size: 17, weight: .black, design: .rounded).monospacedDigit())
+                    .foregroundStyle(accent)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.64)
+            }
+            .frame(maxWidth: .infinity)
+        case .completed, .upcoming:
+            EmptyView()
+        }
+    }
+
+    private var activeDurationText: String {
+        if context.state.isTimedShift == false {
+            return "offen"
+        }
+
+        let seconds = max(0, Int(context.attributes.timelineEnd.timeIntervalSince(context.attributes.timelineStart)))
+        return "\(hhmmString(from: seconds)) h"
     }
 }
 
@@ -2095,49 +2642,55 @@ private struct PayScopeLiveActivityDynamicIslandTrailingContent: View {
     var body: some View {
         switch liveActivityPhase(for: context) {
         case .completed:
-            if let nextShiftStart = context.state.nextShiftStart {
-                Text(nextShiftInlineString(nextShiftStart))
-                    .font(.caption2.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-            } else {
-                Text("Nicht geplant")
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(currencyString(cents: context.state.completedPayCents))
+                    .font(.caption.monospacedDigit().weight(.black))
+                    .foregroundStyle(accent)
+
+                Text(context.state.nextShiftStart.map(nextShiftInlineString) ?? "Nicht geplant")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
             }
         case .upcoming:
-            Text(nextShiftInlineString(context.attributes.timelineStart))
-                .font(.caption2.monospacedDigit().weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-        case .active:
-            if context.state.isTimedShift == false {
-                Text(currencyString(cents: context.state.completedPayCents))
-                    .font(.caption2.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(accent)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(nextShiftInlineString(context.attributes.timelineStart))
+                    .font(.caption.monospacedDigit().weight(.black))
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
-            } else if context.state.isPaused, let pauseStartedAt = context.state.pauseStartedAt {
-                PauseTimerText(start: pauseStartedAt, end: context.attributes.timelineEnd)
+
+                Text(hhmmString(from: context.state.nextShiftDurationSeconds))
                     .font(.caption2.monospacedDigit().weight(.semibold))
                     .foregroundStyle(accent)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-            } else {
-                WorkedTimerText(
-                    start: context.state.workedReferenceStart,
-                    end: context.attributes.timelineEnd
-                )
-                .font(.caption2.monospacedDigit().weight(.semibold))
-                .foregroundStyle(accent)
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
             }
+        case .active:
+            VStack(alignment: .trailing, spacing: 1) {
+                Text("Ende")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.58))
+
+                Text(activeEndText)
+                    .font(.system(size: 15, weight: .black, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
+    }
+
+    private var activeEndText: String {
+        if context.state.isTimedShift == false {
+            return "offen"
+        }
+
+        return endTimeString(
+            start: context.attributes.timelineStart,
+            end: context.attributes.timelineEnd,
+            fallback: context.attributes.timelineEnd
+        )
     }
 }
 
@@ -2149,96 +2702,65 @@ private struct PayScopeLiveActivityDynamicIslandBottomContent: View {
     }
 
     var body: some View {
-        switch liveActivityPhase(for: context) {
+        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+            content(at: timeline.date)
+        }
+    }
+
+    @ViewBuilder
+    private func content(at now: Date) -> some View {
+        switch liveActivityPhase(for: context, now: now) {
         case .completed:
-            HStack(spacing: 6) {
-                Image(systemName: "calendar.badge.clock")
-                Text(
-                    nextShiftText(
-                        start: context.state.nextShiftStart,
-                        workedSeconds: context.state.workedTodaySeconds,
-                        completedPayCents: context.state.completedPayCents
-                    )
-                )
-                .lineLimit(2)
-                .minimumScaleFactor(0.7)
-            }
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        case .upcoming:
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "clock.badge")
-                Text(
-                    nextShiftText(
-                        start: context.attributes.timelineStart,
-                        workedSeconds: context.state.workedTodaySeconds,
-                        completedPayCents: context.state.completedPayCents
-                    )
-                )
-                .lineLimit(2)
-                .minimumScaleFactor(0.75)
-            }
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        case .active:
-            if context.state.isTimedShift == false {
-                HStack(spacing: 8) {
-                    Image(systemName: context.state.shiftCategoryIcon)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "calendar.badge.clock")
+                    Text(completedNextShiftSummary)
+                    Spacer(minLength: 8)
                     Text(hhmmString(from: context.state.workedTodaySeconds))
-                    Text(currencyString(cents: context.state.completedPayCents))
                 }
                 .font(.caption2.monospacedDigit().weight(.semibold))
-                .foregroundStyle(accent)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                HStack(alignment: .bottom, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        if context.state.isPaused, let pauseStartedAt = context.state.pauseStartedAt {
-                            PauseTimerText(start: pauseStartedAt, end: context.attributes.timelineEnd)
-                                .font(.caption.monospacedDigit().weight(.bold))
-                                .foregroundStyle(accent)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.72)
-                        } else {
-                            RemainingTimerText(end: context.attributes.timelineEnd)
-                                .font(.caption.monospacedDigit().weight(.bold))
-                                .foregroundStyle(accent)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.72)
-                        }
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
 
-                        Text(shiftArrowRangeString(
-                            start: context.attributes.timelineStart,
-                            end: context.attributes.timelineEnd
-                        ))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                    }
-                    .layoutPriority(1)
-
-                    Spacer(minLength: 8)
-
-                    if context.state.isPaused {
-                        Button(intent: EndPauseControlIntent()) {
-                            Label("Pause Ende", systemImage: "play.fill")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(accent)
-                    } else {
-                        Button(intent: StartPauseControlIntent()) {
-                            Label("Pause", systemImage: "pause.fill")
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(accent)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                PayScopeLiveActivityProgressBar(accent: accent, progress: 1, height: 3)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        case .upcoming:
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "clock.badge")
+                    Text(shiftArrowRangeString(
+                        start: context.attributes.timelineStart,
+                        end: context.attributes.timelineEnd
+                    ))
+                    Spacer(minLength: 8)
+                    Text(hhmmString(from: context.state.nextShiftDurationSeconds))
+                }
+                .font(.caption2.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+
+                PayScopeLiveActivityProgressBar(accent: accent, progress: 0, height: 3)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        case .active:
+            PayScopeLiveActivityProgressBar(
+                accent: accent,
+                progress: liveActivityProgress(for: context, now: now),
+                height: 4
+            )
+            .frame(maxWidth: .infinity)
         }
+    }
+
+    private var completedNextShiftSummary: String {
+        guard let nextShiftStart = context.state.nextShiftStart else {
+            return "Nächste offen"
+        }
+
+        return "Nächste \(nextShiftInlineString(nextShiftStart))"
     }
 }
 
@@ -2310,21 +2832,51 @@ extension PayScope_WidgetsAttributes.ContentState {
     PayScopeRectangularEntry.previewEmpty(date: .now)
 }
 
-#Preview("Current Shift Card Small", as: .systemSmall) {
+#Preview("Schicht jetzt Small", as: .systemSmall) {
     PayScope_CurrentShiftCardWidget()
 } timeline: {
     PayScopeRectangularEntry.previewActive(date: .now)
-    PayScopeRectangularEntry.previewLongDuration(date: .now)
     PayScopeRectangularEntry.previewNextShift(date: .now)
     PayScopeRectangularEntry.previewEmpty(date: .now)
 }
 
-#Preview("Current Shift Card Medium", as: .systemMedium) {
+#Preview("Schicht jetzt Medium", as: .systemMedium) {
     PayScope_CurrentShiftCardWidget()
 } timeline: {
     PayScopeRectangularEntry.previewActive(date: .now)
-    PayScopeRectangularEntry.previewLongDuration(date: .now)
     PayScopeRectangularEntry.previewNextShift(date: .now)
+    PayScopeRectangularEntry.previewEmpty(date: .now)
+}
+
+#Preview("Nächste Schicht Small", as: .systemSmall) {
+    PayScope_NextShiftWidget()
+} timeline: {
+    PayScopeRectangularEntry.previewNextShift(date: .now)
+    PayScopeRectangularEntry.previewActive(date: .now)
+    PayScopeRectangularEntry.previewEmpty(date: .now)
+}
+
+#Preview("Nächste Schicht Medium", as: .systemMedium) {
+    PayScope_NextShiftWidget()
+} timeline: {
+    PayScopeRectangularEntry.previewNextShift(date: .now)
+    PayScopeRectangularEntry.previewActive(date: .now)
+    PayScopeRectangularEntry.previewEmpty(date: .now)
+}
+
+#Preview("Lohn heute Small", as: .systemSmall) {
+    PayScope_TodayPayWidget()
+} timeline: {
+    PayScopeRectangularEntry.previewActive(date: .now)
+    PayScopeRectangularEntry.previewLongDuration(date: .now)
+    PayScopeRectangularEntry.previewEmpty(date: .now)
+}
+
+#Preview("Lohn heute Medium", as: .systemMedium) {
+    PayScope_TodayPayWidget()
+} timeline: {
+    PayScopeRectangularEntry.previewActive(date: .now)
+    PayScopeRectangularEntry.previewLongDuration(date: .now)
     PayScopeRectangularEntry.previewEmpty(date: .now)
 }
 
@@ -2454,9 +3006,17 @@ private struct RemainingTimerText: View {
     let end: Date
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { timeline in
-            Text(hhmmssString(from: Int(end.timeIntervalSince(timeline.date))))
-        }
+        let now = Date()
+        Text(timerInterval: now...max(now, end), countsDown: true, showsHours: true)
+    }
+}
+
+private struct CompactRemainingTimerText: View {
+    let end: Date
+
+    var body: some View {
+        let now = Date()
+        CompactTimerIntervalText(interval: now...max(now, end), countsDown: true)
     }
 }
 
@@ -2465,10 +3025,28 @@ private struct WorkedTimerText: View {
     let end: Date
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { timeline in
-            let current = min(max(timeline.date, start), end)
-            Text(hhmmssString(from: Int(current.timeIntervalSince(start))))
-        }
+        Text(timerInterval: start...end, countsDown: false, showsHours: true)
+    }
+}
+
+private struct CompactElapsedTimerText: View {
+    let start: Date
+    let end: Date
+
+    var body: some View {
+        CompactTimerIntervalText(interval: start...end, countsDown: false)
+    }
+}
+
+private struct CompactTimerIntervalText: View {
+    let interval: ClosedRange<Date>
+    let countsDown: Bool
+
+    var body: some View {
+        Text(timerInterval: interval, countsDown: countsDown, showsHours: true)
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+            .frame(width: 50, alignment: .trailing)
     }
 }
 
@@ -2477,10 +3055,7 @@ private struct PauseTimerText: View {
     let end: Date
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { timeline in
-            let current = min(max(timeline.date, start), end)
-            Text(hhmmssString(from: Int(current.timeIntervalSince(start))))
-        }
+        Text(timerInterval: start...end, countsDown: false, showsHours: true)
     }
 }
 
@@ -2505,28 +3080,30 @@ private func liveActivityPhase(
     return .active
 }
 
+private func liveActivityBackgroundTint(for context: ActivityViewContext<PayScope_WidgetsAttributes>) -> Color {
+    Color.clear
+}
+
 private func liveActivityProgress(
     for context: ActivityViewContext<PayScope_WidgetsAttributes>,
     now: Date = .now
 ) -> Double {
-    let duration = max(1, Int(context.attributes.timelineEnd.timeIntervalSince(context.attributes.timelineStart)))
-    let workedSeconds: Int
-
-    if context.state.isCompleted {
-        workedSeconds = context.state.workedTodaySeconds
-    } else if context.state.isPaused {
-        workedSeconds = context.state.workedTodaySeconds
-    } else if now <= context.attributes.timelineStart {
-        workedSeconds = 0
-    } else {
-        workedSeconds = max(0, Int(now.timeIntervalSince(context.state.workedReferenceStart)))
+    if context.state.isCompleted || now >= context.attributes.timelineEnd {
+        return 1
     }
 
-    return min(max(Double(workedSeconds) / Double(duration), 0), 1)
+    if now <= context.attributes.timelineStart {
+        return 0
+    }
+
+    let duration = max(1, context.attributes.timelineEnd.timeIntervalSince(context.attributes.timelineStart))
+    let elapsed = now.timeIntervalSince(context.attributes.timelineStart)
+    return min(max(elapsed / duration, 0), 1)
 }
 
 private func liveAccentColor(from rawValue: String) -> Color {
     switch rawValue {
+    case "monochrome": return .primary
     case "blue": return .blue
     case "green": return .green
     case "purple": return .purple
@@ -2549,8 +3126,16 @@ private func liveAccentColor(from rawValue: String) -> Color {
     }
 }
 
+private func homeWidgetAccentColor(from rawValue: String) -> Color {
+    if rawValue == "monochrome" {
+        return .white
+    }
+
+    return liveAccentColor(from: rawValue)
+}
+
 private func liveActivityAccent(for state: PayScope_WidgetsAttributes.ContentState) -> Color {
-    liveAccentColor(from: state.shiftCategoryColorRawValue ?? state.themeAccentRawValue)
+    liveAccentColor(from: state.shiftCategoryColorRawValue ?? "monochrome")
 }
 
 private func hhmmString(from seconds: Int) -> String {
@@ -2566,6 +3151,23 @@ private func hhmmssString(from seconds: Int) -> String {
     let minutes = (safe % 3600) / 60
     let secs = safe % 60
     return String(format: "%02d:%02d:%02d", hours, minutes, secs)
+}
+
+private func shortClockString(from seconds: Int) -> String {
+    let safe = max(0, seconds)
+    let hours = safe / 3600
+    let minutes = (safe % 3600) / 60
+    let secs = safe % 60
+
+    if hours > 0 {
+        return String(format: "%d:%02d:%02d", hours, minutes, secs)
+    }
+
+    return String(format: "%02d:%02d", minutes, secs)
+}
+
+private func compactRemainingString(to end: Date, from now: Date) -> String {
+    shortClockString(from: Int(max(0, end.timeIntervalSince(now))))
 }
 
 private func currencyString(cents: Int) -> String {

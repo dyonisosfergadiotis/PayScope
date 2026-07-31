@@ -21,7 +21,7 @@ enum TVCloudKitShiftStoreError: LocalizedError {
     }
 }
 
-actor TVCloudKitShiftStore {
+actor TVCloudKitShiftStore: TVShiftScheduleStore {
     static let shared = TVCloudKitShiftStore()
 
     private enum RecordKeys {
@@ -31,9 +31,22 @@ actor TVCloudKitShiftStore {
             case updatedAt
             case dayType
             case manualWorkedSeconds
+            case creditedOverrideSeconds
             case shiftStart
             case shiftEnd
             case breakSeconds
+        }
+
+        enum Settings: String {
+            case type = "Settings"
+            case settingsKey
+            case updatedAt
+            case themeAccent
+            case workCategoryColor
+            case manualCategoryColor
+            case vacationCategoryColor
+            case holidayCategoryColor
+            case sickCategoryColor
         }
 
         enum TimeSegment: String {
@@ -53,6 +66,7 @@ actor TVCloudKitShiftStore {
     }
 
     private let container = CKContainer(identifier: "iCloud.DyonisosFergadiotis.PayScope")
+    private nonisolated static let settingsSingletonRecordID = CKRecord.ID(recordName: "settings-singleton")
 
     func fetchWeek(startingAt weekStart: Date, calendar: Calendar = .current) async throws -> TVWeekSchedule {
         let weekEnd = calendar.date(byAdding: .day, value: 7, to: weekStart) ?? weekStart.addingTimeInterval(7 * 86_400)
@@ -63,6 +77,7 @@ actor TVCloudKitShiftStore {
 
         try await ensureAccountAvailable()
 
+        let colorSettings = try await fetchColorSettings()
         let records = try await fetchDayEntryRecords(in: queryInterval)
         let segmentsByDay = try await fetchTimeSegmentsByDayKey(in: queryInterval)
         var latestByDayKey: [String: TVShiftEntry] = [:]
@@ -82,6 +97,8 @@ actor TVCloudKitShiftStore {
             var shiftStart = record[RecordKeys.DayEntry.shiftStart.rawValue] as? Date
             var shiftEnd = record[RecordKeys.DayEntry.shiftEnd.rawValue] as? Date
             var breakSeconds = (record[RecordKeys.DayEntry.breakSeconds.rawValue] as? NSNumber)?.intValue ?? 0
+            var manualWorkedSeconds = (record[RecordKeys.DayEntry.manualWorkedSeconds.rawValue] as? NSNumber)?.intValue
+            var creditedOverrideSeconds = (record[RecordKeys.DayEntry.creditedOverrideSeconds.rawValue] as? NSNumber)?.intValue
 
             if type == .work, (shiftStart == nil || shiftEnd == nil) {
                 let key = utcDayKey(for: date)
@@ -92,10 +109,27 @@ actor TVCloudKitShiftStore {
                 }
             }
 
-            if type != .work {
+            switch type {
+            case .work:
+                manualWorkedSeconds = nil
+                creditedOverrideSeconds = nil
+            case .manual:
+                if manualWorkedSeconds == nil,
+                   let start = shiftStart,
+                   let end = shiftEnd,
+                   end > start {
+                    manualWorkedSeconds = max(0, Int(end.timeIntervalSince(start)) - breakSeconds)
+                }
                 shiftStart = nil
                 shiftEnd = nil
                 breakSeconds = 0
+                creditedOverrideSeconds = nil
+            case .vacation, .holiday, .sick:
+                shiftStart = nil
+                shiftEnd = nil
+                breakSeconds = 0
+                manualWorkedSeconds = manualWorkedSeconds.map { max(0, $0) }
+                creditedOverrideSeconds = creditedOverrideSeconds.map { max(0, $0) }
             }
 
             let entry = TVShiftEntry(
@@ -105,7 +139,9 @@ actor TVCloudKitShiftStore {
                 type: type,
                 shiftStart: shiftStart,
                 shiftEnd: shiftEnd,
-                breakSeconds: max(0, breakSeconds)
+                breakSeconds: max(0, breakSeconds),
+                manualWorkedSeconds: manualWorkedSeconds.map { max(0, $0) },
+                creditedOverrideSeconds: creditedOverrideSeconds.map { max(0, $0) }
             )
 
             guard entry.overlaps(displayInterval) else { continue }
@@ -121,6 +157,7 @@ actor TVCloudKitShiftStore {
             weekStart: weekStart,
             weekEnd: weekEnd,
             entries: Array(latestByDayKey.values).sorted { $0.date < $1.date },
+            colorSettings: colorSettings,
             generatedAt: Date()
         )
     }
@@ -221,6 +258,66 @@ actor TVCloudKitShiftStore {
         }
 
         return grouped
+    }
+
+    private func fetchColorSettings() async throws -> TVShiftColorSettings {
+        if let record = try? await container.privateCloudDatabase.record(for: Self.settingsSingletonRecordID) {
+            return colorSettings(from: record)
+        }
+
+        let records: [CKRecord]
+        do {
+            let predicate = NSPredicate(format: "\(RecordKeys.Settings.settingsKey.rawValue) == %@", "singleton")
+            let query = CKQuery(recordType: RecordKeys.Settings.type.rawValue, predicate: predicate)
+            records = try await queryRecords(query)
+        } catch {
+            if isMissingRecordTypeError(error, recordType: RecordKeys.Settings.type.rawValue) {
+                return TVShiftColorSettings()
+            }
+            guard isLikelyQueryIndexingError(error) else { throw error }
+            let fallback = try await queryRecords(
+                CKQuery(recordType: RecordKeys.Settings.type.rawValue, predicate: NSPredicate(value: true))
+            )
+            records = fallback.filter { record in
+                record.recordID.recordName == Self.settingsSingletonRecordID.recordName
+                    || record[RecordKeys.Settings.settingsKey.rawValue] as? String == "singleton"
+            }
+        }
+
+        let newest = records.max { lhs, rhs in
+            settingsUpdatedAt(lhs) < settingsUpdatedAt(rhs)
+        }
+        return newest.map(colorSettings(from:)) ?? TVShiftColorSettings()
+    }
+
+    private func colorSettings(from record: CKRecord) -> TVShiftColorSettings {
+        let themeAccent = (record[RecordKeys.Settings.themeAccent.rawValue] as? String)
+            .flatMap(TVThemeAccent.init(rawValue:)) ?? .blue
+        let work = (record[RecordKeys.Settings.workCategoryColor.rawValue] as? String)
+            .flatMap(TVShiftCategoryColor.init(rawValue:))
+        let manual = (record[RecordKeys.Settings.manualCategoryColor.rawValue] as? String)
+            .flatMap(TVShiftCategoryColor.init(rawValue:)) ?? .lavender
+        let vacation = (record[RecordKeys.Settings.vacationCategoryColor.rawValue] as? String)
+            .flatMap(TVShiftCategoryColor.init(rawValue:)) ?? .monochrome
+        let holiday = (record[RecordKeys.Settings.holidayCategoryColor.rawValue] as? String)
+            .flatMap(TVShiftCategoryColor.init(rawValue:)) ?? .peach
+        let sick = (record[RecordKeys.Settings.sickCategoryColor.rawValue] as? String)
+            .flatMap(TVShiftCategoryColor.init(rawValue:)) ?? .blush
+
+        return TVShiftColorSettings(
+            themeAccent: themeAccent,
+            workCategoryColor: work,
+            manualCategoryColor: manual,
+            vacationCategoryColor: vacation,
+            holidayCategoryColor: holiday,
+            sickCategoryColor: sick
+        )
+    }
+
+    private func settingsUpdatedAt(_ record: CKRecord) -> Date {
+        (record[RecordKeys.Settings.updatedAt.rawValue] as? Date)
+            ?? record.modificationDate
+            ?? .distantPast
     }
 
     private func timeSegmentQuery(recordType: String, in interval: DateInterval) -> CKQuery {

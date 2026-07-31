@@ -12,5 +12,6 @@ import SwiftUI
 struct PayScope_AW_WidgetsBundle: WidgetBundle {
     var body: some Widget {
         PayScope_AW_Widgets()
+        PayScope_AW_Complications()
     }
 }
